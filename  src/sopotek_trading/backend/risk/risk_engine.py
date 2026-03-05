@@ -1,213 +1,128 @@
-import asyncio
-import logging
-from typing import List, Dict
-
-logger = logging.getLogger(__name__)
+import numpy as np
 
 
 class RiskEngine:
 
     def __init__(
-            self,broker,
-            account_equity: float=0.00,
-            max_risk_per_trade: float = 0.01,
-            max_daily_drawdown: float = 0.03,
-            max_position_size_pct: float = 0.20,
-            max_gross_exposure_pct: float = 1.5,
+            self,
+            account_equity: float=0.0,
+            max_portfolio_risk: float = 0.2,        # 20% total exposure
+            max_risk_per_trade: float = 0.02,       # 2% per trade
+            max_daily_drawdown: float = 0.1,        # 10%
+            max_position_size_pct: float = 0.1,     # 10% of equity
     ):
 
-        if not isinstance(account_equity, (int, float)):
-            raise TypeError("account_equity must be a float")
-        self.broker = broker
-
         self.account_equity = account_equity
+        self.initial_equity = account_equity
+
+        self.max_portfolio_risk = max_portfolio_risk
         self.max_risk_per_trade = max_risk_per_trade
         self.max_daily_drawdown = max_daily_drawdown
         self.max_position_size_pct = max_position_size_pct
-        self.max_gross_exposure_pct = max_gross_exposure_pct
 
-        self.daily_pnl = 0.0
+        self.current_drawdown = 0.0
 
-    # -------------------------------------------------
-    # POSITION SIZING
-    # -------------------------------------------------
-    def position_size(
-            self,
-            entry_price: float,
-            stop_price: float,
-            confidence: float = 1.0,
-            volatility: float = None,
-    ) -> float:
+    # =========================================================
+    # EQUITY UPDATE
+    # =========================================================
 
-        if self.account_equity <= 0:
-            return 0.0
+    async def update_equity(self, equity: float):
 
-        stop_distance = abs(entry_price - stop_price)
-        if stop_distance <= 0:
-            return 0.0
+        self.account_equity = equity
 
-        # Capital at risk
-        risk_capital = self.account_equity * self.max_risk_per_trade
+        drawdown =0.01# (self.initial_equity - equity) / self.initial_equity
 
-        base_size = risk_capital / stop_distance
+        self.current_drawdown = max(0.0, drawdown)
 
-        # Optional volatility scaling
-        if volatility and volatility > 0:
-            base_size /= volatility
+    # =========================================================
+    # TRADE VALIDATION
+    # =========================================================
 
-        # Confidence scaling
-        confidence = max(0.0, min(confidence, 1.0))
-        adjusted_size = base_size * confidence
+    def validate_trade(self, signal: dict, positions: list) -> bool:
 
-        # Position cap
-        max_position_value = self.account_equity * self.max_position_size_pct
-        max_size_allowed = max_position_value / entry_price
+        if self.current_drawdown >= self.max_daily_drawdown:
+            return False
 
-        final_size = min(adjusted_size, max_size_allowed)
-
-        return max(float(final_size), 0.0)
-
-    # -------------------------------------------------
-    # PRE-SIZE VALIDATION
-    # -------------------------------------------------
-    def validate_trade(self, signal: Dict, portfolio: List[Dict]):
-
-        # Defensive: detect coroutine contamination
-        if asyncio.iscoroutine(self.account_equity):
-            raise TypeError(
-                "RiskEngine.account_equity is coroutine. "
-                "You forgot to await broker.total_equity()"
-            )
-
-        if signal is None or len(signal.values()) == 0:
-            logger.critical("RiskEngine.validate_trade received None.")
-            return False, "None"
-
-        entry = signal.get("entry_price",0)
-        stop = signal.get("stop_price",0)
-
-
-        if entry is None or stop is None:
-            return False, "Missing entry or stop"
-
-        if entry <= 0 or stop <= 0:
-            return False, "Invalid price"
-
-        if entry == stop:
-            return False, "Stop distance zero"
-
-        gross_exposure = self._gross_exposure(portfolio)
-
-        if gross_exposure > self.account_equity * self.max_gross_exposure_pct:
-            return False, "Gross exposure exceeded"
-        return True, "Approved"
-
-    # -------------------------------------------------
-    # POST-SIZE IMPACT VALIDATION
-    # -------------------------------------------------
-    def validate_position_impact(
-            self,
-            signal: Dict,
-            portfolio: List[Dict],
-            size: float,
-    ):
-
-        projected_value = signal["entry_price"] * size
-        gross_exposure = self._gross_exposure(portfolio)
-        projected_gross = gross_exposure + abs(projected_value)
-
-        if projected_gross > self.account_equity * self.max_gross_exposure_pct:
-            return False, "Projected gross exposure too high"
-        stop_distance = abs(signal["entry_price"] - signal["stop_price"])
-        potential_loss = stop_distance * size
-
-        if potential_loss > self.account_equity * self.max_risk_per_trade:
-            return False, "Projected trade risk too large"
-
-        return True, "Approved"
-
-    # -------------------------------------------------
-    # EXPOSURE METRICS
-    # -------------------------------------------------
-    def _gross_exposure(self, portfolio: List[Dict]) -> float:
-        return sum(
-            abs(p.get("quantity", 0.0) * p.get("avg_price", 0.0))
-            for p in portfolio
+        total_exposure = sum(
+            abs(p.get("amount", 0) * p.get("entry_price", 0))
+            for p in positions
         )
 
-    def net_exposure(self, portfolio: List[Dict]) -> float:
-        return sum(
-            p.get("quantity", 0.0) * p.get("avg_price", 0.0)
-            for p in portfolio
-        )
-
-    # -------------------------------------------------
-    # DAILY DRAWDOWN CONTROL
-    # -------------------------------------------------
-    def update_daily_pnl(self, pnl: float) -> bool:
-        self.daily_pnl += pnl
-
-        if self.daily_pnl < -self.account_equity * self.max_daily_drawdown:
-            logger.critical("Daily drawdown limit breached.")
+        if total_exposure > self.account_equity * self.max_portfolio_risk:
             return False
 
         return True
 
-    # -------------------------------------------------
-    # EQUITY UPDATE
-    # -------------------------------------------------
-    async def update_equity(self, new_equity: float):
+    # =========================================================
+    # POSITION SIZING
+    # =========================================================
 
-        if asyncio.iscoroutine(new_equity):
-            raise TypeError(
-                "update_equity received coroutine. "
-                "You forgot to await broker.total_equity()."
-            )
-
-        if not isinstance(new_equity, (int, float)):
-            raise TypeError("Equity must be numeric")
-
-        self.account_equity = float(new_equity)
-
-    async def get_lot_size(
+    def position_size(
             self,
-            symbol: str,
             entry_price: float,
             stop_price: float,
-            confidence: float = 1.0,
-            volatility: float = None,
-    ):
-        """
-        Calculate institutional position size safely.
-        """
+            confidence: float,
+            volatility: float
+    ) -> float:
 
-        try:
-        # 1️⃣ Get current equity
-         balance = await self.broker.get_balance()
-         equity = balance.get("total", ohlcv).get("USDT", ohlcv)
-
-         if equity <= 0:
+        if entry_price <= 0 or stop_price <= 0:
             return 0.0
 
-        # 2️⃣ Update risk engine equity
-         await self.update_equity(float(equity))
+        risk_per_unit = abs(entry_price - stop_price)
 
-        # 3️⃣ Use RiskEngine position sizing
-         size = self.position_size(
-            entry_price=entry_price,
-            stop_price=stop_price,
-            confidence=confidence,
-            volatility=volatility,
-        )
-
-         if size <= 0:
+        if risk_per_unit == 0:
             return 0.0
 
-        # 4️⃣ Exchange precision enforcement
-         size = float(self.broker.exchange.amount_to_precision(symbol, size))
+        # Base risk capital
+        capital_at_risk = self.account_equity * self.max_risk_per_trade
 
-         return size
+        # Confidence weighting (0–1)
+        capital_at_risk *= confidence
 
-        except Exception:
-         logger.exception("Lot size calculation failed")
-         return 0.0
+        # Volatility scaling (inverse)
+        if volatility > 0:
+            capital_at_risk /= (1 + volatility)
+
+        raw_size = capital_at_risk / risk_per_unit
+
+        # Hard cap on position size
+        max_position_value = self.account_equity * self.max_position_size_pct
+        capped_size = min(raw_size, max_position_value / entry_price)
+
+        return max(0.0, capped_size)
+
+    # =========================================================
+    # VALUE AT RISK
+    # =========================================================
+
+    def value_at_risk(self, returns, confidence_level=0.95):
+
+        if len(returns) < 10:
+            return 0.0
+
+        return np.percentile(returns, (1 - confidence_level) * 100)
+
+    def conditional_var(self, returns, confidence_level=0.95):
+
+        if len(returns) < 10:
+            return 0.0
+
+        var = self.value_at_risk(returns, confidence_level)
+
+        losses = [r for r in returns if r <= var]
+
+        if not losses:
+            return 0.0
+
+        return np.mean(losses)
+
+    def monte_carlo_var(self, returns, simulations=1000, confidence_level=0.95):
+
+        if len(returns) < 10:
+            return 0.0
+
+        simulated = np.random.choice(returns, size=(simulations, len(returns)))
+
+        simulated_means = simulated.mean(axis=1)
+
+        return np.percentile(simulated_means, (1 - confidence_level) * 100)

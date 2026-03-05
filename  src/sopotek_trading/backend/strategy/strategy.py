@@ -1,26 +1,46 @@
-import logging
-import pandas as pd
 
-from sopotek_trading.backend.quant.ml.ml_models_manager import MLModelManager
+
+from sopotek_trading.backend.models.ml.ml_models_manager import MLModelManager
+from sopotek_trading.backend.research.regime import RegimeDetector
+from sopotek_trading.backend.strategy.breakout_strategy import BreakoutStrategy
+from sopotek_trading.backend.strategy.macd_strategy import MACDStrategy
+from sopotek_trading.backend.strategy.mean_reversion_strategy import MeanReversionStrategy
+from sopotek_trading.backend.strategy.momentum_strategy import MomentumStrategy
+from sopotek_trading.backend.strategy.orderbook_strategy import OrderbookStrategy
+from sopotek_trading.backend.strategy.rsi_strategy_ import RSIStrategy
+from sopotek_trading.backend.strategy.trend_strategy import TrendStrategy
+from sopotek_trading.backend.utils.utils import candles_to_df
 
 
 class Strategy:
 
     def __init__(self, controller):
 
-        self.logger = logging.getLogger(__name__)
+        self.logger = controller.logger
         self.controller = controller
 
         # Use a proper models directory
         self.model_manager = MLModelManager(
             controller=self.controller,
-            model_dir="models"
+            model_dir="../../models/ml"
         )
 
-    async def generate_signal(self, symbol: str, df: pd.DataFrame):
+        self.strategies = [TrendStrategy(), BreakoutStrategy(),
+                           MLModelManager(controller=self.controller),MACDStrategy(),RSIStrategy(),
+                           MeanReversionStrategy(),OrderbookStrategy(), MomentumStrategy()]
 
-        if df is None or df.empty:
-            return None
+    async def generate_signal(self, symbol: str, df):
+        if not symbol or not df:
+            return {
+                "symbol": symbol,
+                "signal": "HOLD",
+                "entry_price": 0,
+                "stop_price": 0,
+                "confidence": 0,
+                "volatility":0,
+                "regime":"Not specified!"
+            }
+
 
         # Ensure symbol is registered
         self.model_manager.register_symbol(symbol)
@@ -28,18 +48,34 @@ class Strategy:
         # Ensure model is trained
         if not self.model_manager.is_trained(symbol):
             await self.model_manager.train(symbol, df)
-            return None  # Wait for next cycle
+             # Wait for next cycle
+            return {
+                "symbol": symbol,
+                "signal": "HOLD",
+                "entry_price": 0,
+                "stop_price": 0,
+                "confidence": 0,
+                "volatility":0,
+                "regime":"Wait for next cycle!"
+            }
+
 
         # Predict
-        prediction = await self.model_manager.predict(symbol, df)
+        prediction = self.model_manager.predict(symbol, df)
 
         if prediction is None:
-            return None
+            return {
+                "symbol": symbol,
+                "signal": "HOLD",
+                "entry_price": 0,
+                "stop_price": 0,
+                "confidence": 0,
+                "volatility":0,
+                "regime":RegimeDetector().detect(prices=candles_to_df(df))
+            }
 
-        signal = prediction.get("signal", "HOLD")
+        signal = prediction
 
-        if signal == "HOLD":
-            return None
 
         entry_price = float(df["close"].iloc[-1])
 
@@ -48,6 +84,10 @@ class Strategy:
             "signal": signal,
             "entry_price": entry_price,
             "stop_price": entry_price * 0.99,
-            "confidence": float(prediction.get("confidence", 0.5)),
+            "confidence": float(prediction["confidence"]),
             "volatility": float(df["close"].pct_change().std())
         }
+
+    def get_strategies(self):
+
+        return  self.controller.strategies

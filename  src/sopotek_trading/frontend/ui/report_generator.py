@@ -10,6 +10,7 @@ class ReportGenerator:
         self.trades = trades
         self.equity_history = equity_history
 
+
     # ======================================================
     # PERFORMANCE METRICS
     # ======================================================
@@ -24,10 +25,8 @@ class ReportGenerator:
         total_trades = len(df)
         wins = len(df[df["pnl"] > 0])
         losses = len(df[df["pnl"] <= 0])
-
-        win_rate = wins / total_trades * 100
+        win_rate = wins/(total_trades * 100)
         net_profit = df["pnl"].sum()
-
         max_drawdown = self._max_drawdown()
 
         return {
@@ -35,6 +34,7 @@ class ReportGenerator:
             "Win Rate (%)": round(win_rate, 2),
             "Net Profit": round(net_profit, 2),
             "Max Drawdown": round(max_drawdown, 2),
+            "Losses": round(losses, 2)
         }
 
     # ======================================================

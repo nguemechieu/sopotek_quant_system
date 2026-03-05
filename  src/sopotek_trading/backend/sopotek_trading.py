@@ -1,428 +1,286 @@
 import asyncio
+import traceback
 
-import pandas as pd
 from PySide6.QtCore import QObject
 
-from sopotek_trading.backend.analytics.performance_engine import PerformanceEngine
-from sopotek_trading.backend.broker.broker import Broker
 from sopotek_trading.backend.broker.broker_factory import BrokerFactory
-from sopotek_trading.backend.core.multi_symbol_orchestrator import MultiSymbolOrchestrator
-from sopotek_trading.backend.core.trading_engine import TradingEngine
-
-from sopotek_trading.backend.execution.execution_manager import ExecutionManager
-from sopotek_trading.backend.market.binance_web_socket import BinanceWebSocket
-from sopotek_trading.backend.market.candle_buffer import CandleBuffer
-from sopotek_trading.backend.portfolio.portfolio import Portfolio
-from sopotek_trading.backend.portfolio.portfolio_manager import PortfolioManager
-from sopotek_trading.backend.quant.ml.ml_signal import MLSignal
-from sopotek_trading.backend.risk.risk_engine import RiskEngine
-from sopotek_trading.backend.strategy.strategy import Strategy
+from sopotek_trading.backend.core.orchestrator import Orchestrator
+from sopotek_trading.backend.managers.execution_manager import ExecutionManager
+from sopotek_trading.backend.managers.web_socket_manager import WebSocketManager
+from sopotek_trading.backend.risk.institutional_risk import InstitutionalRiskEngine
 
 
 class SopotekTrading(QObject):
 
-
-    def __init__(self, config,controller):
+    def __init__(self, controller):
         super().__init__()
 
+        self.symbols_list = controller.symbols_list
+        self.tickers = {}
+        self.ws_manager = controller.ws_manager
         self.controller = controller
-        self.logger=controller.logger
+        self.logger = controller.logger
+
+        # UI Signals
         self.ticker_signal = controller.ticker_signal
         self.equity_signal = controller.equity_signal
         self.candle_signal = controller.candle_signal
         self.trade_signal = controller.trade_signal
-        self.connection_signal =controller.connection_signal
+        self.connection_signal = controller.connection_signal
         self.orderbook_signal = controller.orderbook_signal
-
-
-
-        self.config = config
-        self.limit = config["limit"] or 1000
-        self.equity_refresh = config['equity_refresh'] or 60
-
         self.strategy_debug_signal = controller.strategy_debug_signal
+        # ----------------------------
+        # Orchestrator
+        # ----------------------------
 
+        self.orchestrator = Orchestrator(controller=self.controller)
 
+        self.limit = controller.limit
+        self.time_frame = controller.time_frame
 
-        self.time_frame = config.get("time_frame", "1h")
-        self.symbols = config.get("symbols", [])[:5]
+        self.symbols = controller.symbols
 
         self.running = False
         self.autotrading_enabled = False
+
         self.model_trained = {}
-        self.spread_pct=0
-        self.performance_engine=PerformanceEngine(self.controller)
+        self.ml_models = {}
 
-
-
-
-        adapter = BrokerFactory.create(config, logger=self.logger)
-        self.broker = Broker(adapter, logger=self.logger,controller=self.controller)
-
-        self.execution_manager = ExecutionManager(
-            broker=self.broker,
-            logger=self.logger
+        self.spread_pct = 0
+        self.current_equity = 0
+        self.controller.risk_engine=InstitutionalRiskEngine(
+            account_equity=controller.account_equity,
+            max_portfolio_risk= controller.max_portfolio_risk,
+            max_risk_per_trade= controller.max_risk_per_trade,
+            max_position_size_pct= controller.max_position_size_pct,
+            max_gross_exposure_pct= controller.max_gross_exposure_pct
         )
 
-        self.risk_engine = RiskEngine(self.broker, 0.0)
-        self.portfolio = Portfolio(self.broker)
-        self.portfolio_manager = PortfolioManager(
-            self.broker,
-            self.portfolio,
-            self.risk_engine
-        )
 
-        self.ml_model = MLSignal()
-        self.candle_buffer = CandleBuffer(max_length=500)
 
-        self.ws_manager = None
-        self.current_equity = 0.04
-        self.strategy = Strategy(controller=self.controller)
-        self.engine=TradingEngine(controller=self.controller,strategy=self.strategy,
-                                  risk_engine=self.risk_engine,portfolio=self.portfolio,
-                                  execution_manager=self.execution_manager,
-                                  timeframe=self.time_frame,
-                                  limit=self.limit,broker=self.broker,symbols=self.symbols)
 
-        self.orchestrator=MultiSymbolOrchestrator(engine=self.engine, symbols=self.symbols,
-                                                  candle_buffer=self.candle_buffer,
-                                                  logger=self.logger, controller=self.controller)
+
+
+
+
+
+
+
+
 
         self.logger.info("Sopotek Trading System Ready")
+
+    # ======================================================
+    # INITIALIZATION
+    # ======================================================
 
     async def initialize(self):
 
         try:
+            self.controller.broker= BrokerFactory().create(controller=self.controller)
+            self.controller.execution_manager = ExecutionManager(controller=self.controller)
+
             self.connection_signal.emit("connecting")
 
-            await self.broker.connect()
-            await self.execution_manager.start()
+            await self.controller.broker.connect()
 
-            balance = await self.broker.fetch_balance()
-            self.current_equity = balance["equity"]
+            # Fetch symbols
+            exchange_symbols = await self.controller.broker.fetch_symbols()
 
-            await self.risk_engine.update_equity(self.current_equity)
+            if not exchange_symbols:
+                raise Exception("No symbols received from exchange")
+
+            if not self.symbols:
+                self.controller.symbols = exchange_symbols
+
+            # Send to UI
+            self.controller.symbols_signal.emit(
+                self.controller.broker.exchange_name,
+                self.symbols
+            )
+
+            self.logger.info(f"{len(self.symbols)} symbols loaded")
+
+            self.controller.execution_manager.start()
+
 
             self.running = True
 
             asyncio.create_task(self._balance_scheduler())
+            self.symbols_list= await self.get_symbols()
+            self.symbols= self.symbols_list
+            self.logger.info(f"Symbols loaded: {self.symbols_list}")
 
-            self.ws_manager = BinanceWebSocket(
-                self.symbols,
-                self.time_frame,
-                self._on_ws_candle,
-                self._on_ticker_callback
+
+            # Websocket
+            self.ws_manager = WebSocketManager(
+                controller=self.controller,
+                symbols=["BTC/USDT","XLM/USDT","ETC/USDT"],
+                timeframe=self.time_frame,
+                candle_callback=self._on_ws_candle,
+                ticker_callback=self._on_ticker_callback
             )
 
             asyncio.create_task(self.ws_manager.start())
-
-            self.connection_signal.emit("connected")
+            if self.ws_manager.running:
+             self.connection_signal.emit("connected")
 
         except Exception as e:
+
             self.connection_signal.emit("disconnected")
-            raise e
+            self.logger.error(e)
+            traceback.print_exc()
+
+    # ======================================================
+    # SHUTDOWN
+    # ======================================================
 
     async def shutdown(self):
 
         self.logger.info("Shutting down system...")
+
         self.running = False
         self.autotrading_enabled = False
 
         if self.ws_manager:
-            self.ws_manager.stop()
+           await self.ws_manager.stop()
 
-        await self.execution_manager.shutdown()
-        await self.broker.close()
+        await self.controller.execution_manager.stop()
+        await self.controller.broker.close()
 
         self.connection_signal.emit("disconnected")
+
         self.logger.info("Shutdown complete.")
+
+    # ======================================================
+    # BALANCE SCHEDULER
+    # ======================================================
 
     async def _balance_scheduler(self):
 
         while self.running:
+
             try:
-                balance = await self.broker.fetch_balance()
-                self.current_equity = balance["equity"]
+
+                balance = await self.controller.broker.fetch_balance()
+                self.logger.info(f"Balance: {balance}")
+
+                self.current_equity = float(balance.get("equity", 0))
+                self.controller.risk_engine.update_equity(self.current_equity)
+
+
                 self.equity_signal.emit(self.current_equity)
+
             except Exception as e:
+
                 self.logger.error(f"Balance scheduler error: {e}")
 
             await asyncio.sleep(30)
 
-    async def _on_ws_candle(self, symbol: str, candle: dict):
-        """
-        WebSocket candle handler.
-        Receives closed candle data from exchange.
-        """
+    # ======================================================
+    # WEBSOCKET CANDLE
+    # ======================================================
+
+    async def _on_ws_candle(self, symbol: str, candle):
 
         try:
-         # ----------------------------
-        # Normalize Symbol
-        # ----------------------------
-         if "/" not in symbol and symbol.endswith("USDT"):
-            symbol = symbol[:-4] + "/USDT"
 
-        # ----------------------------
-        # Validate Candle Structure
-        # ----------------------------
-         required_keys = {"open", "high", "low", "close", "volume"}
-         if not required_keys.issubset(candle.keys()):
-            self.logger.warning(f"Incomplete candle data for {symbol}")
-            return
+            if "/" not in symbol and symbol.endswith("USDT"):
+                symbol = symbol[:-4] + "/USDT"
 
-        # ----------------------------
-        # Update Candle Buffer
-        # ----------------------------
-         self.candle_buffer.update(symbol, candle)
-         df = self.candle_buffer.get(symbol)
+            required = {"timestamp", "open", "high", "low", "close", "volume"}
 
-         if df is None or df.empty:
-            return
+            if not required.issubset(candle.keys()):
+                self.logger.error(
+                    "Required symbol {} not found in candle".format(symbol)
+                )
+                return
+            if self.autotrading_enabled:
+                asyncio.create_task(
+                self.orchestrator.trading_engine.run_trade(symbol, candle)
+    )
+            self.controller.candles_buffer.set(symbol, candle)
 
-        # ----------------------------
-        # Emit to UI
-        # ----------------------------
-         self.candle_signal.emit(symbol, df.copy())
+            self.candle_signal.emit(symbol, candle)
 
-        # ----------------------------
-        # Ensure Minimum History
-        # ----------------------------
-         if len(df) < 120:
-            return
 
-        # ----------------------------
-        # Train Model (Once Per Symbol)
-        # ----------------------------
-         if not self.model_trained.get(symbol, False):
-            try:
-                self.ml_model.train(df)
-                self.model_trained[symbol] = True
-                self.logger.info(f"Model trained for {symbol}")
-            except Exception as e:
-                self.logger.error(f"Training error for {symbol}: {e}")
-            return
 
-        # ----------------------------
-        # Trading Execution
-        # ----------------------------
-         if self.autotrading_enabled:
-             asyncio.create_task(
-                self.run_trade(symbol, df.copy())
-            )
+
 
         except Exception as e:
-         self.logger.error(f"WS candle error ({symbol}): {e}")
-    async def _on_ticker_callback(self, symbol: str, bid: float, ask: float):
-     """
-        Handles real-time ticker updates (bid/ask).
-        """
 
-     try:
-        # ---------------------------------
-        # Normalize symbol
-        # ---------------------------------
-        if "/" not in symbol and symbol.endswith("USDT"):
-            symbol = symbol[:-4] + "/USDT"
-
-        # ---------------------------------
-        # Validate numbers
-        # ---------------------------------
-        bid = float(bid)
-        ask = float(ask)
-
-        if bid <= 0 or ask <= 0:
-            return
-
-        # ---------------------------------
-        # Calculate derived values
-        # ---------------------------------
-        mid_price = (bid + ask) / 2
-        spread = ask - bid
-        spread_pct = (spread / mid_price) * 100 if mid_price else 0
-        self.spread_pct=spread_pct
-
-        # ---------------------------------
-        # Emit to UI
-        # ---------------------------------
-        self.ticker_signal.emit(symbol, bid, ask)
-
-        # ---------------------------------
-        # Optional: Feed strategy live price
-        # ---------------------------------
-        # If you later want ultra-low latency trading,
-        # you can use mid_price here instead of candle close.
-
-        # Example:
-        # if self.autotrading_enabled:
-        #     await self.run_tick_trade(symbol, mid_price)
-
-     except Exception as e:
-        self.logger.error(f"Ticker callback error ({symbol}): {e}")
-
+            self.logger.error(f"Candle error {symbol}: {e}")
+            traceback.print_exc()
 
     # ======================================================
-# AUTOTRADING CONTROL
-# ======================================================
+    # TICKER
+    # ======================================================
 
-    async def start_autotrading(self, symbols):
+    async def _on_ticker_callback(self, symbol: str, bid: float, ask: float):
 
-     if not symbols:
-        return
+        try:
 
-     self.autotrading_enabled = True
-     self.symbols = symbols
+            if "/" not in symbol and symbol.endswith("USDT"):
+                symbol = symbol[:-4] + "/USDT"
 
-     self.logger.info(f"AutoTrading enabled for {symbols}")
+            bid = float(bid)
+            ask = float(ask)
+            self.tickers[symbol] = {"bid": bid, "ask": ask}
 
-     await self.orchestrator.shutdown()
+            if bid <= 0 or ask <= 0:
+                return
 
-     self.orchestrator = MultiSymbolOrchestrator(
-        engine=self.engine,
-        symbols=self.symbols,
-        candle_buffer=self.candle_buffer,
-        logger=self.logger,
-        controller=self.controller
-    )
+            mid = (bid + ask) / 2
+            spread = ask - bid
+            self.logger.info(f"Spread {symbol}: {spread}")
 
-     asyncio.create_task(self.orchestrator.start())
+            self.spread_pct = (spread / mid) * 100 if mid else 0
+            self.logger.info(f"Spread pct {symbol}: {self.spread_pct}")
+
+            self.ticker_signal.emit(symbol, bid, ask)
+
+        except Exception as e:
+
+            self.logger.error(f"Ticker error {symbol}: {e}")
+
+    # ======================================================
+    # AUTOTRADING
+    # ======================================================
+
+    async def start(self):
+
+        self.autotrading_enabled = True
 
 
+        self.logger.info(f"AutoTrading enabled for {self.symbols}")
 
+        if not self.orchestrator.running:
 
+            asyncio.create_task(self.orchestrator.start())
 
-    async def stop_autotrading(self):
+    async def stop(self):
+
         self.autotrading_enabled = False
+
         await self.orchestrator.shutdown()
+
         self.logger.info("AutoTrading disabled")
 
-    async def run_trade(self, symbol: str, df):
+    async def get_symbols(self):
 
      try:
-        # ---------------------------------
-        # 1️⃣ Prediction
-        # ---------------------------------
 
+        symbols = await self.controller.broker.fetch_symbols()
 
-        analysis = self.ml_model.predict(df)
+        self.controller.symbols = symbols
 
-        signal = analysis.get("signal", "HOLD").upper()
-        entry_price = float(analysis.get("current_price", 0))
-        confidence = float(analysis.get("confidence", 0.5))
-        debug_data = {
-            "symbol": symbol,
-            "signal": signal,
-            "entry_price": entry_price,
-            "confidence": confidence,
-            "reason": analysis.get("reason", "ML prediction"),
-        }
-
-        if signal not in ["BUY", "SELL"]:
-            debug_data["status"] = "SKIPPED"
-            self.strategy_debug_signal.emit(debug_data)
-            return
-
-        if entry_price <= 0:
-            self.logger.warning(f"Insufficient data for {symbol} price is {entry_price}")
-            return
-
-        # ---------------------------------
-        # 2️⃣ Volatility-based Stop
-        # ---------------------------------
-        volatility = (
-            df["close"]
-            .pct_change()
-            .rolling(20)
-            .std()
-            .iloc[-1]
+        self.controller.symbols_signal.emit(
+            self.controller.broker.exchange_name,
+            symbols
         )
 
-        volatility = float(volatility) if not pd.isna(volatility) else 0.01
-
-        stop_distance = entry_price * volatility * 2
-
-        stop_price = (
-            entry_price - stop_distance
-            if signal == "BUY"
-            else entry_price + stop_distance
-        )
-
-        # ---------------------------------
-        # 3️⃣ Risk Engine Position Size
-        # ---------------------------------
-        await self.risk_engine.update_equity(self.current_equity)
-
-        size = self.risk_engine.position_size(
-            entry_price=entry_price,
-            stop_price=stop_price,
-            confidence=confidence,
-            volatility=volatility
-        )
-        debug_data.update({
-            "volatility": volatility,
-            "stop_price": stop_price,
-            "size": size
-        })
-
-        if size <= 0:
-            debug_data["status"] = "REJECTED_RISK"
-            self.strategy_debug_signal.emit(debug_data)
-            return
-        if self.portfolio.has_position(symbol):
-            self.logger.warning(f"Position {symbol} exists")
-            return
-
-        # ---------------------------------
-        # 4️⃣ Execute Trade
-        # ---------------------------------
-        result = await self.execution_manager.execute_trade(
-            user_id="system",
-            symbol=symbol,
-            side=signal.lower(),
-            amount=size,
-            order_type=self.config.get("order_type", "market"),
-            price=entry_price
-        )
-
-        if not result:
-            self.logger.info(f"{symbol}: no trade")
-
-            return
-        debug_data["status"] = "EXECUTED"
-        self.strategy_debug_signal.emit(debug_data)
-
-        # ---------------------------------
-        # 5️⃣ Portfolio Update
-        # ---------------------------------
-        self.portfolio_manager.update_fill(
-            symbol=symbol,
-            side=signal,
-            quantity=size,
-            price=entry_price
-        )
-
-        # ---------------------------------
-        # 6️⃣ Emit UI Trade Event
-        # ---------------------------------
-        trade_data = {
-            "symbol": symbol,
-            "side": signal,
-            "price": entry_price,
-            "size": size,
-            "confidence": confidence,
-            "volatility": volatility
-        }
-
-        self.trade_signal.emit(trade_data)
-
-        # ---------------------------------
-        # 7️⃣ Performance Recording (Optional)
-        # ---------------------------------
-        # If you use PerformanceEngine:
-        self.performance_engine.record_trade(trade_data)
-
-        self.logger.info(
-            f"TRADE EXECUTED | {symbol} | {signal} | {size}"
-        )
+        return symbols
 
      except Exception as e:
-        self.logger.error(f"run_trade error ({symbol}): {e}")
+
+        self.logger.error(f"Symbol fetch failed: {e}")

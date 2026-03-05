@@ -2,83 +2,79 @@
 
 from .ccxt_broker import CCXTBroker
 from .oanda_broker import OandaBroker
-from .rate_limiter import RateLimiter
-
+from .alpaca_broker import AlpacaBroker
+from .paper_broker import PaperBroker
 
 BROKER_REGISTRY = {
     "crypto": CCXTBroker,
-    "oanda": OandaBroker,
+    "forex": OandaBroker,
+    "stocks": AlpacaBroker,
+    "paper":PaperBroker
 }
 
 
 class BrokerFactory:
 
     @staticmethod
-    def create(config: dict, logger=None):
+    def create(controller):
 
-        broker_type = config.get("type")
+        broker_type = getattr(controller, "type", None)
 
         if not broker_type:
-            raise ValueError("Broker type not specified in config")
+            raise ValueError("Broker type not specified in controller")
 
         broker_class = BROKER_REGISTRY.get(broker_type)
 
-        if not broker_class:
+        if broker_class is None:
             raise ValueError(f"Unsupported broker type: {broker_type}")
 
-        mode = config.get("mode", "paper")
-        credentials = config.get("credentials") or {}
-        options = config.get("options") or {}
 
-        rate_limit = options.get("rate_limit", 5)
-        rate_limiter = RateLimiter(rate_limit)
 
-        # =============================
+
+        # =====================================
         # CRYPTO (CCXT)
-        # =============================
+        # =====================================
+
         if broker_type == "crypto":
 
-            exchange = options.get("exchange")
+            exchange = getattr(controller, "exchange_name", None)
+            api_key = getattr(controller, "api_key", None)
+            secret = getattr(controller, "secret", None)
+
             if not exchange:
                 raise ValueError("Missing exchange name for crypto broker")
-
-            api_key = credentials.get("api_key")
-            secret = credentials.get("secret")
 
             if not api_key or not secret:
                 raise ValueError("Missing API credentials for crypto broker")
 
-            broker_config = {
-                "exchange_name": exchange,
-                "api_key": api_key,
-                "secret": secret,
-                "mode": mode,
-                "rate_limiter": rate_limiter,
-                "exchange_options": options.get("exchange_options", "spot"),
-                "logger": logger,
-            }
 
-            return broker_class(broker_config)
 
-        # =============================
-        # OANDA
-        # =============================
-        if broker_type == "oanda":
+            return broker_class(controller)
 
-            api_key = credentials.get("api_key")
-            account_id = credentials.get("account_id")
+        # =====================================
+        # FOREX (OANDA)
+        # =====================================
+
+        if broker_type == "forex":
+
+            api_key = getattr(controller, "api_key", None)
+            account_id = getattr(controller, "account_id", None)
 
             if not api_key or not account_id:
                 raise ValueError("Missing OANDA credentials")
 
-            broker_config = {
-                "api_key": api_key,
-                "account_id": account_id,
-                "mode": mode,
-                "rate_limiter": rate_limiter,
-                "logger": logger,
-            }
 
-            return broker_class(broker_config)
+            return broker_class(controller)
 
-        raise RuntimeError("BrokerFactory reached unreachable state")
+        # =====================================
+        # STOCKS (ALPACA)
+        # =====================================
+
+        if broker_type == "stocks":
+
+
+
+
+            return broker_class(controller)
+
+        raise ValueError(f"Invalid broker type: {broker_type}")

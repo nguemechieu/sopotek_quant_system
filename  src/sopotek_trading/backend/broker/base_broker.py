@@ -1,84 +1,106 @@
-# brokers/base.py
-
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 
 class BaseBroker(ABC):
-    """
-    Unified broker interface.
-    All brokers MUST normalize outputs to these formats.
-    """
 
-    # -------------------------------------------------
+    def __init__(self):
+        self._connected: bool = False
+
+    # =========================================================
     # CONNECTION
-    # -------------------------------------------------
+    # =========================================================
 
     @abstractmethod
-    async def connect(self) -> None:
-        """Initialize connection to broker."""
-        pass
+    async def connect(self) -> bool:
+        """Establish broker connection"""
+        raise NotImplementedError
 
     @abstractmethod
     async def close(self) -> None:
-        """Gracefully close broker connection."""
-        pass
+        """Release all resources (important for async clients like ccxt)"""
+        raise NotImplementedError
 
-    # -------------------------------------------------
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Health check"""
+        raise NotImplementedError
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+    # =========================================================
+    # MARKET DATA
+    # =========================================================
+
+    @abstractmethod
+    async def fetch_symbols(self) -> List[str]:
+        """Return list of tradable symbols"""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def fetch_ohlcv(
+            self,
+            symbol: str,
+            timeframe: str,
+            limit: int = 500
+    ) -> List[List[Any]]:
+        """
+        Return OHLCV candles
+        format:
+        [
+            [timestamp, open, high, low, close, volume],
+            ...
+        ]
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def fetch_ticker(self, symbol: str) -> Dict:
+        """Return ticker information"""
+        raise NotImplementedError
+
+    async def fetch_price(self, symbol: str) -> float:
+        """Helper function used by trading engines"""
+        ticker = await self.fetch_ticker(symbol)
+        return ticker.get("last")
+
+    # =========================================================
     # ACCOUNT
-    # -------------------------------------------------
+    # =========================================================
 
     @abstractmethod
     async def fetch_balance(self) -> Dict:
         """
-        Must return:
+        Expected format:
         {
-            "equity": float,
-            "free": float,
-            "used": float,
-            "currency": str
+            equity: float,
+            free: float,
+            used: float,
+            currency: str
         }
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     async def fetch_positions(self) -> List[Dict]:
-        """
-        Must return list of:
-        {
-            "symbol": str,
-            "side": "long" | "short",
-            "size": float,
-            "entry_price": float,
-            "unrealized_pnl": float
-        }
-        """
-        pass
-
-    # -------------------------------------------------
-    # MARKET DATA
-    # -------------------------------------------------
+        """Return open positions"""
+        raise NotImplementedError
 
     @abstractmethod
-    async def fetch_ticker(self, symbol: str) -> Dict:
-        """
-        Must return:
-        {
-            "bid": float,
-            "ask": float,
-            "last": Optional[float]
-        }
-        """
-        pass
+    async def fetch_open_orders(self) -> List[Dict]:
+        """Return open orders"""
+        raise NotImplementedError
 
-    @abstractmethod
-    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> Dict:
-        """Return OHLCV candles in unified format."""
-        pass
+    async def fetch_fees(self) -> Dict:
+        """
+        Optional method (not supported by all brokers)
+        """
+        return {}
 
-    # -------------------------------------------------
-    # EXECUTION
-    # -------------------------------------------------
+    # =========================================================
+    # TRADING
+    # =========================================================
 
     @abstractmethod
     async def create_order(
@@ -87,52 +109,27 @@ class BaseBroker(ABC):
             side: str,
             order_type: str,
             amount: float,
-            price: Optional[float] = 0.0,
-            stop_loss: Optional[float] = 0.0,
-            take_profit: Optional[float] = 0.0
+            price: Optional[float] = None,
+            stop_loss: Optional[float] = None,
+            take_profit: Optional[float] = None,
+            slippage: Optional[float] = None
     ) -> Dict:
         """
-        Must return normalized order:
-
-        {
-            "id": str,
-            "symbol": str,
-            "side": str,
-            "status": str,
-            "filled": float,
-            "price": float
-        }
+        Create order
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    async def cancel_order(self, order_id: str, symbol: str) -> Dict:
-        """Cancel order and return normalized response."""
-        pass
-
-    # -------------------------------------------------
-    # PERFORMANCE
-    # -------------------------------------------------
+    async def cancel_order(self, order_id: str) -> Dict:
+        """Cancel a specific order"""
+        raise NotImplementedError
 
     @abstractmethod
-    async def fetch_realized_pnl(self) -> float:
-        """Return total realized PnL."""
-        pass
+    async def cancel_all_orders(self) -> None:
+        """Cancel all open orders"""
+        raise NotImplementedError
 
     @abstractmethod
-    async def fetch_unrealized_pnl(self) -> float:
-        """Return total unrealized PnL."""
-        pass
-
-
-    @abstractmethod
-    async def fetch_order_book(self, symbol: str) -> Dict:
-        """Return order book data."""
-        pass
-
-
-    @abstractmethod
-    async def fetch_symbols(self) -> Dict:
-
-        """Return symbols """
-        pass
+    async def fetch_order(self, order_id: str) -> Dict:
+        """Return order details"""
+        raise NotImplementedError

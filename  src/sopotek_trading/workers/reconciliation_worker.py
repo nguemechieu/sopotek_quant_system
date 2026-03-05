@@ -3,10 +3,10 @@ from datetime import timedelta
 from celery import shared_task
 import logging
 
-from sopotek_trading.models.database import SessionLocal
-from sopotek_trading.models.order_states import OrderState
-from sopotek_trading.repositories.order_repository import OrderRepository
-from sopotek_trading.executions.broker_factory import BrokerFactory
+from sopotek_trading.backend.broker.broker_factory import BrokerFactory
+from sopotek_trading.backend.models.database import SessionLocal
+from sopotek_trading.backend.models.order_states import OrderState
+from sopotek_trading.backend.repositories.order_repository import OrderRepository
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def is_stale(order):
         return False
 
     expiration_time = order.created_at + timedelta(seconds=order.timeout_seconds)
-    return datetime.datetime.utcnow() > expiration_time
+    return datetime.datetime.now() > expiration_time
 
 
 # -------------------------------------------------
@@ -50,10 +50,12 @@ def reconcile_orders():
         for order in active_orders:
 
             try:
+                config={
+
+                }
+
                 broker = BrokerFactory.create(
-                    exchange_name=order.exchange_name,
-                    api_key=decrypt_api_key(order.user_id),
-                    secret=decrypt_secret(order.user_id)
+                    config,logger
                 )
 
                 exchange_data = BrokerFactory.safe_execute(
@@ -61,7 +63,7 @@ def reconcile_orders():
                 )
 
                 status = exchange_data["status"]
-                filled = float(exchange_data.get("filled", ohlcv))
+                filled = float(exchange_data.get("filled"))
 
                 # -------------------------------------------------
                 # Incremental Fill Handling
@@ -76,7 +78,7 @@ def reconcile_orders():
                         order.id,
                         OrderState.PARTIALLY_FILLED if filled < order.requested_amount else OrderState.FILLED,
                         filled=filled,
-                        avg_price=exchange_data.get("price", ohlcv),
+                        avg_price=exchange_data.get("price"),
                         raw=exchange_data
                     )
 
@@ -90,7 +92,7 @@ def reconcile_orders():
                         order.id,
                         OrderState.FILLED,
                         filled=filled,
-                        avg_price=exchange_data.get("price", ohlcv),
+                        avg_price=exchange_data.get("price"),
                         raw=exchange_data
                     )
 

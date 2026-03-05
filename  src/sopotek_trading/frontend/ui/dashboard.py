@@ -58,6 +58,14 @@ class Dashboard(QWidget):
         self.setWindowTitle("Sopotek AI Trading Platform")
         self.resize(650, 760)
         self.setStyleSheet(_get_styles())
+        self.symbols = [
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT",
+            "XRP/USDT",
+            "ADA/USDT",
+            "XLM/USDT"
+        ]
 
         main_layout = QVBoxLayout(self)
         main_layout.setAlignment(Qt.AlignCenter)
@@ -69,7 +77,7 @@ class Dashboard(QWidget):
         self.spinner = QLabel()
         self.spinner.setAlignment(Qt.AlignCenter)
         self.spinner.setVisible(False)
-        self.spinner_movie = QMovie("src/sopotek_trading/assets/spinner.gif")
+        self.spinner_movie = QMovie("assets/spinner.gif")
         self.spinner.setMovie(self.spinner_movie)
         main_layout.addWidget(self.spinner)
 
@@ -172,6 +180,15 @@ class Dashboard(QWidget):
         self.form_layout.addRow("Data Limit:", self.limit_input)
         self.form_layout.addRow("Equity Refresh (sec):", self.refresh_input)
         self.form_layout.addRow("Rate Limit:", self.rate_limit_input)
+        self.exchange_type_box = QComboBox()
+        self.exchange_type_box.addItems([
+    "crypto",
+    "forex",
+    "stocks",
+    "paper"
+])
+
+        self.form_layout.addRow("Exchange Type:", self.exchange_type_box)
 
         self.form_layout.addRow("", self.remember_checkbox)
 
@@ -191,6 +208,8 @@ class Dashboard(QWidget):
         # Init
         self._on_exchange_change(self.exchange_box.currentText())
         self._toggle_advanced(False)
+        self.exchange_type_box.currentTextChanged.connect(self._update_exchange_list)
+        self._update_exchange_list(self.exchange_type_box.currentText())
 
     # ======================================================
     # DYNAMIC CREDENTIAL FIELDS
@@ -202,7 +221,6 @@ class Dashboard(QWidget):
 
     def _build_credentials_fields(self, exchange):
 
-    # Clear credential layout safely
      while self.credential_layout.count():
         item = self.credential_layout.takeAt(0)
         widget = item.widget()
@@ -214,14 +232,25 @@ class Dashboard(QWidget):
      self.secret_input.setEchoMode(QLineEdit.Password)
 
      if exchange == "oanda":
-        self.api_input.setPlaceholderText("Enter Account ID")
-        self.secret_input.setPlaceholderText("Enter API Key")
+
+        self.api_input.setPlaceholderText("Account ID")
+        self.secret_input.setPlaceholderText("API Token")
 
         self.credential_layout.addRow("Account ID:", self.api_input)
-        self.credential_layout.addRow("API Key:", self.secret_input)
+        self.credential_layout.addRow("API Token:", self.secret_input)
+
+     elif exchange == "alpaca":
+
+        self.api_input.setPlaceholderText("API Key")
+        self.secret_input.setPlaceholderText("Secret Key")
+
+        self.credential_layout.addRow("API Key:", self.api_input)
+        self.credential_layout.addRow("Secret Key:", self.secret_input)
+
      else:
-        self.api_input.setPlaceholderText("Enter API Key")
-        self.secret_input.setPlaceholderText("Enter Secret Key")
+
+        self.api_input.setPlaceholderText("API Key")
+        self.secret_input.setPlaceholderText("Secret Key")
 
         self.credential_layout.addRow("API Key:", self.api_input)
         self.credential_layout.addRow("Secret:", self.secret_input)
@@ -256,13 +285,17 @@ class Dashboard(QWidget):
         risk_percent = self.risk_input.value()
 
         if exchange == "oanda":
-            account_id = self.api_input.text().strip()
-            api_key = self.secret_input.text().strip()
+            api_key = self.api_input.text().strip()
+            self.controller.account_id =api_key
+            secret = self.secret_input.text().strip()
+            self.controller.secret = secret
             secret = ""
         else:
-            account_id = ""
+
             api_key = self.api_input.text().strip()
+            self.controller.api_key = api_key
             secret = self.secret_input.text().strip()
+            self.controller.secret = secret
 
         if not api_key:
             QMessageBox.warning(self, "Missing Credentials", "API credentials required.")
@@ -283,19 +316,22 @@ class Dashboard(QWidget):
         else:
             CredentialManager.delete_credentials(exchange)
 
+
         self.config = {
-            "type": "forex" if exchange == "oanda" else "crypto",
+
+            "type": self.exchange_type_box.currentText(),
             "exchange_name": exchange,
             "mode": mode,
             "strategy": strategy,
+
             "limit": self.limit_input.value(),
             "equity_refresh": self.refresh_input.value(),
             "risk_percent": risk_percent,
-            "credentials": {
-                "api_key": api_key,
-                "secret": secret,
-                "account_id": account_id,
-            },
+
+            "api_key": api_key,
+            "secret": secret,
+            "account_id": api_key if exchange == "oanda" else None,
+
             "options": {
                 "exchange": exchange,
                 "rate_limit": self.rate_limit_input.value()
@@ -321,6 +357,44 @@ class Dashboard(QWidget):
         self.connect_button.setEnabled(True)
         self.connect_button.setText("CONNECT")
 
+
+    def _update_exchange_list(self, exchange_type):
+
+     self.exchange_box.clear()
+
+     if exchange_type == "crypto":
+
+        self.exchange_box.addItems([
+            "binance",
+            "binanceus",
+            "coinbase",
+            "kraken",
+            "kucoin",
+            "bybit",
+            "okx",
+            "gateio",
+            "bitget"
+        ])
+
+     elif exchange_type == "forex":
+
+        self.exchange_box.addItems([
+            "oanda",
+            "fxcm",
+            "forex.com",
+            "ic markets",
+            "fxpro"
+
+        ])
+
+     elif exchange_type == "stocks":
+
+        self.exchange_box.addItems([
+            "alpaca",
+        "ib_insync (Interactive Brokers)",
+        "yfinance",
+        "polygon"
+        ])
     # ======================================================
     # STYLE
     # ======================================================

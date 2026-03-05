@@ -1,4 +1,5 @@
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,9 @@ class InstitutionalRiskEngine:
             max_position_size_pct: float = 0.20,
             max_gross_exposure_pct: float = 1.5,
     ):
+
         self.account_equity = account_equity
+
         self.max_risk_per_trade = max_risk_per_trade
         self.max_portfolio_risk = max_portfolio_risk
         self.max_daily_drawdown = max_daily_drawdown
@@ -24,12 +27,17 @@ class InstitutionalRiskEngine:
         self.daily_loss = 0
 
     # -------------------------------------------------
-    # POSITION SIZING
+    # EQUITY UPDATE
     # -------------------------------------------------
+
+    def update_equity(self, equity):
+        self.account_equity = equity
+
+    # -------------------------------------------------
+    # POSITION SIZE
+    # -------------------------------------------------
+
     def position_size(self, entry_price, stop_price, confidence=1.0, volatility=None):
-        """
-        Volatility-adjusted risk sizing with confidence scaling.
-        """
 
         risk_capital = self.account_equity * self.max_risk_per_trade
 
@@ -38,19 +46,16 @@ class InstitutionalRiskEngine:
         if stop_distance <= 0:
             return 0
 
-        # Base position size
         base_size = risk_capital / stop_distance
 
-        # Volatility scaling (optional)
         if volatility:
             base_size = base_size / max(volatility, 1e-8)
 
-        # Confidence scaling (0–1)
         adjusted_size = base_size * confidence
 
-        # Hard cap on single position size
         max_position_value = self.account_equity * self.max_position_size_pct
         max_size_allowed = max_position_value / entry_price
+
 
         final_size = min(adjusted_size, max_size_allowed)
 
@@ -59,65 +64,133 @@ class InstitutionalRiskEngine:
     # -------------------------------------------------
     # TRADE VALIDATION
     # -------------------------------------------------
+
     def validate_trade(self, signal, portfolio):
-        """
-        Checks exposure, concentration, and risk budget.
-        """
 
-        entry = signal["entry"]
-        stop = signal["stop"]
+        entry = signal["entry_price"]
+        stop = signal["stop_price"]
 
-        # 1️⃣ Per-trade risk check
+        size = self.position_size(entry, stop)
+
         stop_distance = abs(entry - stop)
-        if stop_distance <= 0:
-            return False, "Invalid stop distance"
 
-        potential_loss = stop_distance
+        potential_loss = size * stop_distance
+
         max_allowed_loss = self.account_equity * self.max_risk_per_trade
 
         if potential_loss > max_allowed_loss:
-            return False, "Trade exceeds max per-trade risk"
+            return False, "Per trade risk exceeded"
 
-        # 2️⃣ Portfolio exposure check
         gross_exposure = self._gross_exposure(portfolio)
 
         if gross_exposure > self.account_equity * self.max_gross_exposure_pct:
-            return False, "Gross exposure limit exceeded"
+            return False, "Gross exposure exceeded"
+
+        if self.daily_loss < -self.account_equity * self.max_daily_drawdown:
+            return False, "Daily drawdown exceeded"
+
 
         return True, "Approved"
 
     # -------------------------------------------------
-    # PORTFOLIO METRICS
+    # PORTFOLIO EXPOSURE
     # -------------------------------------------------
+
     def _gross_exposure(self, portfolio):
-        return sum(abs(p["value"]) for p in portfolio)
 
-    def net_exposure(self, portfolio):
-        return sum(p["value"] for p in portfolio)
+        exposure = 0
+
+        for p in portfolio:
+            exposure += abs(p["quantity"] * p["entry_price"])
+
+        return exposure
 
     # -------------------------------------------------
-    # DAILY DRAWDOWN CONTROL
+    # VALUE AT RISK (VaR)
     # -------------------------------------------------
+
+    def value_at_risk(self, returns, confidence_level=0.95):
+
+        """
+        Historical VaR
+        """
+
+        returns = np.array(returns)
+
+        percentile = (1 - confidence_level) * 100
+
+        var = np.percentile(returns, percentile)
+
+        return abs(var) * self.account_equity
+
+    # -------------------------------------------------
+    # CONDITIONAL VAR (Expected Shortfall)
+    # -------------------------------------------------
+
+    def conditional_var(self, returns, confidence_level=0.95):
+
+        returns = np.array(returns)
+
+        var_threshold = np.percentile(returns, (1 - confidence_level) * 100)
+
+        losses = returns[returns <= var_threshold]
+
+        if len(losses) == 0:
+            return 0
+
+        cvar = losses.mean()
+
+        return abs(cvar) * self.account_equity
+
+    # -------------------------------------------------
+    # MONTE CARLO RISK SIMULATION
+    # -------------------------------------------------
+
+    def monte_carlo_var(self, returns, simulations=5000, horizon=1):
+
+        returns = np.array(returns)
+
+        mean = returns.mean()
+        std = returns.std()
+
+        simulated_returns = np.random.normal(
+            mean,
+            std,
+            (simulations, horizon)
+        )
+
+        simulated_paths = simulated_returns.sum(axis=1)
+
+        var = np.percentile(simulated_paths, 5)
+
+        return abs(var) * self.account_equity
+
+    # -------------------------------------------------
+    # DAILY PNL CONTROL
+    # -------------------------------------------------
+
     def update_daily_pnl(self, pnl):
+
         self.daily_loss += pnl
 
         if self.daily_loss < -self.account_equity * self.max_daily_drawdown:
-            logger.critical("Daily drawdown breached.")
+
+            logger.critical("Daily drawdown breached")
+
             return False
 
         return True
 
     # -------------------------------------------------
-    # KELLY FRACTION (Optional Institutional Scaling)
+    # FRACTIONAL KELLY
     # -------------------------------------------------
-    def kelly_fraction(self, win_rate, win_loss_ratio):
-        """
-        Kelly formula:
-        f = (bp - q) / b
-        """
+
+    def kelly_fraction(self, win_rate, win_loss_ratio, fraction=0.25):
+
         b = win_loss_ratio
         p = win_rate
         q = 1 - p
 
         kelly = (b * p - q) / b
-        return max(min(kelly, 1), 0)
+
+        return max(min(kelly * fraction, 1), 0)

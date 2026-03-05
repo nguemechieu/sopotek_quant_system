@@ -1,5 +1,6 @@
 import numpy as np
-from sklearn.mixture import GaussianMixture
+import pandas as pd
+
 
 class RegimeDetector:
 

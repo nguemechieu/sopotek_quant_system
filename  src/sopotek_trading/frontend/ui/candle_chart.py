@@ -6,10 +6,10 @@ import websockets
 
 
 class CandleChart(pg.GraphicsLayoutWidget):
-    def __init__(self,ohclv):
+    def __init__(self, ohclv_):
         super().__init__()
 
-        self.ohclv = ohclv
+        self.ohclv = ohclv_
         self.setWindowTitle("Sopotek MT4 Chart")
         self.resize(1000, 600)
 

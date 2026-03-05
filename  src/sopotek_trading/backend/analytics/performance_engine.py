@@ -9,6 +9,7 @@ class PerformanceEngine:
 
     def __init__(self, controller):
         self.logger = logging.getLogger(__name__)
+        self.controller = controller
         self.trades = []
         self.equity_history = []
         self.timestamps = []
