@@ -1,12 +1,11 @@
 import alpaca_trade_api as tradeapi
 
-from sopotek_trading.broker.base_broker import BaseBroker
+from broker.base_broker import BaseBroker
 
 
 class AlpacaBroker(BaseBroker):
 
     def __init__(self, api_key, secret, paper=True):
-
         base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
 
         self.api = tradeapi.REST(
@@ -21,14 +20,12 @@ class AlpacaBroker(BaseBroker):
     # =================================
 
     async def connect(self):
-
         account = self.api.get_account()
 
         print("Connected to Alpaca")
         print("Account status:", account.status)
 
     async def close(self):
-
         pass
 
     # =================================
@@ -36,7 +33,6 @@ class AlpacaBroker(BaseBroker):
     # =================================
 
     async def fetch_ticker(self, symbol):
-
         bar = self.api.get_latest_trade(symbol)
 
         return {
@@ -45,7 +41,6 @@ class AlpacaBroker(BaseBroker):
         }
 
     async def fetch_order_book(self, symbol, limit=10):
-
         quote = self.api.get_latest_quote(symbol)
 
         return {
@@ -59,25 +54,29 @@ class AlpacaBroker(BaseBroker):
 
     async def create_order(
             self,
-            symbol,
-            side,
-            amount,
+            symbol="EURUSD",
+            side="HOLD",
+            amount=12,
             type="market",
-            price=None
+            price=0,
+            stop_loss=10,
+            take_profit=100,
+            slippage=0
     ):
-
         order = self.api.submit_order(
             symbol=symbol,
             qty=amount,
             side=side.lower(),
             type=type,
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            slippage =slippage,
             time_in_force="gtc"
         )
 
         return order
 
     async def cancel_order(self, order_id, symbol):
-
         return self.api.cancel_order(order_id)
 
     # =================================
@@ -85,7 +84,6 @@ class AlpacaBroker(BaseBroker):
     # =================================
 
     async def fetch_balance(self):
-
         account = self.api.get_account()
 
         return {

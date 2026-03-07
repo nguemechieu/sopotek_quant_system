@@ -2,8 +2,8 @@ import asyncio
 import json
 import websockets
 
-from sopotek_trading.event_bus.event import Event
-from sopotek_trading.event_bus.event_types import EventType
+from event_bus.event import Event
+from event_bus.event_types import EventType
 
 
 class AlpacaWebSocket:
