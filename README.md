@@ -1,815 +1,236 @@
-SOPOTEK TRADING AI
+# Sopotek Trading AI
 
-Project Documentation
+Sopotek Trading AI is a modular, event-driven algorithmic trading platform designed for multi-asset trading across cryptocurrency, forex, and stock markets.
 
-Author: Noel Martial Nguemechieu
-Company: Sopotek
-System: Sopotek Trading AI Platform
+The system supports live trading, backtesting, machine learning strategies, and institutional-grade risk management.
 
-1. Project Overview
+---
 
-Sopotek Trading AI is an event-driven algorithmic trading platform designed for real-time market analysis, automated trading, strategy orchestration, and institutional risk management.
+## Features
 
-The platform integrates:
+- Multi-asset trading
+    - Crypto (Binance, Coinbase, Kraken via CCXT)
+    - Forex (OANDA)
+    - Stocks (Alpaca)
 
-real-time market data streaming
+- Event-Driven Architecture
 
-multiple trading strategies
+- Algorithmic Trading Strategies
+    - Momentum
+    - Mean Reversion
+    - Arbitrage
 
-institutional risk controls
+- Machine Learning Models
+    - Scikit-Learn
+    - XGBoost
+    - Hidden Markov Models
 
-order execution systems
+- Institutional Risk Management
+    - Portfolio exposure limits
+    - Position sizing
+    - Drawdown protection
 
-machine learning prediction models
+- Backtesting Engine
 
-performance analytics
+- Real-Time Market Data Streaming
 
-graphical trading terminal
+- GUI Trading Terminal (PySide6 + PyQtGraph)
 
-The system is built to support scalable quantitative trading operations across multiple exchanges.
+- Strategy Research Tools
 
-2. Design Goals
+---
 
-The platform was designed with the following objectives:
+## Project Structure
+# Sopotek Trading AI
 
-Scalability
-Allow the system to process thousands of market events per second.
+Sopotek Trading AI is a modular, event-driven algorithmic trading platform designed for multi-asset trading across cryptocurrency, forex, and stock markets.
 
-Modularity
-Each system component can evolve independently.
+The system supports live trading, backtesting, machine learning strategies, and institutional-grade risk management.
 
-Fault tolerance
-System failures should not crash the entire trading platform.
+---
 
-Low latency
-Signals must be processed quickly for real-time trading.
+## Features
 
-Institutional-grade risk management
-All trades must comply with strict exposure and drawdown rules.
+- Multi-asset trading
+  - Crypto (Binance, Coinbase, Kraken via CCXT)
+  - Forex (OANDA)
+  - Stocks (Alpaca)
 
-3. High-Level Architecture
+- Event-Driven Architecture
 
-The system follows an event-driven architecture using Kafka as the event bus.
+- Algorithmic Trading Strategies
+  - Momentum
+  - Mean Reversion
+  - Arbitrage
 
-Data Flow Pipeline:
+- Machine Learning Models
+  - Scikit-Learn
+  - XGBoost
+  - Hidden Markov Models
+
+- Institutional Risk Management
+  - Portfolio exposure limits
+  - Position sizing
+  - Drawdown protection
+
+- Backtesting Engine
+
+- Real-Time Market Data Streaming
+
+- GUI Trading Terminal (PySide6 + PyQtGraph)
+
+- Strategy Research Tools
+
+---
+
+## Project Structure
+
+---
+
+## Installation
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/sopotek/sopotek-trading-ai.git
+cd sopotek-trading-ai
+2. Create a virtual environment
+python -m venv .venv
+
+Activate:
+
+Windows
+
+.venv\Scripts\activate
+
+Linux / Mac
+
+source .venv/bin/activate
+3. Install dependencies
+pip install -r requirements.txt
+Configuration
+
+Set environment variables inside .env.
+
+Example:
+
+BINANCE_API_KEY=your_key
+BINANCE_SECRET=your_secret
+
+ALPACA_API_KEY=your_key
+ALPACA_SECRET=your_secret
+
+OANDA_TOKEN=your_token
+OANDA_ACCOUNT=your_account
+Running the System
+Run Live Trading
+python scripts/run_live.py
+Run Backtesting
+python scripts/run_backtest.py
+Train Machine Learning Models
+python scripts/train_models.py
+Download Market Data
+python scripts/download_data.py
+Data Pipeline
+Exchange Data
+    ↓
+data/raw
+    ↓
+data/processed
+    ↓
+data/features
+    ↓
+Machine Learning / Strategies
+Event Driven Architecture
+
+The system uses an event bus to coordinate components.
 
 Market Data
-→ Kafka Event Bus
-→ Feature Engine
-→ Strategy Engine
-→ Strategy Orchestrator
-→ Risk Engine
-→ Execution Engine
-→ Portfolio Manager
-→ Analytics / GUI
-
-Each component consumes and produces events.
-
-4. Market Data Layer
-
-The Market Data Engine collects live market data from exchanges.
-
-Supported sources:
-
-Binance WebSocket API
-OANDA API
-CCXT exchange connectors
-
-Responsibilities:
-
-stream real-time candlesticks
-
-stream orderbook data
-
-stream ticker prices
-
-normalize exchange formats
-
-publish data to Kafka topics
-
-Example candle structure:
-
-symbol: BTC/USDT
-timeframe: 1m
-open: 65000
-high: 65120
-low: 64880
-close: 65090
-volume: 45.2
-
-5. Kafka Event Streaming
-
-Kafka serves as the central communication infrastructure.
-
-Kafka allows:
-
-asynchronous message processing
-
-decoupling between services
-
-distributed scalability
-
-message replay capability
-
-Typical topics used:
-
-market.candles
-market.tickers
-market.orderbook
-features.indicators
-strategy.signals
-orders.execution
-portfolio.updates
-training.status
-
-Each system component subscribes to the topics it requires.
-
-6. Feature Engine
-
-The Feature Engine calculates technical indicators and derived metrics from market data.
-
-Indicators include:
-
-EMA (Exponential Moving Average)
-RSI (Relative Strength Index)
-ATR (Average True Range)
-Bollinger Bands
-Volatility metrics
-
-The feature engine reduces computation overhead by computing indicators once and sharing them across strategies.
-
-7. Strategy Engine
-
-Strategies analyze market features and produce trading signals.
-
-The system supports multiple strategy types.
-
-Trend Strategy
-
-Uses EMA crossovers and RSI confirmation to detect directional trends.
-
-Mean Reversion Strategy
-
-Trades price reversals using Bollinger Bands and momentum indicators.
-
-Breakout Strategy
-
-Detects volatility expansion and breakout movements.
-
-Machine Learning Strategy
-
-Uses AI models to predict price direction probabilities.
-
-Strategies output structured signals including:
-
-signal type
-entry price
-stop loss
-confidence level
-volatility measurement
-
-8. Strategy Orchestrator
-
-The Strategy Orchestrator coordinates signals from multiple strategies.
-
-Responsibilities:
-
-resolve conflicting signals
-
-prioritize high-confidence trades
-
-allocate capital between strategies
-
-adapt to changing market regimes
-
-Example strategy allocation:
-
-Trend Strategy: 50%
-Mean Reversion Strategy: 20%
-Breakout Strategy: 20%
-Machine Learning Strategy: 10%
-
-The orchestrator improves portfolio diversification.
-
-9. Risk Management Engine
-
-The Institutional Risk Engine enforces strict trading constraints.
-
-Risk rules include:
-
-Maximum risk per trade
-Maximum portfolio exposure
-Maximum daily drawdown
-Maximum position size
-Gross exposure limits
-
-Advanced features include:
-
-Kelly position sizing
-Value at Risk (VaR) estimation
-Conditional Value at Risk (CVaR)
-Monte Carlo risk simulations
-
-These controls ensure the system maintains stable risk levels.
-
-10. Execution Engine
-
-The Execution Engine places orders with exchanges.
-
-Responsibilities:
-
-Submit market orders
-Submit limit orders
-Handle slippage
-Retry failed orders
-Manage partial fills
-Track order status
-
-Execution adapters support multiple brokers using CCXT.
-
-11. Portfolio Manager
-
-The Portfolio Manager tracks all trading activity.
-
-It maintains:
-
-open positions
-account balance
-equity curve
-profit and loss
-strategy performance metrics
-
-Portfolio updates are streamed to both the analytics engine and GUI.
-
-12. Analytics and Performance Engine
-
-The Performance Engine tracks system statistics.
-
-Metrics include:
-
-total trades
-win rate
-profit factor
-maximum drawdown
-Sharpe ratio
-strategy profitability
-
-The system can generate reports in:
-
-PDF format
-Excel format
-
-13. Backtesting Engine
-
-The Backtesting Engine allows strategies to be evaluated on historical data.
-
-Capabilities include:
-
-historical market replay
-trade simulation
-strategy validation
-performance evaluation
-
-Backtesting results help determine whether strategies are suitable for live trading.
-
-14. Graphical Trading Terminal
-
-The platform includes a graphical trading interface built with PySide6.
-
-Features include:
-
-multi-chart trading interface
-real-time candlestick charts
-orderbook heatmap
-strategy debugging panel
-system console
-trade log
-equity curve visualization
-auto-trading control
-
-The GUI receives events from backend services and updates charts and panels in real time.
-
-15. Project Structure
-
-The project is organized into backend and frontend components.
-
-Main directories:
-
-sopotek_trading
-
-backend
-analytics
-broker
-core
-execution
-risk
-strategy
-websocket
-kafka
-
-frontend
-ui
-charts
-
-data
-historical_data
-backtests
-
-models
-
-16. Technology Stack
-
-Programming Language: Python
-
-User Interface: PySide6
-
-Data Streaming: Apache Kafka
-
-Async Execution: AsyncIO
-
-Exchange APIs: CCXT
-
-Charting: PyQtGraph
-
-Machine Learning: TensorFlow / Scikit-Learn
-
-17. Future Development
-
-Planned improvements include:
-
-distributed backtesting clusters
-reinforcement learning trading strategies
-automatic strategy discovery
-cloud deployment infrastructure
-high-frequency trading support
-multi-asset portfolio optimization
-
-18. Vision
-
-The long-term vision of Sopotek Trading AI is to develop a fully autonomous trading platform capable of managing diversified portfolios using advanced quantitative models and machine learning systems.
-
-The platform aims to evolve into a self-learning system where strategies continuously adapt to market conditions.
-
-If you want, I can also help you create the next two professional documents that make trading platforms look very serious:
-
-1️⃣ SYSTEM_ARCHITECTURE_DIAGRAM (visual architecture)
-2️⃣ KAFKA TOPIC DESIGN (how your Kafka streams are structured)
-
-These two will make Sopotek Trading AI look like a hedge-fund grade system. 🚀
-
-1 and 2
-
-Great choice, Noel. These two documents will make Sopotek Trading AI look like a professional quantitative trading platform. Below are both documents written in clean copyable text.
-
-SYSTEM ARCHITECTURE DIAGRAM
-
-Sopotek Trading AI
-
-System architecture describes how the components of the trading platform interact to process market data, generate signals, execute trades, and manage risk.
-
-The system follows an event-driven architecture powered by Kafka.
-
-HIGH LEVEL SYSTEM FLOW
-
-Market Data Providers
-(Binance, OANDA, CCXT Exchanges)
-
-↓
-
-Market Data Engine
-(WebSocket + REST Collectors)
-
-↓
-
-Kafka Event Bus
-
-↓
-
-Feature Engine
-(Technical Indicators)
-
-↓
-
-Strategy Engine
-(Trend, Mean Reversion, Breakout, ML)
-
-↓
-
-Strategy Orchestrator
-(Strategy weighting and signal selection)
-
-↓
-
-Institutional Risk Engine
-(Position sizing and exposure limits)
-
-↓
-
+     ↓
+Event Bus
+     ↓
+Strategy
+     ↓
+Risk Engine
+     ↓
 Execution Engine
-(Order routing and broker communication)
-
-↓
-
-Portfolio Manager
-(Position tracking and equity updates)
-
-↓
-
-Analytics + Performance Engine
-
-↓
-
-Trading Terminal (GUI)
-
-DETAILED COMPONENT INTERACTION
-
-Market Data Engine
-
-Responsible for collecting and normalizing market data.
-
-Tasks:
-
-subscribe to exchange WebSocket streams
-
-aggregate candles
-
-process tickers
-
-process orderbook updates
-
-Output:
-Market events published to Kafka.
-
-Kafka Event Bus
-
-Kafka serves as the messaging backbone connecting all system components.
-
-Benefits:
-
-asynchronous communication
-
-high throughput
-
-system scalability
-
-decoupled architecture
-
-event replay capability
-
-All services publish and consume events from Kafka topics.
-
-Feature Engine
-
-Transforms raw market data into features used by strategies.
-
-Indicators include:
-
-EMA
-RSI
-ATR
-Bollinger Bands
-Volatility indicators
-
-The feature engine prevents repeated computation across strategies.
-
-Strategy Engine
-
-Multiple strategies analyze market features simultaneously.
-
-Supported strategies:
-
-Trend Strategy
-Mean Reversion Strategy
-Breakout Strategy
-Machine Learning Strategy
-
-Each strategy produces a signal with metadata:
-
-symbol
-signal type
-entry price
-stop loss
-confidence
-volatility
-
-Strategy Orchestrator
-
-Coordinates multiple strategies.
-
-Responsibilities:
-
-resolve signal conflicts
-
-select highest-confidence signals
-
-allocate capital across strategies
-
-manage strategy weights
-
-Example allocation:
-
-Trend Strategy 50%
-Mean Reversion Strategy 20%
-Breakout Strategy 20%
-ML Strategy 10%
-
-Institutional Risk Engine
-
-Ensures all trades comply with risk constraints.
-
-Controls include:
-
-maximum risk per trade
-maximum portfolio exposure
-maximum position size
-maximum daily drawdown
-gross exposure limits
-
-Advanced models:
-
-Kelly sizing
-Value at Risk
-Monte Carlo risk simulation
-
-Execution Engine
-
-Handles order placement and broker communication.
-
-Responsibilities:
-
-send market orders
-send limit orders
-manage retries
-handle slippage
-track order status
-
-Supported exchanges via CCXT.
-
+     ↓
 Portfolio Manager
 
-Tracks account state.
+This design enables scalable, asynchronous trading.
 
-Maintains:
+Testing
 
-open positions
-equity
-profit and loss
-exposure metrics
-strategy performance
+Run all tests using:
 
-Analytics Engine
+pytest tests/
+Supported Markets
+Market	Broker
+Crypto	CCXT
+Forex	OANDA
+Stocks	Alpaca
+Technology Stack
 
-Computes trading statistics.
+Python
 
-Metrics:
+Core Libraries
 
-win rate
-profit factor
-max drawdown
-Sharpe ratio
-strategy performance
+numpy
 
-Reports can be exported as:
+pandas
 
-PDF
-Excel
+scikit-learn
 
-Trading Terminal (GUI)
+xgboost
 
-The GUI provides real-time monitoring and control.
+Trading APIs
 
-Features:
+ccxt
 
-multi-chart interface
-strategy debugging panel
-trade log
-orderbook heatmap
-equity curve
-auto-trading controls
+oandapyV20
 
-Built with PySide6 and PyQtGraph.
+Async Networking
 
-SYSTEM DESIGN PRINCIPLES
+aiohttp
 
-The architecture follows these principles:
+websockets
 
-Event-driven processing
-Loose coupling between services
-Horizontal scalability
-Fault tolerance
-Modular system design
+GUI
 
-KAFKA TOPIC DESIGN
+PySide6
 
-Sopotek Trading AI
+PyQtGraph
 
-Kafka is used to connect system modules through event streams.
+Database
 
-Each component publishes or consumes specific topics.
+SQLAlchemy
 
-MARKET DATA TOPICS
+Roadmap
 
-market.candles
+Future improvements include:
 
-Description
-Real-time candlestick data from exchanges.
+distributed strategy execution
 
-Example message:
+GPU machine learning inference
 
-symbol: BTC/USDT
-timeframe: 1m
-open: 65000
-high: 65120
-low: 64880
-close: 65090
-volume: 45.2
+high frequency trading support
 
-Consumers:
+portfolio optimization
 
-Feature Engine
-Strategy Engine
-Backtesting Engine
+reinforcement learning strategies
 
-market.tickers
+License
 
-Description
-Real-time bid/ask updates.
+MIT License
 
-Example:
+Author
 
-symbol: BTC/USDT
-bid: 65080
-ask: 65085
+Sopotek Technologies
 
-Consumers:
 
-Trading Terminal
-Strategy Engine
 
-market.orderbook
 
-Description
-Level 2 orderbook data.
+Python 3.11
+MIT License
+Build Passing
 
-Example:
-
-symbol: BTC/USDT
-bids: [price, volume]
-asks: [price, volume]
-
-Consumers:
-
-Execution Engine
-Market Microstructure models
-
-FEATURE TOPICS
-
-features.indicators
-
-Description
-Computed indicators from Feature Engine.
-
-Example:
-
-symbol: BTC/USDT
-ema50: 64800
-ema200: 64000
-rsi: 62
-atr: 120
-
-Consumers:
-
-Strategy Engine
-
-STRATEGY TOPICS
-
-strategy.signals
-
-Description
-Trading signals generated by strategies.
-
-Example:
-
-symbol: BTC/USDT
-signal: BUY
-entry_price: 65090
-stop_price: 64850
-confidence: 0.74
-
-Consumers:
-
-Strategy Orchestrator
-
-strategy.debug
-
-Description
-Debug information for strategy diagnostics.
-
-Example:
-
-symbol: BTC/USDT
-rsi: 62
-ema_fast: 64800
-ema_slow: 64000
-reason: trend breakout
-
-Consumers:
-
-Trading Terminal
-
-RISK MANAGEMENT TOPICS
-
-risk.validation
-
-Description
-Signals approved or rejected by the risk engine.
-
-Example:
-
-symbol: BTC/USDT
-status: approved
-size: 0.015 BTC
-
-Consumers:
-
-Execution Engine
-
-EXECUTION TOPICS
-
-orders.execution
-
-Description
-Orders sent to exchange.
-
-Example:
-
-symbol: BTC/USDT
-side: BUY
-size: 0.015
-price: 65090
-
-Consumers:
-
-Execution Engine
-
-orders.status
-
-Description
-Order execution results.
-
-Example:
-
-order_id: 12345
-status: filled
-price: 65095
-size: 0.015
-
-Consumers:
-
-Portfolio Manager
-Trading Terminal
-
-PORTFOLIO TOPICS
-
-portfolio.updates
-
-Description
-Portfolio changes after trades.
-
-Example:
-
-symbol: BTC/USDT
-position: long
-size: 0.015
-entry_price: 65095
-
-Consumers:
-
-Analytics Engine
-Trading Terminal
-
-SYSTEM STATUS TOPICS
-
-training.status
-
-Description
-ML model training updates.
-
-Example:
-
-symbol: BTC/USDT
-status: training
-
-Consumers:
-
-Trading Terminal
-
-BENEFITS OF THIS DESIGN
-
-Using Kafka allows:
-
-horizontal scaling of strategy services
-real-time event streaming
-replayable market data
-distributed computation
-fault isolation between services
