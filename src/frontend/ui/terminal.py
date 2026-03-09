@@ -20,9 +20,8 @@ from backtesting.report_generator import ReportGenerator
 from frontend.console.system_console import SystemConsole
 from frontend.ui.chart.chart_widget import ChartWidget
 
-def global_exception_hook(exctype, value, tb):
-    print("🔥 UNCAUGHT EXCEPTION:")
-    traceback.print_exception(exctype, value, tb)
+def global_exception_hook(exctype, value, tb):    # Suppress noisy shutdown interrupts (e.g., Ctrl+C/app exit).`n    if exctype in (KeyboardInterrupt, SystemExit):`n        return`n`n    print("UNCAUGHT EXCEPTION:")`n
+   traceback.print_exception(exctype, value, tb)
 
 def candles_to_df(df):
     raise NotImplementedError
@@ -33,6 +32,7 @@ def candles_to_df(df):
 class Terminal(QMainWindow):
     logout_requested = Signal()
     ai_signal = Signal(dict)
+    autotrade_toggle = Signal(bool)
     def __init__(self, controller):
 
         super().__init__(controller)
@@ -59,8 +59,8 @@ class Terminal(QMainWindow):
         else:
             self.symbol = "BTC/USDT"
 
-        self.MAX_LOG_ROWS = 500
-        self.current_timeframe = "1m"
+        self.MAX_LOG_ROWS = getattr(controller,"symbols" )
+        self.current_timeframe = getattr(controller,"time_frame")
         self.autotrading_enabled = False
 
         self.training_status = {}
@@ -104,6 +104,7 @@ class Terminal(QMainWindow):
         self.chart_tabs.tabCloseRequested.connect(
             lambda i: self.chart_tabs.removeTab(i)
         )
+        self.chart_tabs.currentChanged.connect(self._on_chart_tab_changed)
 
         self.setCentralWidget(self.chart_tabs)
 
@@ -341,15 +342,23 @@ class Terminal(QMainWindow):
 
      if self.autotrading_enabled:
 
+        if not self.controller.trading_system:
+            self.logger.error("Trading system is not initialized yet")
+            QMessageBox.warning(self, "Trading Not Ready", "Connect broker first before starting auto trading.")
+            self.autotrading_enabled = False
+            self.auto_button.setText("AITrading OFF")
+            self.auto_button.setStyleSheet("")
+            self.autotrade_toggle.emit(False)
+            return
+
         self.auto_button.setText("AITrading ON")
         self.auto_button.setStyleSheet(
             "background-color: green; color: white;"
         )
 
         loop = asyncio.get_event_loop()
-
-        if self.controller.trading_system:
-            loop.create_task(self.controller.trading_system.start())
+        loop.create_task(self.controller.trading_system.start())
+        self.autotrade_toggle.emit(True)
 
      else:
 
@@ -359,7 +368,7 @@ class Terminal(QMainWindow):
         if self.controller.trading_system:
             asyncio.create_task(self.controller.trading_system.stop())
 
-        self.autotrade_toggle.emit(self.autotrading_enabled)
+        self.autotrade_toggle.emit(False)
 
     # ==========================================================
     # CHARTS
@@ -368,18 +377,41 @@ class Terminal(QMainWindow):
     def _create_chart_tab(self, symbol, timeframe):
         chart = ChartWidget(symbol, timeframe, self.controller)
 
-        # Add symbol to market watch table
-
         row = self.symbols_table.rowCount()
         self.symbols_table.insertRow(row)
 
         self.symbols_table.setItem(row, 0, QTableWidgetItem(symbol))
         self.symbols_table.setItem(row, 1, QTableWidgetItem("-"))
         self.symbols_table.setItem(row, 2, QTableWidgetItem("-"))
-        self.symbols_table.setItem(row, 3, QTableWidgetItem("⏳ Training..."))
+        self.symbols_table.setItem(row, 3, QTableWidgetItem("? Training..."))
         self.chart_tabs.addTab(chart, f"{symbol} ({timeframe})")
-
         chart.link_all_charts(self.chart_tabs.count())
+
+        # Fetch candles immediately for newly added chart.
+        if hasattr(self.controller, "request_candle_data"):
+            asyncio.get_event_loop().create_task(
+                self.controller.request_candle_data(symbol=symbol, timeframe=timeframe, limit=300)
+            )
+
+    def _on_chart_tab_changed(self, index):
+        chart = self.chart_tabs.widget(index)
+        if not isinstance(chart, ChartWidget):
+            return
+
+        self.current_timeframe = chart.timeframe
+
+        if hasattr(self.controller, "request_candle_data"):
+            asyncio.get_event_loop().create_task(
+                self.controller.request_candle_data(
+                    symbol=chart.symbol,
+                    timeframe=chart.timeframe,
+                    limit=300,
+                )
+            )
+
+        asyncio.get_event_loop().create_task(
+            self._reload_chart_data(chart.symbol, chart.timeframe)
+        )
 
     def _add_new_chart(self):
         symbol, ok = QInputDialog.getText(
@@ -387,7 +419,7 @@ class Terminal(QMainWindow):
         )
         self.training_status[symbol] = "TRAINING"
         if ok and symbol:
-            self._create_chart_tab(symbol.upper(), "1h")
+            self._create_chart_tab(symbol.upper(), self.current_timeframe)
 
     def _set_timeframe(self, tf="1h"):
 
@@ -399,16 +431,19 @@ class Terminal(QMainWindow):
         if not isinstance(chart, ChartWidget):
             return
 
-        # Update timeframe
         chart.timeframe = tf
 
-        # Update tab title
         self.chart_tabs.setTabText(
             index,
             f"{chart.symbol} ({tf})"
         )
 
-        # Request new historical data
+        # Request fresh candles for selected timeframe.
+        if hasattr(self.controller, "request_candle_data"):
+            asyncio.get_event_loop().create_task(
+                self.controller.request_candle_data(symbol=chart.symbol, timeframe=tf, limit=300)
+            )
+
         asyncio.get_event_loop().create_task(
             self._reload_chart_data(chart.symbol, tf)
         )
@@ -453,15 +488,30 @@ class Terminal(QMainWindow):
 
     def _update_ticker(self, symbol, bid, ask):
 
+        # Ensure symbol appears in the table even if symbols were not pre-populated.
+        target_row = None
+
         for row in range(self.symbols_table.rowCount()):
             item = self.symbols_table.item(row, 0)
 
             if item and item.text() == symbol:
-                self.symbols_table.setItem(row, 1, QTableWidgetItem(str(bid)))
-                self.symbols_table.setItem(row, 2, QTableWidgetItem(str(ask)))
+                target_row = row
                 break
 
-        mid = (bid + ask) / 2
+        if target_row is None:
+            target_row = self.symbols_table.rowCount()
+            self.symbols_table.insertRow(target_row)
+            self.symbols_table.setItem(target_row, 0, QTableWidgetItem(str(symbol)))
+            self.symbols_table.setItem(target_row, 3, QTableWidgetItem("Live"))
+
+        self.symbols_table.setItem(target_row, 1, QTableWidgetItem(str(bid)))
+        self.symbols_table.setItem(target_row, 2, QTableWidgetItem(str(ask)))
+
+        try:
+            mid = (float(bid) + float(ask)) / 2
+        except Exception:
+            mid = 0.0
+
         self.tick_prices.append(mid)
 
         if len(self.tick_prices) > 200:
@@ -653,6 +703,15 @@ class Terminal(QMainWindow):
     # ==========================================================
 
     def closeEvent(self, event):
+        # Stop periodic timers to prevent callbacks while widgets are tearing down.
+        try:
+            if hasattr(self, "refresh_timer") and self.refresh_timer is not None:
+                self.refresh_timer.stop()
+            if hasattr(self, "spinner_timer") and self.spinner_timer is not None:
+                self.spinner_timer.stop()
+        except Exception:
+            pass
+
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("windowState", self.saveState())
         super().closeEvent(event)
@@ -739,7 +798,6 @@ class Terminal(QMainWindow):
                 elif status == "error":
                     item = QTableWidgetItem("🔴 Error")
                     item.setForeground(QColor("red"))
-
                 else:
                     item = QTableWidgetItem(status)
 
@@ -750,46 +808,31 @@ class Terminal(QMainWindow):
 
      try:
 
-        symbols = self.controller.symbols
-
-        if not symbols:
+        # Lightweight spinner update: only touch existing rows that are in training state.
+        if not hasattr(self, "symbols_table") or self.symbols_table is None:
             return
 
         self._spinner_index += 1
+        icon = self._spinner_frames[self._spinner_index % len(self._spinner_frames)]
 
-        # Set number of rows
-        self.symbols_table.setRowCount(len(symbols))
+        rows = self.symbols_table.rowCount()
 
-        for row, symbol in enumerate(symbols):
-
-            # Column 0 → Symbol name
-            symbol_item = self.symbols_table.item(row, 0)
-
-            if not symbol_item:
-                symbol_item = QTableWidgetItem(symbol)
-                self.symbols_table.setItem(row, 0, symbol_item)
-
-            # Column 3 → Status column
+        for row in range(rows):
             status_item = self.symbols_table.item(row, 3)
 
             if not status_item:
-                status_item = QTableWidgetItem("Idle")
-                self.symbols_table.setItem(row, 3, status_item)
+                continue
 
-            # Spinner animation for training symbols
-            if "Training" in status_item.text():
+            text = status_item.text() or ""
 
-                icon = self._spinner_frames[
-                    self._spinner_index % len(self._spinner_frames)
-                    ]
-
+            if "Training" in text or "?" in text or "?" in text:
                 status_item.setText(f"{icon} Training...")
                 status_item.setForeground(QColor("yellow"))
 
      except Exception as e:
 
-        self._spinner_index += 1
         self.logger.error(e)
+
     def _connect_signals(self):
 
         self.controller.candle_signal.connect(self._update_chart)
@@ -1097,6 +1140,35 @@ class Terminal(QMainWindow):
 
             self.logger.error(f"Timeframe reload failed: {e}")
 
+
+
+    def _format_balance_text(self, balance):
+        """Render balances like: XLM:100, USDT:100."""
+        if not isinstance(balance, dict) or not balance:
+            return "-"
+
+        # Common CCXT shape: {"free": {...}, "used": {...}, "total": {...}}
+        if isinstance(balance.get("total"), dict):
+            source = balance.get("total") or {}
+        elif isinstance(balance.get("free"), dict):
+            source = balance.get("free") or {}
+        else:
+            # Flat dict fallback; skip known non-asset keys
+            skip = {"free", "used", "total", "info", "raw", "equity", "cash", "currency"}
+            source = {k: v for k, v in balance.items() if k not in skip}
+
+        parts = []
+        for sym, val in source.items():
+            try:
+                num = float(val)
+            except Exception:
+                continue
+            if num == 0:
+                continue
+            parts.append(f"{sym}:{num:g}")
+
+        return ", ".join(parts) if parts else "-"
+
     def _refresh_terminal(self):
 
         try:
@@ -1123,17 +1195,11 @@ class Terminal(QMainWindow):
                 f"Equity: {equity:.4f}"
             )
 
-            self.status_labels["Balance"].setText(
-                f"Balance: {balance}"
-            )
+            self.status_labels["Balance"].setText(f"Balance: {self._format_balance_text(balance)}")
 
-            self.status_labels["Free Margin"].setText(
-                f"Free Margin: {free}"
-            )
+            self.status_labels["Free Margin"].setText(f"Free Margin: {self._format_balance_text(free if isinstance(free, dict) else {'USDT': free})}")
 
-            self.status_labels["Used Margin"].setText(
-                f"Used Margin: {used}"
-            )
+            self.status_labels["Used Margin"].setText(f"Used Margin: {self._format_balance_text(used if isinstance(used, dict) else {'USDT': used})}")
 
             self.status_labels["Spread %"].setText(
                 f"Spread %: {spread:.4f}"
@@ -1373,3 +1439,229 @@ class Terminal(QMainWindow):
         data = np.array(risks).reshape(1, len(risks))
 
         self.risk_map.setImage(data)
+
+
+
+
+# ==========================================================
+# TERMINAL HOTFIX OVERRIDES
+# ==========================================================
+# These overrides stabilize runtime paths without requiring a full terminal rewrite.
+
+
+def candles_to_df(df):
+    """Normalize candles into a pandas DataFrame when possible."""
+    try:
+        import pandas as pd
+    except Exception:
+        pd = None
+
+    if df is None:
+        return pd.DataFrame() if pd else []
+
+    if pd is not None:
+        if isinstance(df, pd.DataFrame):
+            return df
+        try:
+            frame = pd.DataFrame(df)
+            if not frame.empty and frame.shape[1] >= 6:
+                frame = frame.iloc[:, :6]
+                frame.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+            return frame
+        except Exception:
+            return df
+
+    return df
+
+
+async def _hotfix_run_backtest_clicked(self):
+    try:
+        if not getattr(self.controller, "orchestrator", None):
+            raise RuntimeError("Please start trading first")
+
+        self.backtest_engine = BacktestEngine(
+            strategy=self.controller.orchestrator,
+            data=self.historical_data,
+            initial_capital=getattr(self.controller, "initial_capital", 10000),
+            slippage=getattr(self.controller, "slippage", 0.0),
+            commission=getattr(self.controller, "commission", 0.0),
+        )
+
+        start_btn = QPushButton("Start Backtest")
+        stop_btn = QPushButton("Stop Backtest")
+
+        start_btn.clicked.connect(self.start_backtest)
+        stop_btn.clicked.connect(self.stop_backtest)
+
+        layout = QVBoxLayout()
+        layout.addWidget(start_btn)
+        layout.addWidget(stop_btn)
+
+        backtest_widget = QWidget()
+        backtest_widget.setLayout(layout)
+
+        self.backtest_dock = QDockWidget("Backtest Results", self)
+        self.backtest_dock.setWidget(backtest_widget)
+
+        self.addDockWidget(Qt.RightDockWidgetArea, self.backtest_dock)
+
+    except Exception as e:
+        self.system_console.log(f"Backtest initialization error: {e}")
+
+
+def _hotfix_start_backtest(self):
+    try:
+        if not hasattr(self, "backtest_engine"):
+            self.system_console.log("Backtest engine not initialized.")
+            return
+
+        self.results = self.backtest_engine.run()
+        self.system_console.log("Backtest completed.", "INFO")
+
+    except Exception as e:
+        self.system_console.log(f"Backtest failed: {e}", "ERROR")
+
+
+def _hotfix_stop_backtest(self):
+    self.system_console.log("Backtest stop requested.", "INFO")
+
+
+def _hotfix_generate_report(self):
+    try:
+        perf = getattr(self.controller, "performance_engine", None)
+        trades = getattr(perf, "trades", []) if perf else []
+        equity_history = getattr(perf, "equity_history", []) if perf else []
+
+        generator = ReportGenerator(trades=trades, equity_history=equity_history)
+        generator.export_pdf()
+        generator.export_excel()
+        self.system_console.log("Report generated", "INFO")
+    except Exception as e:
+        self.system_console.log(f"Report generation failed: {e}")
+
+
+async def _hotfix_reload_chart_data(self, symbol, timeframe):
+    try:
+        df = None
+
+        # Preferred cache shape: candle_buffers[symbol][timeframe]
+        buffers = getattr(self.controller, "candle_buffers", None)
+        if hasattr(buffers, "get"):
+            symbol_bucket = buffers.get(symbol)
+            if hasattr(symbol_bucket, "get"):
+                df = symbol_bucket.get(timeframe)
+
+        # Fallback to legacy candle_buffer store.
+        if df is None:
+            legacy = getattr(self.controller, "candle_buffer", None)
+            if hasattr(legacy, "get"):
+                symbol_bucket = legacy.get(symbol)
+                if hasattr(symbol_bucket, "get"):
+                    df = symbol_bucket.get(timeframe)
+                elif symbol_bucket is not None:
+                    df = symbol_bucket
+
+                if df is None:
+                    df = legacy.get(timeframe)
+
+        if df is None:
+            return
+
+        self._update_chart(symbol, df)
+
+    except Exception as e:
+        self.logger.error(f"Timeframe reload failed: {e}")
+
+
+def _hotfix_open_risk_settings(self):
+    dialog = QDialog(self)
+    dialog.setWindowTitle("Risk Settings")
+    dialog.resize(420, 300)
+
+    layout = QVBoxLayout(dialog)
+    form = QFormLayout()
+
+    risk_engine = getattr(self.controller, "risk_engine", None)
+    if risk_engine is None:
+        QMessageBox.warning(self, "Risk Engine Missing", "Trading/risk engine is not initialized yet.")
+        return
+
+    self._risk_max_portfolio = QDoubleSpinBox()
+    self._risk_max_portfolio.setRange(0, 1)
+    self._risk_max_portfolio.setSingleStep(0.01)
+    self._risk_max_portfolio.setValue(getattr(risk_engine, "max_portfolio_risk", 0.2))
+
+    self._risk_per_trade = QDoubleSpinBox()
+    self._risk_per_trade.setRange(0, 1)
+    self._risk_per_trade.setSingleStep(0.01)
+    self._risk_per_trade.setValue(getattr(risk_engine, "max_risk_per_trade", 0.02))
+
+    self._risk_position = QDoubleSpinBox()
+    self._risk_position.setRange(0, 1)
+    self._risk_position.setSingleStep(0.01)
+    self._risk_position.setValue(getattr(risk_engine, "max_position_size_pct", 0.05))
+
+    self._risk_gross = QDoubleSpinBox()
+    self._risk_gross.setRange(0, 5)
+    self._risk_gross.setSingleStep(0.1)
+    self._risk_gross.setValue(getattr(risk_engine, "max_gross_exposure_pct", 1.0))
+
+    form.addRow("Max Portfolio Risk:", self._risk_max_portfolio)
+    form.addRow("Max Risk Per Trade:", self._risk_per_trade)
+    form.addRow("Max Position Size:", self._risk_position)
+    form.addRow("Max Gross Exposure:", self._risk_gross)
+
+    layout.addLayout(form)
+
+    save_btn = QPushButton("Save")
+    save_btn.clicked.connect(self.save_settings)
+    layout.addWidget(save_btn)
+
+    self._risk_dialog = dialog
+    dialog.exec()
+
+
+def _hotfix_save_settings(self):
+    try:
+        risk_engine = getattr(self.controller, "risk_engine", None)
+        if risk_engine is None:
+            return
+
+        risk_engine.max_portfolio_risk = self._risk_max_portfolio.value()
+        risk_engine.max_risk_per_trade = self._risk_per_trade.value()
+        risk_engine.max_position_size_pct = self._risk_position.value()
+        risk_engine.max_gross_exposure_pct = self._risk_gross.value()
+
+        QMessageBox.information(self, "Risk Settings", "Risk settings updated successfully.")
+
+        if hasattr(self, "_risk_dialog") and self._risk_dialog:
+            self._risk_dialog.close()
+
+    except Exception as e:
+        self.logger.error(f"Risk settings error: {e}")
+
+
+# Bind overrides
+Terminal.run_backtest_clicked = _hotfix_run_backtest_clicked
+Terminal.start_backtest = _hotfix_start_backtest
+Terminal.stop_backtest = _hotfix_stop_backtest
+Terminal._generate_report = _hotfix_generate_report
+Terminal._reload_chart_data = _hotfix_reload_chart_data
+Terminal._open_risk_settings = _hotfix_open_risk_settings
+Terminal.save_settings = _hotfix_save_settings
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
