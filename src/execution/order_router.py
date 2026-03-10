@@ -11,6 +11,9 @@ class OrderRouter:
         amount = order["amount"]
 
         order_type = order.get("type", "market")
+        params = dict(order.get("params") or {})
+        stop_loss = order.get("stop_loss")
+        take_profit = order.get("take_profit")
 
         if order_type == "market":
 
@@ -18,7 +21,10 @@ class OrderRouter:
                 symbol=symbol,
                 side=side,
                 amount=amount,
-                type="market"
+                type="market",
+                params=params,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
             )
 
         else:
@@ -30,7 +36,10 @@ class OrderRouter:
                 side=side,
                 amount=amount,
                 price=price,
-                type="limit"
+                type="limit",
+                params=params,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
             )
 
         return execution

@@ -22,6 +22,7 @@ class BacktestEngine:
             getattr(strategy, "ema_fast", 0),
             getattr(strategy, "ema_slow", 0),
             getattr(strategy, "atr_period", 0),
+            getattr(strategy, "breakout_lookback", 0),
         ]
         periods = [int(p) for p in periods if isinstance(p, (int, float)) and p]
         return max(max(periods, default=1), 1)
@@ -57,7 +58,7 @@ class BacktestEngine:
                 return self.strategy.generate_signal(candles)
         return None
 
-    def run(self, data, symbol="BACKTEST", strategy_name=None):
+    def run(self, data, symbol="BACKTEST", strategy_name=None, stop_event=None):
         df = self._normalize_frame(data)
         self.results = []
         self.equity_curve = []
@@ -66,10 +67,17 @@ class BacktestEngine:
             return pd.DataFrame()
 
         warmup = self._min_history(strategy_name)
+        last_row = None
+        stopped_early = False
 
         for end_index in range(1, len(df) + 1):
+            if stop_event is not None and stop_event.is_set():
+                stopped_early = True
+                break
+
             window = df.iloc[:end_index]
             row = df.iloc[end_index - 1]
+            last_row = row
             signal = None
 
             if len(window) >= warmup:
@@ -84,9 +92,15 @@ class BacktestEngine:
                 self.simulator.current_equity(float(row["close"]))
             )
 
-        final_trade = self.simulator.close_open_position(df.iloc[-1], symbol=symbol, reason="end_of_test")
+        close_row = last_row if last_row is not None else df.iloc[-1]
+        close_reason = "stopped" if stopped_early else "end_of_test"
+        final_trade = self.simulator.close_open_position(close_row, symbol=symbol, reason=close_reason)
         if final_trade:
             self.results.append(final_trade)
-            self.equity_curve[-1] = self.simulator.current_equity(float(df.iloc[-1]["close"]))
+            final_close = float(close_row["close"])
+            if self.equity_curve:
+                self.equity_curve[-1] = self.simulator.current_equity(final_close)
+            else:
+                self.equity_curve.append(self.simulator.current_equity(final_close))
 
         return pd.DataFrame(self.results)

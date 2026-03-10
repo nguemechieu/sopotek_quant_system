@@ -8,6 +8,8 @@ class PerformanceEngine:
 
     def __init__(self):
         self.equity_curve = []
+        self.equity_history = self.equity_curve
+        self.trades = []
 
     # =====================================
     # UPDATE EQUITY
@@ -15,6 +17,11 @@ class PerformanceEngine:
 
     def update_equity(self, equity):
         self.equity_curve.append(equity)
+
+    def record_trade(self, trade):
+        if trade is None:
+            return
+        self.trades.append(dict(trade))
 
     # =====================================
     # REPORT

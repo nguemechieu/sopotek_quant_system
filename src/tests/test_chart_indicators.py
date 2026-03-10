@@ -56,3 +56,32 @@ def test_chart_widget_supports_fractal_and_zigzag_indicators():
     assert y_data is not None
     assert len(x_data) >= 3
     assert len(y_data) >= 3
+
+
+def test_chart_widget_accepts_utc_timestamp_series():
+    _app()
+    widget = ChartWidget("EUR/USD", "4h", DummyController())
+
+    df = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [
+                    "2026-03-10T00:00:00+00:00",
+                    "2026-03-10T04:00:00+00:00",
+                    "2026-03-10T08:00:00+00:00",
+                ],
+                utc=True,
+            ),
+            "open": [1.10, 1.11, 1.12],
+            "high": [1.12, 1.13, 1.14],
+            "low": [1.09, 1.10, 1.11],
+            "close": [1.11, 1.12, 1.13],
+            "volume": [1000, 1100, 900],
+        }
+    )
+
+    widget.update_candles(df)
+
+    assert widget._last_x is not None
+    assert len(widget._last_x) == 3
+    assert widget._last_x[1] > widget._last_x[0]

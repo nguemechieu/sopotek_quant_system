@@ -1,41 +1,53 @@
 import pyqtgraph as pg
-from PySide6.QtCore import QRectF
-from PySide6.QtGui import QBrush, QPen
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QPainter, QPen, QPicture
 
 
 class CandlestickItem(pg.GraphicsObject):
-    """Fast candlestick renderer for OHLC arrays.
+    """Fast candlestick renderer for OHLC rows: [x, open, close, low, high]."""
 
-    Expected rows: [x, open, close, low, high]
-    """
-
-    def __init__(self, body_width: float = 0.7, up_color: str = "#26a69a", down_color: str = "#ef5350"):
+    def __init__(self, data=None, body_width=0.7, up_color="#26a69a", down_color="#ef5350"):
         super().__init__()
-        self.body_width = float(body_width)
-        self.up_color = up_color
-        self.down_color = down_color
-        self.picture = pg.QtGui.QPicture()
-        self._bounding_rect = QRectF(0, 0, 1, 1)
-
-    def set_colors(self, up_color: str, down_color: str):
-        self.up_color = up_color
-        self.down_color = down_color
-
-    def set_body_width(self, body_width: float):
+        self.data = data or []
         self.body_width = max(1e-9, float(body_width))
+        self.up_color = up_color
+        self.down_color = down_color
+        self.picture = QPicture()
+        self._bounding_rect = QRectF(0, 0, 1, 1)
+        self.generatePicture(self.data)
+
+    def set_colors(self, up_color, down_color):
+        self.up_color = up_color
+        self.down_color = down_color
+        self.generatePicture(self.data)
+        self.update()
+
+    def set_body_width(self, body_width):
+        self.body_width = max(1e-9, float(body_width))
+        self.generatePicture(self.data)
+        self.update()
+
+    def set_data(self, data):
+        self.setData(data)
 
     def setData(self, data):
-        self.generatePicture(data)
+        self.data = data if data is not None else []
+        self.generatePicture(self.data)
         self.update()
 
     def generatePicture(self, data):
-        self.picture = pg.QtGui.QPicture()
-        painter = pg.QtGui.QPainter(self.picture)
+        self.picture = QPicture()
+        painter = QPainter(self.picture)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         up_pen = QPen(pg.mkColor(self.up_color))
-        up_brush = QBrush(pg.mkColor(self.up_color))
         down_pen = QPen(pg.mkColor(self.down_color))
         down_brush = QBrush(pg.mkColor(self.down_color))
+        transparent_brush = QBrush(Qt.BrushStyle.NoBrush)
+
+        for pen in (up_pen, down_pen):
+            pen.setWidthF(1.0)
+            pen.setCosmetic(True)
 
         min_x = float("inf")
         max_x = float("-inf")
@@ -46,21 +58,29 @@ class CandlestickItem(pg.GraphicsObject):
         for row in rows:
             if len(row) < 5:
                 continue
+
             t, open_, close, low, high = map(float, row[:5])
+            rising = close >= open_
 
-            is_up = close >= open_
-            painter.setPen(up_pen if is_up else down_pen)
-            painter.setBrush(up_brush if is_up else down_brush)
+            body_top = max(open_, close)
+            body_bottom = min(open_, close)
+            half_width = self.body_width / 2.0
+            body = QRectF(t - half_width, body_bottom, self.body_width, body_top - body_bottom)
 
-            painter.drawLine(pg.QtCore.QPointF(t, low), pg.QtCore.QPointF(t, high))
+            painter.setPen(up_pen if rising else down_pen)
+            painter.setBrush(transparent_brush if rising else down_brush)
 
-            top = min(open_, close)
-            height = abs(close - open_)
-            if height < 1e-9:
-                height = 1e-9
+            # Draw split wick segments so the body stays visually crisp like MT4/MT5.
+            painter.drawLine(QPointF(t, low), QPointF(t, body_bottom))
+            painter.drawLine(QPointF(t, body_top), QPointF(t, high))
 
-            rect = QRectF(t - self.body_width / 2.0, top, self.body_width, height)
-            painter.drawRect(rect)
+            if body.height() < 1e-9:
+                painter.drawLine(
+                    QPointF(t - half_width, close),
+                    QPointF(t + half_width, close),
+                )
+            else:
+                painter.drawRect(body)
 
             min_x = min(min_x, t - self.body_width)
             max_x = max(max_x, t + self.body_width)

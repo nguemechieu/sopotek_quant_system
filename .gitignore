@@ -6,3 +6,7 @@ __pycache__/
 .mypy_cache/
 
 src/logs/*.log
+data/
+src/Sopotek_Screenshot_*.png
+src/reports/*.csv
+src/reports/*.pdf

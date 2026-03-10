@@ -32,6 +32,7 @@ class FakeResponse:
 class FakeOandaSession:
     def __init__(self):
         self.closed = False
+        self.last_order_payload = None
 
     def request(self, method, url, headers=None, params=None, json=None):
         if url.endswith("/pricing"):
@@ -62,6 +63,7 @@ class FakeOandaSession:
         if url.endswith("/orders") and method == "GET":
             return FakeResponse({"orders": [{"id": "1", "instrument": "EUR_USD", "state": "PENDING"}]})
         if url.endswith("/orders") and method == "POST":
+            self.last_order_payload = json
             return FakeResponse({"orderCreateTransaction": {"id": "2"}})
         if url.endswith("/openPositions"):
             return FakeResponse(
@@ -340,6 +342,115 @@ def test_base_broker_close_all_positions_uses_opposite_side():
         assert broker.orders_sent[0]["symbol"] == "BTC/USDT"
         assert broker.orders_sent[0]["side"] == "sell"
         assert broker.orders_sent[0]["amount"] == 2.0
+
+    asyncio.run(scenario())
+
+
+def test_oanda_broker_formats_order_payload(monkeypatch):
+    import broker.oanda_broker as oanda_module
+
+    monkeypatch.setattr(oanda_module.aiohttp, "ClientSession", FakeOandaSession)
+
+    async def scenario():
+        broker = OandaBroker(SimpleNamespace(api_key="token", account_id="acct-1", mode="practice"))
+        await broker.create_order("EUR/USD", "buy", 1, type="market")
+        payload = broker.session.last_order_payload["order"]
+        assert payload["instrument"] == "EUR_USD"
+        assert payload["type"] == "MARKET"
+        assert payload["timeInForce"] == "FOK"
+        assert payload["units"] == "1"
+
+        await broker.create_order("EUR/USD", "sell", 2, type="limit", price=1.23456)
+        payload = broker.session.last_order_payload["order"]
+        assert payload["type"] == "LIMIT"
+        assert payload["timeInForce"] == "GTC"
+        assert payload["units"] == "-2"
+        assert payload["price"] == "1.23456"
+
+        await broker.create_order(
+            "EUR/USD",
+            "buy",
+            1,
+            type="market",
+            stop_loss=1.21001,
+            take_profit=1.26001,
+        )
+        payload = broker.session.last_order_payload["order"]
+        assert payload["stopLossOnFill"]["price"] == "1.21001"
+        assert payload["takeProfitOnFill"]["price"] == "1.26001"
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_oanda_broker_cancels_orders(monkeypatch):
+    import broker.oanda_broker as oanda_module
+
+    monkeypatch.setattr(oanda_module.aiohttp, "ClientSession", FakeOandaSession)
+
+    async def scenario():
+        broker = OandaBroker(SimpleNamespace(api_key="token", account_id="acct-1", mode="practice"))
+        canceled = await broker.cancel_order("1", symbol="EUR/USD")
+        assert canceled["id"] == "1"
+        assert canceled["status"] == "canceled"
+        assert canceled["symbol"] == "EUR_USD"
+
+        all_canceled = await broker.cancel_all_orders(symbol="EUR/USD")
+        assert len(all_canceled) == 1
+        assert all_canceled[0]["status"] == "canceled"
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_oanda_broker_paginates_ohlcv_history(monkeypatch):
+    import broker.oanda_broker as oanda_module
+
+    class PagingOandaSession:
+        def __init__(self):
+            self.closed = False
+            self.calls = []
+
+        def request(self, method, url, headers=None, params=None, json=None):
+            if "/candles" in url:
+                params = params or {}
+                self.calls.append(dict(params))
+                cursor = params.get("to")
+                if not cursor:
+                    candles = [
+                        {"complete": True, "time": "2026-01-03T00:00:00Z", "mid": {"o": "1.3", "h": "1.4", "l": "1.2", "c": "1.35"}, "volume": 13},
+                        {"complete": True, "time": "2026-01-04T00:00:00Z", "mid": {"o": "1.35", "h": "1.5", "l": "1.3", "c": "1.45"}, "volume": 14},
+                    ]
+                else:
+                    candles = [
+                        {"complete": True, "time": "2026-01-01T00:00:00Z", "mid": {"o": "1.0", "h": "1.2", "l": "0.9", "c": "1.1"}, "volume": 10},
+                        {"complete": True, "time": "2026-01-02T00:00:00Z", "mid": {"o": "1.1", "h": "1.3", "l": "1.0", "c": "1.2"}, "volume": 11},
+                        {"complete": True, "time": "2026-01-03T00:00:00Z", "mid": {"o": "1.3", "h": "1.4", "l": "1.2", "c": "1.35"}, "volume": 13},
+                    ]
+                return FakeResponse({"candles": candles})
+            raise AssertionError(f"Unhandled Oanda URL: {method} {url}")
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(oanda_module.aiohttp, "ClientSession", PagingOandaSession)
+
+    async def scenario():
+        broker = OandaBroker(SimpleNamespace(api_key="token", account_id="acct-1", mode="practice"))
+        broker.MAX_OHLCV_COUNT = 2
+
+        candles = await broker.fetch_ohlcv("EUR/USD", timeframe="1h", limit=4)
+
+        assert len(candles) == 4
+        assert [row[0] for row in candles] == [
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "2026-01-03T00:00:00Z",
+            "2026-01-04T00:00:00Z",
+        ]
+        assert len(broker.session.calls) == 2
+        assert broker.session.calls[1]["to"] == "2026-01-03T00:00:00Z"
+        await broker.close()
 
     asyncio.run(scenario())
 

@@ -59,6 +59,8 @@ class BaseBroker(ABC):
         type="market",
         price=None,
         params=None,
+        stop_loss=None,
+        take_profit=None,
     ):
         pass
 

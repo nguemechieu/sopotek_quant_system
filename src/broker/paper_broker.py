@@ -431,7 +431,9 @@ class PaperBroker(BaseBroker, ABC):
             "type": type,
             "price": price,
             "amount": amount,
-            "status": "filled"
+            "status": "filled",
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
         }
 
         self.orders[order_id] = order

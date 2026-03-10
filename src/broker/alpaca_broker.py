@@ -156,7 +156,7 @@ class AlpacaBroker(BaseBroker):
     # ORDERS
     # =================================
 
-    async def create_order(self, symbol, side, amount, type="market", price=None, params=None):
+    async def create_order(self, symbol, side, amount, type="market", price=None, params=None, stop_loss=None, take_profit=None):
         await self._ensure_connected()
 
         params = dict(params or {})
@@ -171,6 +171,12 @@ class AlpacaBroker(BaseBroker):
         }
         if price is not None and type != "market":
             order_kwargs["limit_price"] = price
+        if stop_loss is not None or take_profit is not None:
+            order_kwargs["order_class"] = params.pop("order_class", "bracket")
+            if take_profit is not None:
+                order_kwargs["take_profit"] = {"limit_price": float(take_profit)}
+            if stop_loss is not None:
+                order_kwargs["stop_loss"] = {"stop_price": float(stop_loss)}
         order_kwargs.update(params)
 
         order = self.api.submit_order(**order_kwargs)

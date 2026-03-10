@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from datetime import datetime, timezone
+
+from sqlalchemy import BigInteger, Column, DateTime, Float, Integer, String, and_, or_, select
 
 from storage.database import Base, SessionLocal
 
@@ -7,40 +9,163 @@ class Candle(Base):
     __tablename__ = "candles"
 
     id = Column(Integer, primary_key=True)
-
-    symbol = Column(String)
-
+    exchange = Column(String, index=True)
+    symbol = Column(String, index=True, nullable=False)
+    timeframe = Column(String, index=True)
     open = Column(Float)
     high = Column(Float)
     low = Column(Float)
     close = Column(Float)
-
     volume = Column(Float)
-
-    timestamp = Column(DateTime)
+    timestamp = Column(DateTime, index=True)
+    timestamp_ms = Column(BigInteger, index=True)
 
 
 class MarketDataRepository:
+    def _normalize_timestamp(self, value):
+        if value is None:
+            return None, None
 
-    def __init__(self):
-        self.session = SessionLocal()
+        if isinstance(value, datetime):
+            timestamp = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return timestamp.replace(tzinfo=None), int(timestamp.timestamp() * 1000)
 
-    # ===================================
-    # SAVE CANDLE
-    # ===================================
+        try:
+            numeric = float(value)
+            if abs(numeric) > 1e11:
+                ms_value = int(numeric)
+                return datetime.fromtimestamp(ms_value / 1000.0, tz=timezone.utc).replace(tzinfo=None), ms_value
+            seconds_value = float(numeric)
+            return datetime.fromtimestamp(seconds_value, tz=timezone.utc).replace(tzinfo=None), int(seconds_value * 1000)
+        except Exception:
+            pass
 
-    def save_candle(self, candle):
-        c = Candle(**candle)
+        text_value = str(value).strip()
+        if not text_value:
+            return None, None
 
-        self.session.add(c)
+        if text_value.endswith("Z"):
+            text_value = text_value[:-1] + "+00:00"
 
-        self.session.commit()
+        try:
+            timestamp = datetime.fromisoformat(text_value)
+        except ValueError:
+            return None, None
 
-    # ===================================
-    # GET CANDLES
-    # ===================================
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
 
-    def get_candles(self, symbol):
-        return self.session.query(Candle).filter(
-            Candle.symbol == symbol
-        ).all()
+        return timestamp.replace(tzinfo=None), int(timestamp.timestamp() * 1000)
+
+    def _normalize_candle(self, symbol, timeframe, candle, exchange=None):
+        if isinstance(candle, dict):
+            timestamp_value = candle.get("timestamp")
+            open_value = candle.get("open")
+            high_value = candle.get("high")
+            low_value = candle.get("low")
+            close_value = candle.get("close")
+            volume_value = candle.get("volume", 0.0)
+        elif isinstance(candle, (list, tuple)) and len(candle) >= 6:
+            timestamp_value, open_value, high_value, low_value, close_value, volume_value = candle[:6]
+        else:
+            return None
+
+        normalized_ts, timestamp_ms = self._normalize_timestamp(timestamp_value)
+        if normalized_ts is None or timestamp_ms is None:
+            return None
+
+        try:
+            return {
+                "exchange": str(exchange or "").lower() or None,
+                "symbol": str(symbol),
+                "timeframe": str(timeframe or "1h"),
+                "open": float(open_value),
+                "high": float(high_value),
+                "low": float(low_value),
+                "close": float(close_value),
+                "volume": float(volume_value or 0.0),
+                "timestamp": normalized_ts,
+                "timestamp_ms": int(timestamp_ms),
+            }
+        except Exception:
+            return None
+
+    def save_candles(self, symbol, timeframe, candles, exchange=None):
+        normalized_rows = []
+        seen = set()
+
+        for candle in candles or []:
+            normalized = self._normalize_candle(symbol=symbol, timeframe=timeframe, candle=candle, exchange=exchange)
+            if normalized is None:
+                continue
+
+            dedupe_key = (
+                normalized["exchange"],
+                normalized["symbol"],
+                normalized["timeframe"],
+                normalized["timestamp_ms"],
+            )
+            if dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            normalized_rows.append(normalized)
+
+        if not normalized_rows:
+            return 0
+
+        exchange_value = normalized_rows[0]["exchange"]
+        timestamp_values = [row["timestamp_ms"] for row in normalized_rows]
+
+        with SessionLocal() as session:
+            stmt = select(Candle.timestamp_ms).where(
+                Candle.symbol == str(symbol),
+                Candle.timeframe == str(timeframe or "1h"),
+                Candle.timestamp_ms.in_(timestamp_values),
+            )
+            if exchange_value:
+                stmt = stmt.where(or_(Candle.exchange == exchange_value, Candle.exchange.is_(None)))
+
+            existing = set(session.execute(stmt).scalars().all())
+            pending = [
+                Candle(**row)
+                for row in normalized_rows
+                if row["timestamp_ms"] not in existing
+            ]
+
+            if not pending:
+                return 0
+
+            session.add_all(pending)
+            session.commit()
+            return len(pending)
+
+    def get_candles(self, symbol, timeframe="1h", limit=300, exchange=None):
+        with SessionLocal() as session:
+            stmt = select(Candle).where(Candle.symbol == str(symbol))
+
+            timeframe_value = str(timeframe or "1h")
+            stmt = stmt.where(or_(Candle.timeframe == timeframe_value, Candle.timeframe.is_(None)))
+
+            if exchange:
+                exchange_value = str(exchange).lower()
+                stmt = stmt.where(or_(Candle.exchange == exchange_value, Candle.exchange.is_(None)))
+
+            stmt = stmt.order_by(Candle.timestamp_ms.desc()).limit(int(limit))
+            rows = list(session.execute(stmt).scalars().all())
+            rows.reverse()
+
+            return [
+                [
+                    row.timestamp.isoformat() if row.timestamp else row.timestamp_ms,
+                    row.open,
+                    row.high,
+                    row.low,
+                    row.close,
+                    row.volume,
+                ]
+                for row in rows
+            ]
+

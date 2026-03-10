@@ -9,18 +9,50 @@ from ta.volatility import AverageTrueRange
 
 
 class Strategy:
+    PRESET_ALIASES = {
+        "DEFAULT": "Trend Following",
+        "EMA_RSI": "Trend Following",
+        "TREND": "Trend Following",
+        "TREND FOLLOWING": "Trend Following",
+        "MEAN REVERSION": "Mean Reversion",
+        "MEAN_REVERSION": "Mean Reversion",
+        "BREAKOUT": "Breakout",
+        "AI": "AI Hybrid",
+        "AI HYBRID": "AI Hybrid",
+        "LSTM": "AI Hybrid",
+    }
 
-    def __init__(self, model=None):
+    def __init__(self, model=None, strategy_name="Trend Following"):
 
         self.model = model
+        self.strategy_name = self.normalize_strategy_name(strategy_name)
 
         # Strategy parameters
         self.rsi_period = 14
         self.ema_fast = 20
         self.ema_slow = 50
         self.atr_period = 14
+        self.oversold_threshold = 35
+        self.overbought_threshold = 65
+        self.breakout_lookback = 20
+        self.signal_amount = 1.0
 
         self.min_confidence = 0.55
+
+    @classmethod
+    def normalize_strategy_name(cls, strategy_name):
+        label = str(strategy_name or "Trend Following").strip()
+        if not label:
+            return "Trend Following"
+        return cls.PRESET_ALIASES.get(label.upper(), label)
+
+    def set_strategy_name(self, strategy_name):
+        self.strategy_name = self.normalize_strategy_name(strategy_name)
+
+    def apply_parameters(self, **params):
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     # ==========================================================
     # FEATURE ENGINEERING
@@ -72,6 +104,16 @@ class Strategy:
             self.atr_period
         ).average_true_range()
 
+        bb_period = max(self.ema_fast, 2)
+        rolling_mean = df["close"].rolling(window=bb_period, min_periods=1).mean()
+        rolling_std = df["close"].rolling(window=bb_period, min_periods=1).std().fillna(0.0)
+        df["upper_band"] = rolling_mean + (2.0 * rolling_std)
+        df["lower_band"] = rolling_mean - (2.0 * rolling_std)
+
+        breakout_period = max(int(self.breakout_lookback), 2)
+        df["breakout_high"] = df["high"].rolling(window=breakout_period, min_periods=1).max().shift(1)
+        df["breakout_low"] = df["low"].rolling(window=breakout_period, min_periods=1).min().shift(1)
+
         df.dropna(inplace=True)
 
         return df
@@ -80,7 +122,13 @@ class Strategy:
     # SIGNAL GENERATION
     # ==========================================================
 
-    def generate_signal(self, candles):
+    def generate_signal(self, candles, strategy_name=None):
+        selected_name = self.normalize_strategy_name(strategy_name or self.strategy_name)
+        if selected_name == "AI Hybrid":
+            ai_signal = self.generate_ai_signal(candles)
+            if ai_signal:
+                return ai_signal
+            selected_name = "Trend Following"
 
         df = self.compute_features(candles)
 
@@ -88,6 +136,7 @@ class Strategy:
             return None
 
         row = df.iloc[-1]
+        close_price = float(row["close"])
 
         # Trend
         trend_up = row["ema_fast"] > row["ema_slow"]
@@ -96,31 +145,55 @@ class Strategy:
         # RSI
         rsi = row["rsi"]
 
-        # =========================
-        # BUY SIGNAL
-        # =========================
+        if selected_name == "Trend Following":
+            if trend_up and rsi < self.oversold_threshold:
+                return {
+                    "side": "buy",
+                    "amount": self.signal_amount,
+                    "confidence": 0.60,
+                    "reason": "EMA trend up + RSI oversold"
+                }
+            if trend_down and rsi > self.overbought_threshold:
+                return {
+                    "side": "sell",
+                    "amount": self.signal_amount,
+                    "confidence": 0.60,
+                    "reason": "EMA trend down + RSI overbought"
+                }
 
-        if trend_up and rsi < 35:
+        elif selected_name == "Mean Reversion":
+            if close_price <= float(row["lower_band"]) and rsi <= self.oversold_threshold:
+                return {
+                    "side": "buy",
+                    "amount": self.signal_amount,
+                    "confidence": 0.58,
+                    "reason": "Lower band reversion + RSI oversold"
+                }
+            if close_price >= float(row["upper_band"]) and rsi >= self.overbought_threshold:
+                return {
+                    "side": "sell",
+                    "amount": self.signal_amount,
+                    "confidence": 0.58,
+                    "reason": "Upper band reversion + RSI overbought"
+                }
 
-            return {
-                "side": "buy",
-                "amount": 1,
-                "confidence": 0.60,
-                "reason": "EMA trend up + RSI oversold"
-            }
-
-        # =========================
-        # SELL SIGNAL
-        # =========================
-
-        if trend_down and rsi > 65:
-
-            return {
-                "side": "sell",
-                "amount": 1,
-                "confidence": 0.60,
-                "reason": "EMA trend down + RSI overbought"
-            }
+        elif selected_name == "Breakout":
+            breakout_high = row.get("breakout_high")
+            breakout_low = row.get("breakout_low")
+            if pd.notna(breakout_high) and close_price > float(breakout_high) and trend_up:
+                return {
+                    "side": "buy",
+                    "amount": self.signal_amount,
+                    "confidence": 0.62,
+                    "reason": "Breakout above prior range high"
+                }
+            if pd.notna(breakout_low) and close_price < float(breakout_low) and trend_down:
+                return {
+                    "side": "sell",
+                    "amount": self.signal_amount,
+                    "confidence": 0.62,
+                    "reason": "Breakout below prior range low"
+                }
 
         return None
 

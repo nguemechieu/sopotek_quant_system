@@ -385,6 +385,45 @@ class FakeRateLimitedOhlcvSession(FakeStellarSession):
         return super().request(method, url, params=params, json=json)
 
 
+class FakeNoTradesTickerSession(FakeStellarSession):
+    def __init__(self):
+        super().__init__()
+        self.trade_calls = 0
+
+    def request(self, method, url, params=None, json=None):
+        if url.endswith("/trades"):
+            self.trade_calls += 1
+            raise AssertionError("fetch_ticker should not request /trades for Stellar")
+        return super().request(method, url, params=params, json=json)
+
+
+class FakeTrades429AfterSuccessSession(FakeStellarSession):
+    def __init__(self):
+        super().__init__()
+        self.trade_calls = 0
+
+    def request(self, method, url, params=None, json=None):
+        if url.endswith("/trades"):
+            self.trade_calls += 1
+            if self.trade_calls == 1:
+                return super().request(method, url, params=params, json=json)
+            return FakeRateLimitedResponse({}, url)
+        return super().request(method, url, params=params, json=json)
+
+
+class FakeTrades400Session(FakeStellarSession):
+    def request(self, method, url, params=None, json=None):
+        if url.endswith("/trades"):
+            raise aiohttp.ClientResponseError(
+                request_info=SimpleNamespace(real_url=url),
+                history=(),
+                status=400,
+                message="Bad Request",
+                headers={},
+            )
+        return super().request(method, url, params=params, json=json)
+
+
 class FakeSdkAsset:
     def __init__(self, code, issuer=None):
         self.code = code
@@ -707,7 +746,7 @@ def test_stellar_broker_normalizes_market_data_and_orders(monkeypatch):
         ticker = await broker.fetch_ticker("XLM/USDC")
         assert ticker["bid"] == 0.099
         assert ticker["ask"] == 0.101
-        assert round(ticker["last"], 3) == 0.101
+        assert round(ticker["last"], 3) == 0.1
 
         candles = await broker.fetch_ohlcv("XLM/USDC", timeframe="1h", limit=1)
         assert candles[0][1:5] == [0.098, 0.102, 0.097, 0.101]
@@ -817,6 +856,92 @@ def test_stellar_broker_reuses_cached_ohlcv_after_rate_limit(monkeypatch):
         first = await broker.fetch_ohlcv("XLM/USDC", timeframe="1h", limit=1)
         second = await broker.fetch_ohlcv("XLM/USDC", timeframe="1h", limit=1)
         assert first == second
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stellar_broker_fetch_ticker_uses_orderbook_mid_without_trades(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    captured_session = {}
+
+    def session_factory():
+        session = FakeNoTradesTickerSession()
+        captured_session["session"] = session
+        return session
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", session_factory)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=None,
+                mode="live",
+                params={"quote_assets": ["USDC", "XLM"]},
+            )
+        )
+
+        await broker.connect()
+        ticker = await broker.fetch_ticker("XLM/USDC")
+        assert ticker["bid"] == 0.099
+        assert ticker["ask"] == 0.101
+        assert round(ticker["last"], 3) == 0.1
+        assert captured_session["session"].trade_calls == 0
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stellar_broker_reuses_cached_trades_after_rate_limit(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    def session_factory():
+        return FakeTrades429AfterSuccessSession()
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", session_factory)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=None,
+                mode="live",
+                params={"quote_assets": ["USDC", "XLM"], "trades_cache_ttl": 0.0, "rate_limit_retries": 0},
+            )
+        )
+
+        await broker.connect()
+        first = await broker.fetch_trades("XLM/USDC", limit=1)
+        second = await broker.fetch_trades("XLM/USDC", limit=1)
+        assert first == second
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stellar_broker_returns_empty_trades_for_invalid_market(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    def session_factory():
+        return FakeTrades400Session()
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", session_factory)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=None,
+                mode="live",
+                params={"quote_assets": ["USDC", "XLM"], "rate_limit_retries": 0},
+            )
+        )
+
+        await broker.connect()
+        trades = await broker.fetch_trades("XLM/USDC", limit=1)
+        assert trades == []
         await broker.close()
 
     asyncio.run(scenario())

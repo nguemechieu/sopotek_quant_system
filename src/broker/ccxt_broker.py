@@ -301,6 +301,8 @@ class CCXTBroker(BaseBroker):
         type="market",
         price=None,
         params=None,
+        stop_loss=None,
+        take_profit=None,
     ):
         await self._ensure_connected()
 
@@ -309,6 +311,10 @@ class CCXTBroker(BaseBroker):
         order_params = dict(self.extra_params)
         if params:
             order_params.update(params)
+        if stop_loss is not None:
+            order_params.setdefault("stopLossPrice", stop_loss)
+        if take_profit is not None:
+            order_params.setdefault("takeProfitPrice", take_profit)
 
         if not self._exchange_has("create_order"):
             raise NotImplementedError(f"{self.exchange_name} does not support create_order")

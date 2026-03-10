@@ -40,6 +40,7 @@ class SopotekTrading:
         # =========================
 
         self.strategy = StrategyRegistry()
+        self._apply_strategy_preferences()
 
         self.event_bus = EventBus()
 
@@ -50,7 +51,9 @@ class SopotekTrading:
         self.execution_manager = ExecutionManager(
             broker=self.broker,
             event_bus=self.event_bus,
-            router=self.router
+            router=self.router,
+            trade_repository=getattr(controller, "trade_repository", None),
+            trade_notifier=getattr(controller, "handle_trade_execution", None),
         )
 
         self.risk_engine = None
@@ -61,10 +64,15 @@ class SopotekTrading:
         # =========================
 
         self.time_frame = getattr(controller, "time_frame", "1h")
-        self.limit = getattr(controller, "limit", 300)
+        self.limit = getattr(controller, "limit", 50000)
         self.running = False
 
         self.logger.info("Sopotek Trading System initialized")
+
+    def _apply_strategy_preferences(self):
+        strategy_name = getattr(self.controller, "strategy_name", None)
+        strategy_params = getattr(self.controller, "strategy_params", None)
+        self.strategy.configure(strategy_name=strategy_name, params=strategy_params)
 
     # ==========================================
     # START SYSTEM
@@ -129,14 +137,29 @@ class SopotekTrading:
         while self.running:
 
             try:
+                active_symbols = self.symbols[:100]
+                if self.controller and hasattr(self.controller, "get_active_autotrade_symbols"):
+                    try:
+                        resolved = self.controller.get_active_autotrade_symbols()
+                    except Exception:
+                        resolved = []
+                    if resolved:
+                        active_symbols = resolved[:100]
 
-                for symbol in self.symbols[:100]:
+                for symbol in active_symbols:
 
-                    candles = await self.broker.fetch_ohlcv(
-                        symbol,
-                        timeframe=self.time_frame,
-                        limit=self.limit
-                    )
+                    if self.controller and hasattr(self.controller, "_safe_fetch_ohlcv"):
+                        candles = await self.controller._safe_fetch_ohlcv(
+                            symbol,
+                            timeframe=self.time_frame,
+                            limit=self.limit,
+                        )
+                    else:
+                        candles = await self.broker.fetch_ohlcv(
+                            symbol,
+                            timeframe=self.time_frame,
+                            limit=self.limit
+                        )
 
                     signal = self.strategy.generate_ai_signal(candles)
 

@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QMovie, QPixmap
@@ -25,9 +25,11 @@ from config.credential_manager import CredentialManager
 from frontend.ui.i18n import iter_supported_languages
 
 
-BASE_DIR = "src"
-LOGO_PATH =  "assets/logo.png"
-SPINNER_PATH = "assets/spinner.gif"
+ROOT_DIR = Path(__file__).resolve().parents[2]
+ASSETS_DIR = ROOT_DIR / "assets"
+
+LOGO_PATH = ASSETS_DIR / "logo.png"
+SPINNER_PATH = ASSETS_DIR / "spinner.gif"
 
 EXCHANGE_MAP = {
     "crypto": [
@@ -97,205 +99,232 @@ class Dashboard(QWidget):
         self.setStyleSheet(
             """
             QWidget {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #f8f1e5, stop:0.46 #f4efe9, stop:1 #e3edf6);
-                color: #19344b;
-                font-family: "Aptos", "Bahnschrift", "Segoe UI", sans-serif;
+                background: #0b1220;
+                color: #d7dfeb;
+                font-family: "Segoe UI", "Aptos", sans-serif;
             }
             QScrollArea {
                 border: 0;
                 background: transparent;
             }
+            QScrollBar:vertical {
+                background: #0f1726;
+                width: 10px;
+                margin: 2px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical {
+                background: #24324a;
+                min-height: 30px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
+            }
             QFrame#heroPanel {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #fff8ef, stop:0.48 #f5efe4, stop:1 #dbe7f3);
-                border: 1px solid rgba(126, 149, 168, 0.18);
-                border-radius: 30px;
+                    stop:0 #101827, stop:0.6 #0f1726, stop:1 #0b1220);
+                border: 1px solid #24324a;
+                border-radius: 28px;
             }
             QFrame#connectPanel {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #fffdf8, stop:1 #f4ecdf);
-                color: #163048;
-                border: 1px solid rgba(140, 126, 104, 0.12);
-                border-radius: 30px;
+                background: #101827;
+                color: #d7dfeb;
+                border: 1px solid #24324a;
+                border-radius: 28px;
             }
             QFrame#glassCard {
-                background-color: rgba(255, 255, 255, 0.72);
-                border: 1px solid rgba(118, 144, 165, 0.12);
+                background-color: #101b2d;
+                border: 1px solid #24344f;
                 border-radius: 20px;
             }
             QFrame#marketStrip {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(255,255,255,0.92), stop:1 rgba(235,244,250,0.88));
-                border: 1px solid rgba(124, 155, 181, 0.13);
+                background: #0f1727;
+                border: 1px solid #24344f;
                 border-radius: 18px;
             }
             QFrame#summaryCard {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(255,255,255,0.84), stop:1 rgba(248,241,230,0.92));
-                border: 1px solid rgba(121, 135, 151, 0.11);
+                    stop:0 #101b2d, stop:1 #0f1727);
+                border: 1px solid #24344f;
                 border-radius: 22px;
             }
             QFrame#statPill {
-                background: rgba(255, 255, 255, 0.62);
-                border: 1px solid rgba(129, 154, 176, 0.16);
+                background: #0f1726;
+                border: 1px solid #24324a;
                 border-radius: 16px;
             }
             QLabel#eyebrow {
-                color: #8a5b3b;
+                color: #8fa3bf;
                 font-size: 12px;
                 font-weight: 800;
                 letter-spacing: 0.18em;
                 text-transform: uppercase;
             }
             QLabel#heroTitle {
-                font-size: 40px;
+                font-size: 34px;
                 font-weight: 800;
-                color: #19314a;
+                color: #f4f8ff;
             }
             QLabel#heroLead {
-                font-size: 15px;
+                font-size: 14px;
                 line-height: 1.5;
-                color: #5b6f81;
+                color: #9fb0c7;
             }
             QLabel#heroSectionTitle {
-                color: #21405b;
+                color: #e6edf7;
                 font-size: 18px;
                 font-weight: 800;
             }
             QLabel#heroSectionBody {
-                color: #61778c;
+                color: #9fb0c7;
                 font-size: 13px;
             }
             QLabel#panelTitle {
-                color: #183349;
-                font-size: 30px;
+                color: #f4f8ff;
+                font-size: 28px;
                 font-weight: 800;
             }
             QLabel#panelBody {
-                color: #6a7784;
+                color: #9fb0c7;
                 font-size: 14px;
             }
             QLabel#sectionLabel {
-                color: #7a6048;
+                color: #8fa3bf;
                 font-size: 12px;
                 font-weight: 800;
                 letter-spacing: 0.12em;
                 text-transform: uppercase;
             }
             QLabel#fieldLabel {
-                color: #41576c;
+                color: #9fb0c7;
                 font-size: 12px;
                 font-weight: 700;
                 letter-spacing: 0.05em;
                 text-transform: uppercase;
             }
             QLabel#hintLabel {
-                color: #687887;
+                color: #8fa3bf;
                 font-size: 12px;
             }
             QLabel#pillLabel {
-                color: #6b7d8d;
+                color: #8fa3bf;
                 font-size: 12px;
                 font-weight: 700;
             }
             QLabel#pillValue {
-                color: #18364f;
+                color: #f4f8ff;
                 font-size: 20px;
                 font-weight: 800;
             }
             QLabel#summaryTitle {
-                color: #183349;
+                color: #f4f8ff;
                 font-size: 18px;
                 font-weight: 800;
             }
             QLabel#summaryBody {
-                color: #5d6f80;
+                color: #9fb0c7;
                 font-size: 13px;
             }
             QLabel#summaryMeta {
-                color: #8a5b3b;
+                color: #65a3ff;
                 font-size: 12px;
                 font-weight: 700;
             }
             QLabel#marketTitle {
-                color: #21405b;
+                color: #dfe8f5;
                 font-size: 15px;
                 font-weight: 800;
             }
             QLabel#marketBody {
-                color: #61798f;
+                color: #9fb0c7;
                 font-size: 12px;
             }
             QLabel#checkTitle {
-                color: #2d4963;
+                color: #d7dfeb;
                 font-size: 13px;
             }
             QLabel#checkStateGood {
-                color: #2d9b74;
+                color: #34c27a;
                 font-size: 12px;
                 font-weight: 800;
             }
             QLabel#checkStateWarn {
-                color: #ca8751;
+                color: #f0a35e;
                 font-size: 12px;
                 font-weight: 800;
             }
             QLineEdit, QComboBox, QSpinBox {
-                background-color: rgba(255, 252, 246, 0.98);
-                color: #163048;
-                border: 1px solid #d8d0c4;
-                border-radius: 15px;
+                background-color: #162033;
+                color: #d7dfeb;
+                border: 1px solid #2d3a56;
+                border-radius: 12px;
                 padding: 11px 12px;
                 min-height: 22px;
                 font-size: 14px;
+                selection-background-color: #2a7fff;
             }
             QLineEdit:hover, QComboBox:hover, QSpinBox:hover {
-                border-color: #bfad93;
+                border-color: #4f638d;
             }
             QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
-                border: 2px solid #c56a4a;
+                border: 1px solid #65a3ff;
             }
             QComboBox::drop-down {
                 border: 0;
                 width: 26px;
             }
+            QComboBox QAbstractItemView {
+                background-color: #162033;
+                color: #d7dfeb;
+                border: 1px solid #2d3a56;
+                selection-background-color: #2a7fff;
+            }
             QCheckBox {
-                color: #425a6f;
+                color: #c7d2e0;
                 font-size: 13px;
                 spacing: 8px;
             }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 5px;
+                border: 1px solid #2d3a56;
+                background: #162033;
+            }
+            QCheckBox::indicator:checked {
+                background: #2a7fff;
+                border: 1px solid #65a3ff;
+            }
             QPushButton#presetButton,
             QPushButton#secondaryButton {
-                background: rgba(255, 255, 255, 0.72);
-                color: #21405b;
-                border: 1px solid rgba(146, 160, 171, 0.18);
-                border-radius: 14px;
+                background-color: #162033;
+                color: #d7dfeb;
+                border: 1px solid #2d3a56;
+                border-radius: 12px;
                 padding: 10px 14px;
                 font-size: 12px;
                 font-weight: 800;
             }
             QPushButton#presetButton:hover,
             QPushButton#secondaryButton:hover {
-                background: rgba(240, 246, 251, 0.96);
-                border-color: rgba(102, 137, 165, 0.32);
+                background: #1b2940;
+                border-color: #4f638d;
             }
             QPushButton#connectButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #d46e50, stop:1 #bf5238);
-                color: #fffaf6;
+                background: #2a7fff;
+                color: white;
                 border: 0;
-                border-radius: 18px;
+                border-radius: 16px;
                 padding: 15px 20px;
                 font-size: 15px;
                 font-weight: 800;
             }
             QPushButton#connectButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #ca6244, stop:1 #ad432d);
+                background: #3d8dff;
             }
             QPushButton#connectButton:pressed {
-                background: #a6402b;
+                background: #1f68d6;
             }
             """
         )
@@ -426,7 +455,7 @@ class Dashboard(QWidget):
         top_row.setSpacing(18)
 
         logo = QLabel()
-        pixmap = QPixmap(LOGO_PATH)
+        pixmap = QPixmap(str(LOGO_PATH)) if LOGO_PATH.exists() else QPixmap()
         if not pixmap.isNull():
             logo.setPixmap(
                 pixmap.scaled(110, 110, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -442,14 +471,14 @@ class Dashboard(QWidget):
         self.eyebrow_label.setObjectName("eyebrow")
         headline_col.addWidget(self.eyebrow_label)
 
-        self.hero_title_label = QLabel("I'm ready before you even press connect.")
+        self.hero_title_label = QLabel("Sopotek AI Trading Platform")
         self.hero_title_label.setObjectName("heroTitle")
         self.hero_title_label.setWordWrap(True)
         headline_col.addWidget(self.hero_title_label)
 
         self.hero_lead_label = QLabel(
-            "This launch screen should help you scan the broker, strategy, and risk posture in seconds. "
-            "The goal is calm confidence: stronger hierarchy, fewer blind spots, and a terminal handoff that feels deliberate."
+            "Configure broker, strategy, and risk profile before launching the trading terminal. "
+            "This screen is designed to make the next step feel obvious, calm, and safe."
         )
         self.hero_lead_label.setObjectName("heroLead")
         self.hero_lead_label.setWordWrap(True)
@@ -514,31 +543,31 @@ class Dashboard(QWidget):
         checklist_layout.addWidget(self.check_risk)
         checklist_layout.addStretch(1)
 
-        design_card = QFrame()
-        design_card.setObjectName("glassCard")
-        design_layout = QVBoxLayout(design_card)
-        design_layout.setContentsMargins(20, 20, 20, 20)
-        design_layout.setSpacing(10)
+        notes_card = QFrame()
+        notes_card.setObjectName("glassCard")
+        notes_layout = QVBoxLayout(notes_card)
+        notes_layout.setContentsMargins(20, 20, 20, 20)
+        notes_layout.setSpacing(10)
 
-        self.design_title_label = QLabel("What better design means here")
-        self.design_title_label.setObjectName("heroSectionTitle")
-        design_layout.addWidget(self.design_title_label)
+        self.notes_title_label = QLabel("Session Notes")
+        self.notes_title_label.setObjectName("heroSectionTitle")
+        notes_layout.addWidget(self.notes_title_label)
 
-        self.design_bullet_labels = []
+        self.notes_bullet_labels = []
         for line in [
-            "Big decisions are obvious at a glance.",
-            "Optional broker fields only appear when they matter.",
-            "The screen still breathes on smaller windows.",
-            "Paper and live sessions feel clearly different.",
+            "Paper mode is the safest way to verify broker setup and chart loading.",
+            "Broker-specific fields appear only when the selected venue requires them.",
+            "Saved profiles help repeat sessions start faster.",
+            "Live sessions should be reviewed carefully before launch.",
         ]:
             item = QLabel(line)
             item.setObjectName("heroSectionBody")
             item.setWordWrap(True)
-            design_layout.addWidget(item)
-            self.design_bullet_labels.append(item)
+            notes_layout.addWidget(item)
+            self.notes_bullet_labels.append(item)
 
         lower_grid.addWidget(checklist_card, 0, 0)
-        lower_grid.addWidget(design_card, 0, 1)
+        lower_grid.addWidget(notes_card, 0, 1)
         panel_layout.addLayout(lower_grid)
         panel_layout.addStretch(1)
         return panel
@@ -550,12 +579,12 @@ class Dashboard(QWidget):
         panel_layout.setContentsMargins(28, 28, 28, 28)
         panel_layout.setSpacing(16)
 
-        self.connect_title_label = QLabel("Connect Your Desk")
+        self.connect_title_label = QLabel("Launch Session")
         self.connect_title_label.setObjectName("panelTitle")
         panel_layout.addWidget(self.connect_title_label)
 
         self.connect_body_label = QLabel(
-            "Choose a session preset, tune the account details, and launch into the terminal with a cleaner pre-trade summary."
+            "Choose broker access, session mode, credentials, and risk settings before opening the trading workspace."
         )
         self.connect_body_label.setObjectName("panelBody")
         self.connect_body_label.setWordWrap(True)
@@ -698,8 +727,9 @@ class Dashboard(QWidget):
         self.spinner = QLabel()
         self.spinner.setAlignment(Qt.AlignCenter)
         self.spinner.setVisible(False)
-        self.spinner_movie = QMovie(SPINNER_PATH)
-        self.spinner.setMovie(self.spinner_movie)
+        self.spinner_movie = QMovie(str(SPINNER_PATH)) if SPINNER_PATH.exists() else None
+        if self.spinner_movie is not None:
+            self.spinner.setMovie(self.spinner_movie)
         panel_layout.addWidget(self.spinner)
 
         self.connect_button = QPushButton("Open Paper Terminal")
@@ -849,14 +879,14 @@ class Dashboard(QWidget):
         self.check_strategy.title_label.setText(self._tr("dashboard.check_strategy_title"))
         self.check_risk.title_label.setText(self._tr("dashboard.check_risk_title"))
 
-        self.design_title_label.setText(self._tr("dashboard.design_title"))
+        self.notes_title_label.setText(self._tr("dashboard.notes_title"))
         for label, key in zip(
-            self.design_bullet_labels,
+            self.notes_bullet_labels,
             (
-                "dashboard.design_bullet_1",
-                "dashboard.design_bullet_2",
-                "dashboard.design_bullet_3",
-                "dashboard.design_bullet_4",
+                "dashboard.notes_bullet_1",
+                "dashboard.notes_bullet_2",
+                "dashboard.notes_bullet_3",
+                "dashboard.notes_bullet_4",
             ),
         ):
             label.setText(self._tr(key))
@@ -961,11 +991,12 @@ class Dashboard(QWidget):
         if broker.get("exchange") == "oanda" or broker.get("type") == "forex":
             self.api_input.setText(broker.get("account_id", ""))
             self.secret_input.setText(broker.get("api_key", ""))
+            self.account_id_input.clear()
         else:
             self.api_input.setText(broker.get("api_key", ""))
             self.secret_input.setText(broker.get("secret", ""))
+            self.account_id_input.setText(broker.get("account_id", ""))
         self.password_input.setText(broker.get("password") or broker.get("passphrase", ""))
-        self.account_id_input.setText(broker.get("account_id", ""))
         self.mode_box.setCurrentText(broker.get("mode", "paper"))
         self.risk_input.setValue(int(creds.get("risk", {}).get("risk_percent", 2) or 2))
         self.strategy_box.setCurrentText(creds.get("strategy", "EMA_CROSS"))
@@ -1026,13 +1057,17 @@ class Dashboard(QWidget):
         broker_type = self.exchange_type_box.currentText()
         exchange = self.exchange_box.currentText()
         is_paper = broker_type == "paper" or exchange == "paper"
-        needs_account_id = broker_type == "forex" or exchange == "oanda"
+        uses_mapped_account_field = broker_type == "forex" or exchange == "oanda"
+        needs_account_id = uses_mapped_account_field
         needs_password = exchange in {"coinbase", "okx", "kucoin"}
 
         self._field_blocks["api"].setVisible(not is_paper)
         self._field_blocks["secret"].setVisible(not is_paper)
-        self._field_blocks["account_id"].setVisible(needs_account_id)
+        self._field_blocks["account_id"].setVisible(needs_account_id and not uses_mapped_account_field)
         self._field_blocks["password"].setVisible((not is_paper) and needs_password)
+
+        if uses_mapped_account_field:
+            self.account_id_input.clear()
 
         if is_paper:
             self.mode_box.blockSignals(True)
@@ -1218,10 +1253,12 @@ class Dashboard(QWidget):
         self.connect_button.setEnabled(False)
         self.connect_button.setText("Connecting Session...")
         self.spinner.setVisible(True)
-        self.spinner_movie.start()
+        if self.spinner_movie is not None:
+            self.spinner_movie.start()
 
     def hide_loading(self):
         self.spinner.setVisible(False)
-        self.spinner_movie.stop()
+        if self.spinner_movie is not None:
+            self.spinner_movie.stop()
         self.connect_button.setEnabled(True)
         self._update_session_preview()

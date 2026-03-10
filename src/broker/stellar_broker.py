@@ -77,6 +77,8 @@ class StellarBroker(BaseBroker):
     DEFAULT_MIN_NETWORK_ASSET_SCORE = 25.0
     DEFAULT_ACCOUNT_CACHE_TTL = 15.0
     DEFAULT_RATE_LIMIT_RETRIES = 2
+    DEFAULT_TRADES_CACHE_TTL = 20.0
+    DEFAULT_TRADES_COOLDOWN_SECONDS = 30.0
     VALID_ASSET_CODE_RE = re.compile(r"^[A-Z]{2,12}$")
     VALID_PUBLIC_KEY_RE = re.compile(r"^G[A-Z2-7]{55}$")
     VALID_SECRET_KEY_RE = re.compile(r"^S[A-Z2-7]{55}$")
@@ -104,6 +106,10 @@ class StellarBroker(BaseBroker):
         self.orderbook_cache_ttl = float(self.params.get("orderbook_cache_ttl", 5.0))
         self.orderbook_cooldown_seconds = float(self.params.get("orderbook_cooldown_seconds", 10.0))
         self.ohlcv_cache_ttl = float(self.params.get("ohlcv_cache_ttl", 60.0))
+        self.trades_cache_ttl = float(self.params.get("trades_cache_ttl", self.DEFAULT_TRADES_CACHE_TTL))
+        self.trades_cooldown_seconds = float(
+            self.params.get("trades_cooldown_seconds", self.DEFAULT_TRADES_COOLDOWN_SECONDS)
+        )
         self.cache_path = Path(self.params.get("cache_path") or self._default_cache_path())
         self.network_passphrase = self.params.get(
             "network_passphrase",
@@ -123,6 +129,9 @@ class StellarBroker(BaseBroker):
         self._orderbook_cooldown_until: Dict[str, float] = {}
         self._ohlcv_cache: Dict[str, List[List[float]]] = {}
         self._ohlcv_cache_until: Dict[str, float] = {}
+        self._trades_cache: Dict[str, List[dict]] = {}
+        self._trades_cache_until: Dict[str, float] = {}
+        self._trades_cooldown_until: Dict[str, float] = {}
 
         if not self.public_key:
             raise ValueError("Stellar public key is required")
@@ -626,6 +635,10 @@ class StellarBroker(BaseBroker):
     def _ohlcv_cache_key(self, symbol: str, timeframe: str) -> str:
         return f"{str(symbol or '').upper()}|{str(timeframe or '1h').lower()}"
 
+    def _trades_cache_key(self, symbol: str, limit: Optional[int]) -> str:
+        normalized_limit = int(limit) if limit else 0
+        return f"{str(symbol or '').upper()}|{normalized_limit}"
+
     def _trade_aggregations_params(
         self,
         base_asset: StellarAssetDescriptor,
@@ -763,6 +776,27 @@ class StellarBroker(BaseBroker):
             return counter_amount / base_amount
         return 0.0
 
+    def _last_trade_price(self, symbol: str) -> float:
+        for cache_limit in (1, 0):
+            cached_trades = self._trades_cache.get(self._trades_cache_key(symbol, cache_limit)) or []
+            if cached_trades:
+                price = self._horizon_price(cached_trades[0])
+                if price > 0:
+                    return price
+        return 0.0
+
+    async def _reference_price(self, symbol: str) -> Tuple[float, float, float]:
+        book = await self.fetch_orderbook(symbol, limit=1)
+        bid = book["bids"][0][0] if book["bids"] else 0.0
+        ask = book["asks"][0][0] if book["asks"] else 0.0
+        last = self._last_trade_price(symbol)
+        if last <= 0:
+            if bid and ask:
+                last = (bid + ask) / 2
+            else:
+                last = ask or bid
+        return bid, ask, last
+
     def _normalize_offer(self, offer: dict) -> dict:
         selling = offer.get("selling", {}) if isinstance(offer, dict) else {}
         buying = offer.get("buying", {}) if isinstance(offer, dict) else {}
@@ -869,17 +903,7 @@ class StellarBroker(BaseBroker):
             return {"status": "error", "broker": "stellar", "detail": str(exc)}
 
     async def fetch_ticker(self, symbol):
-        book = await self.fetch_orderbook(symbol, limit=1)
-        trades = await self.fetch_trades(symbol, limit=1)
-
-        bid = book["bids"][0][0] if book["bids"] else 0.0
-        ask = book["asks"][0][0] if book["asks"] else 0.0
-        last = self._horizon_price(trades[0]) if trades else 0.0
-        if last <= 0:
-            if bid and ask:
-                last = (bid + ask) / 2
-            else:
-                last = ask or bid
+        bid, ask, last = await self._reference_price(symbol)
 
         return {
             "symbol": symbol,
@@ -905,13 +929,18 @@ class StellarBroker(BaseBroker):
         try:
             payload = await self._request("GET", "/order_book", params=params)
         except aiohttp.ClientResponseError as exc:
-            if exc.status == 429 and cached_book is not None:
+            if exc.status == 429:
                 self._orderbook_cooldown_until[symbol] = time.time() + self.orderbook_cooldown_seconds
-                self.logger.warning(
-                    "Using cached Stellar orderbook for %s after Horizon rate limit.",
-                    symbol,
-                )
-                return cached_book
+                if cached_book is not None:
+                    self.logger.warning(
+                        "Using cached Stellar orderbook for %s after Horizon rate limit.",
+                        symbol,
+                    )
+                    return cached_book
+                return {"symbol": symbol, "bids": [], "asks": []}
+            if exc.status == 400:
+                self._orderbook_cooldown_until[symbol] = time.time() + max(self.orderbook_cooldown_seconds, 60.0)
+                return cached_book or {"symbol": symbol, "bids": [], "asks": []}
             raise
         bids = [
             [self._float(level.get("price"), 0.0), self._float(level.get("amount"), 0.0)]
@@ -928,6 +957,14 @@ class StellarBroker(BaseBroker):
         return book
 
     async def fetch_trades(self, symbol, limit=None):
+        cache_key = self._trades_cache_key(symbol, limit)
+        now = time.time()
+        cached_trades = self._trades_cache.get(cache_key)
+        cached_until = self._trades_cache_until.get(cache_key, 0.0)
+        cooldown_until = self._trades_cooldown_until.get(cache_key, 0.0)
+        if cached_trades is not None and (now < cached_until or now < cooldown_until):
+            return cached_trades[:limit] if limit else cached_trades
+
         base_asset, quote_asset = self._resolve_symbol_assets(symbol)
         params = {}
         params.update(base_asset.to_horizon("base"))
@@ -936,9 +973,24 @@ class StellarBroker(BaseBroker):
         if limit is not None:
             params["limit"] = limit
 
-        payload = await self._request("GET", "/trades", params=params)
+        try:
+            payload = await self._request("GET", "/trades", params=params)
+        except aiohttp.ClientResponseError as exc:
+            if exc.status == 429:
+                self._trades_cooldown_until[cache_key] = time.time() + self.trades_cooldown_seconds
+                if cached_trades is not None:
+                    return cached_trades[:limit] if limit else cached_trades
+                return []
+            if exc.status == 400:
+                self._trades_cooldown_until[cache_key] = time.time() + max(self.trades_cooldown_seconds, 120.0)
+                return cached_trades[:limit] if cached_trades is not None and limit else (cached_trades or [])
+            raise
         records = ((payload.get("_embedded") or {}).get("records")) or payload.get("records") or []
-        return records[:limit] if limit else records
+        records = records[:limit] if limit else records
+        self._trades_cache[cache_key] = list(records)
+        self._trades_cache_until[cache_key] = time.time() + self.trades_cache_ttl
+        self._trades_cooldown_until.pop(cache_key, None)
+        return records
 
     async def fetch_my_trades(self, symbol=None, limit=None):
         payload = await self._request("GET", f"/accounts/{self.public_key}/trades", params={"order": "desc", "limit": limit or 50})
@@ -999,7 +1051,7 @@ class StellarBroker(BaseBroker):
         candles = self._records_to_candles(records, requested_limit)
         if not candles:
             try:
-                trades = await self.fetch_trades(symbol, limit=min(max(requested_limit * 50, 200), 2000))
+                trades = await self.fetch_trades(symbol, limit=min(max(requested_limit * 20, 120), 600))
             except aiohttp.ClientResponseError as exc:
                 if exc.status == 429 and cached_candles:
                     self.logger.warning("Using cached Stellar OHLCV for %s after Horizon rate limit.", symbol)
@@ -1081,16 +1133,16 @@ class StellarBroker(BaseBroker):
                 return order
         return None
 
-    async def create_order(self, symbol, side, amount, type="market", price=None, params=None):
+    async def create_order(self, symbol, side, amount, type="market", price=None, params=None, stop_loss=None, take_profit=None):
         base_asset, quote_asset = self._resolve_symbol_assets(symbol)
         order_side = str(side).lower()
         order_type = str(type or "market").lower()
         params = dict(params or {})
         slippage_pct = float(params.pop("slippage_pct", self.default_slippage_pct))
 
-        ticker = await self.fetch_ticker(symbol)
+        bid, ask, last = await self._reference_price(symbol)
         if order_side == "buy":
-            reference_price = self._float(price, ticker.get("ask") or ticker.get("last") or 0.0)
+            reference_price = self._float(price, ask or last or bid or 0.0)
             if reference_price <= 0:
                 raise ValueError(f"Unable to determine Stellar buy price for {symbol}")
             effective_price = reference_price * (1 + slippage_pct) if order_type == "market" else reference_price
@@ -1112,11 +1164,13 @@ class StellarBroker(BaseBroker):
                 "type": order_type,
                 "amount": float(amount),
                 "price": effective_price,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
                 "status": "submitted",
                 "raw": response,
             }
 
-        reference_price = self._float(price, ticker.get("bid") or ticker.get("last") or 0.0)
+        reference_price = self._float(price, bid or last or ask or 0.0)
         if reference_price <= 0:
             raise ValueError(f"Unable to determine Stellar sell price for {symbol}")
         effective_price = reference_price * max(1 - slippage_pct, 0.0001) if order_type == "market" else reference_price
@@ -1139,6 +1193,8 @@ class StellarBroker(BaseBroker):
             "type": order_type,
             "amount": float(amount),
             "price": effective_price,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
             "status": "submitted",
             "raw": response,
         }

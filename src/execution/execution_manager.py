@@ -1,24 +1,41 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 
 from event_bus.event import Event
 from event_bus.event_types import EventType
 
 
 class ExecutionManager:
+    TERMINAL_ORDER_STATUSES = {
+        "filled",
+        "closed",
+        "canceled",
+        "cancelled",
+        "rejected",
+        "expired",
+        "failed",
+    }
+    FILLED_ORDER_STATUSES = {"filled", "closed"}
 
-    def __init__(self, broker, event_bus, router):
+    def __init__(self, broker, event_bus, router, trade_repository=None, trade_notifier=None):
 
         self.broker = broker
         self.bus = event_bus
         self.router = router
+        self.trade_repository = trade_repository
+        self.trade_notifier = trade_notifier
         self.logger = logging.getLogger("ExecutionManager")
 
         self.running = False
         self._symbol_cooldowns = {}
         self._execution_lock = asyncio.Lock()
         self._balance_buffer = 0.98
+        self._order_tracking_tasks = {}
+        self._tracked_orders = {}
+        self._order_tracking_interval = 2.0
+        self._order_tracking_timeout = 900.0
 
         # Subscribe to ORDER events
         self.bus.subscribe(EventType.ORDER, self.on_order)
@@ -30,6 +47,11 @@ class ExecutionManager:
     async def stop(self):
 
         self.running = False
+        for task in list(self._order_tracking_tasks.values()):
+            if task is not None and not task.done():
+                task.cancel()
+        self._order_tracking_tasks.clear()
+        self._tracked_orders.clear()
 
     async def on_order(self, event):
 
@@ -71,7 +93,11 @@ class ExecutionManager:
         if not hasattr(self.broker, "fetch_ticker"):
             return None
 
-        ticker = await self.broker.fetch_ticker(symbol)
+        try:
+            ticker = await self.broker.fetch_ticker(symbol)
+        except Exception as exc:
+            self.logger.debug("Reference price fetch failed for %s: %s", symbol, exc)
+            return None
         if not isinstance(ticker, dict):
             return None
 
@@ -119,6 +145,228 @@ class ExecutionManager:
                 pass
 
         return float(amount)
+
+    def _normalize_order_status(self, status):
+        normalized = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
+        mapping = {
+            "cancelled": "canceled",
+            "partiallyfilled": "partially_filled",
+            "partial_fill": "partially_filled",
+            "partial_filled": "partially_filled",
+            "pending_new": "open",
+            "accepted_for_bidding": "open",
+            "done_for_day": "expired",
+        }
+        return mapping.get(normalized, normalized or "unknown")
+
+    def _is_terminal_order_status(self, status):
+        return self._normalize_order_status(status) in self.TERMINAL_ORDER_STATUSES
+
+    def _safe_float(self, value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _extract_order_amount(self, execution, fallback_amount=0.0):
+        if not isinstance(execution, dict):
+            return abs(self._safe_float(fallback_amount, 0.0))
+
+        for key in ("amount", "qty", "quantity", "size", "filled_qty", "filled"):
+            value = execution.get(key)
+            if value is None:
+                continue
+            amount = abs(self._safe_float(value, 0.0))
+            if amount > 0:
+                return amount
+
+        return abs(self._safe_float(fallback_amount, 0.0))
+
+    def _extract_filled_amount(self, execution, fallback_amount=0.0, status=None):
+        if not isinstance(execution, dict):
+            return 0.0
+
+        for key in ("filled", "filled_qty", "filled_amount", "executed_qty", "executedQty"):
+            value = execution.get(key)
+            if value is None:
+                continue
+            filled = abs(self._safe_float(value, 0.0))
+            if filled > 0:
+                return filled
+
+        normalized_status = self._normalize_order_status(status or execution.get("status"))
+        if normalized_status in self.FILLED_ORDER_STATUSES:
+            return self._extract_order_amount(execution, fallback_amount=fallback_amount)
+
+        return 0.0
+
+    def _extract_order_price(self, execution, fallback_price=None):
+        if not isinstance(execution, dict):
+            return fallback_price
+
+        for key in ("average", "average_price", "avgPrice", "filled_avg_price", "price"):
+            value = execution.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+
+        return fallback_price
+
+    def _build_trade_payload(self, execution, submitted_order):
+        execution = execution or {}
+        submitted_order = submitted_order or {}
+
+        status = self._normalize_order_status(execution.get("status") or submitted_order.get("status"))
+        timestamp = (
+            execution.get("timestamp")
+            or submitted_order.get("timestamp")
+            or datetime.now(timezone.utc).isoformat()
+        )
+
+        return {
+            "symbol": execution.get("symbol") or submitted_order.get("symbol"),
+            "side": str(execution.get("side") or submitted_order.get("side") or "").upper(),
+            "price": self._extract_order_price(execution, fallback_price=submitted_order.get("price")),
+            "size": self._extract_order_amount(execution, fallback_amount=submitted_order.get("amount", 0.0)),
+            "filled_size": self._extract_filled_amount(
+                execution,
+                fallback_amount=submitted_order.get("amount", 0.0),
+                status=status,
+            ),
+            "order_type": execution.get("type") or submitted_order.get("type"),
+            "status": status,
+            "order_id": execution.get("id") or submitted_order.get("id"),
+            "timestamp": timestamp,
+            "stop_loss": execution.get("stop_loss", submitted_order.get("stop_loss")),
+            "take_profit": execution.get("take_profit", submitted_order.get("take_profit")),
+            "pnl": execution.get("pnl", submitted_order.get("pnl")),
+        }
+
+    def _payload_fingerprint(self, payload):
+        return (
+            payload.get("status"),
+            payload.get("price"),
+            payload.get("size"),
+            payload.get("filled_size"),
+            payload.get("pnl"),
+            payload.get("timestamp"),
+        )
+
+    async def _persist_trade_update(self, payload):
+        if self.trade_repository is not None:
+            try:
+                await asyncio.to_thread(
+                    getattr(self.trade_repository, "save_or_update_trade", self.trade_repository.save_trade),
+                    payload.get("symbol"),
+                    payload.get("side"),
+                    payload.get("size", 0.0),
+                    payload.get("price") if payload.get("price") is not None else 0.0,
+                    getattr(self.broker, "exchange_name", None),
+                    payload.get("order_id"),
+                    payload.get("order_type"),
+                    payload.get("status"),
+                    payload.get("timestamp"),
+                )
+            except Exception as exc:
+                self.logger.debug("Trade persistence failed for %s: %s", payload.get("symbol"), exc)
+
+        if callable(self.trade_notifier):
+            try:
+                self.trade_notifier(dict(payload))
+            except Exception as exc:
+                self.logger.debug("Trade notification failed for %s: %s", payload.get("symbol"), exc)
+
+    async def _publish_fill_delta(self, payload, tracker_state):
+        filled_size = max(self._safe_float(payload.get("filled_size"), 0.0), 0.0)
+        previous_filled = max(self._safe_float(tracker_state.get("filled_size"), 0.0), 0.0)
+        delta = filled_size - previous_filled
+        if delta <= 0:
+            return
+
+        await self.bus.publish(
+            Event(
+                EventType.FILL,
+                {
+                    "symbol": payload.get("symbol"),
+                    "side": payload.get("side"),
+                    "qty": delta,
+                    "price": payload.get("price"),
+                },
+            )
+        )
+
+    async def _handle_order_update(self, execution, submitted_order, allow_tracking=True):
+        payload = self._build_trade_payload(execution, submitted_order)
+        order_id = str(payload.get("order_id") or "").strip()
+        tracker_state = self._tracked_orders.get(order_id, {}) if order_id else {}
+
+        await self._publish_fill_delta(payload, tracker_state)
+
+        fingerprint = self._payload_fingerprint(payload)
+        if fingerprint != tracker_state.get("fingerprint"):
+            await self._persist_trade_update(payload)
+
+        if order_id:
+            self._tracked_orders[order_id] = {
+                "fingerprint": fingerprint,
+                "filled_size": payload.get("filled_size", 0.0),
+                "status": payload.get("status"),
+                "symbol": payload.get("symbol"),
+            }
+
+        if order_id and allow_tracking and not self._is_terminal_order_status(payload.get("status")):
+            self._ensure_order_tracking(order_id, payload.get("symbol"), dict(submitted_order or {}))
+
+        if order_id and self._is_terminal_order_status(payload.get("status")):
+            task = self._order_tracking_tasks.pop(order_id, None)
+            if task is not None and not task.done():
+                task.cancel()
+            self._tracked_orders.pop(order_id, None)
+
+        return payload
+
+    def _ensure_order_tracking(self, order_id, symbol, submitted_order):
+        if not order_id or not hasattr(self.broker, "fetch_order"):
+            return
+
+        task = self._order_tracking_tasks.get(order_id)
+        if task is not None and not task.done():
+            return
+
+        self._order_tracking_tasks[order_id] = asyncio.create_task(
+            self._track_order_until_terminal(order_id, symbol, submitted_order)
+        )
+
+    async def _track_order_until_terminal(self, order_id, symbol, submitted_order):
+        started_at = time.monotonic()
+        try:
+            while time.monotonic() - started_at <= self._order_tracking_timeout:
+                await asyncio.sleep(self._order_tracking_interval)
+
+                try:
+                    snapshot = await self.broker.fetch_order(order_id, symbol=symbol)
+                except TypeError:
+                    snapshot = await self.broker.fetch_order(order_id)
+                except NotImplementedError:
+                    self.logger.debug("Broker does not support fetch_order tracking for %s", order_id)
+                    return
+                except Exception as exc:
+                    self.logger.debug("Order status refresh failed for %s: %s", order_id, exc)
+                    continue
+
+                if not isinstance(snapshot, dict):
+                    continue
+
+                payload = await self._handle_order_update(snapshot, submitted_order, allow_tracking=False)
+                if self._is_terminal_order_status(payload.get("status")):
+                    return
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._order_tracking_tasks.pop(order_id, None)
 
     async def _prepare_order(self, order):
         symbol = order["symbol"]
@@ -223,6 +471,9 @@ class ExecutionManager:
             amount = order.get("size")
         price = order.get("price")
         order_type = order.get("type", "market")
+        stop_loss = order.get("stop_loss")
+        take_profit = order.get("take_profit")
+        params = dict(order.get("params") or {})
 
         if not symbol:
             raise ValueError("Order symbol is required")
@@ -240,6 +491,12 @@ class ExecutionManager:
 
         if price is not None:
             normalized_order["price"] = price
+        if stop_loss is not None:
+            normalized_order["stop_loss"] = stop_loss
+        if take_profit is not None:
+            normalized_order["take_profit"] = take_profit
+        if params:
+            normalized_order["params"] = params
 
         async with self._execution_lock:
             prepared_order = await self._prepare_order(normalized_order)
@@ -253,21 +510,12 @@ class ExecutionManager:
                 lowered = message.lower()
                 if any(
                     token in lowered
-                    for token in ("market is closed", "min_notional", "insufficient balance")
+                    for token in ("market is closed", "min_notional", "insufficient balance", "too many requests", "429")
                 ):
                     self._set_cooldown(symbol, 300, message)
                     return None
                 raise
-
-            fill_event = Event(
-                EventType.FILL,
-                {
-                    "symbol": symbol,
-                    "side": str(prepared_order["side"]).upper(),
-                    "qty": prepared_order["amount"],
-                    "price": execution.get("price", price),
-                },
-            )
-            await self.bus.publish(fill_event)
+            prepared_order["timestamp"] = datetime.now(timezone.utc).isoformat()
+            await self._handle_order_update(execution, prepared_order)
 
         return execution

@@ -1,4 +1,5 @@
 import sys
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -58,6 +59,23 @@ def test_backtest_engine_closes_open_position_at_end():
     assert len(results) == 2
     assert results.iloc[-1]["reason"] == "end_of_test"
     assert results.iloc[-1]["side"] == "SELL"
+
+
+def test_backtest_engine_respects_stop_event():
+    class HoldStrategy:
+        def generate_signal(self, candles, strategy_name=None):
+            if len(candles) == 2:
+                return {"side": "buy", "amount": 1}
+            return None
+
+    stop_event = threading.Event()
+    stop_event.set()
+    engine = BacktestEngine(strategy=HoldStrategy(), simulator=Simulator(initial_balance=1000))
+
+    results = engine.run(make_frame(), symbol="ETH/USDT", stop_event=stop_event)
+
+    assert results.empty
+    assert engine.equity_curve == []
 
 
 def test_report_generator_exports_files(tmp_path):

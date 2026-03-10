@@ -7,6 +7,12 @@ class StrategyRegistry:
         self.strategies = {}
         self.active_name = None
         self.default_strategy = Strategy()
+        self._register_builtin_strategies()
+
+    def _register_builtin_strategies(self):
+        for name in ["Trend Following", "Mean Reversion", "Breakout", "AI Hybrid"]:
+            if name not in self.strategies:
+                self.register(name, Strategy(strategy_name=name))
 
     # ===============================
     # REGISTER
@@ -32,8 +38,19 @@ class StrategyRegistry:
         return list(self.strategies.keys())
 
     def set_active(self, name):
-        if name in self.strategies:
-            self.active_name = name
+        normalized = Strategy.normalize_strategy_name(name)
+        if normalized in self.strategies:
+            self.active_name = normalized
+
+    def configure(self, strategy_name=None, params=None):
+        target_name = Strategy.normalize_strategy_name(strategy_name or self.active_name)
+        self.set_active(target_name)
+        target = self._resolve_strategy(target_name)
+        if hasattr(target, "set_strategy_name"):
+            target.set_strategy_name(target_name)
+        if isinstance(params, dict) and hasattr(target, "apply_parameters"):
+            target.apply_parameters(**params)
+        return target
 
     def _resolve_strategy(self, strategy_name=None):
         if strategy_name and strategy_name in self.strategies:
