@@ -1,82 +1,106 @@
-# Trading Strategies
+# Strategies
 
-This document describes the trading strategies implemented in Sopotek Trading AI.
+## Built-In Runtime Presets
 
-----------------------------------------------------------------------------------------------
+Repo evidence supports these built-in strategies:
 
-## Momentum Strategy
+- `Trend Following`
+- `Mean Reversion`
+- `Breakout`
+- `AI Hybrid`
+- `EMA Cross`
+- `Momentum Continuation`
+- `Pullback Trend`
+- `Volatility Breakout`
+- `MACD Trend`
+- `Range Fade`
 
-Momentum strategies assume that assets trending in a direction will continue moving in that direction.
+## Strategy Engine
 
-### Logic
+Primary implementation files:
+- `src/strategy/strategy.py`
+- `src/strategy/strategy_registry.py`
 
-Short moving average crosses above long moving average → BUY
+The strategy engine computes features from candle data and emits signal metadata such as action, confidence, and reason.
 
-Short moving average crosses below long moving average → SELL
+### Inputs
+- OHLCV candles
+- indicator calculations
+- strategy parameters from settings
+- optional news bias context
 
-### Indicators
+### Computed Features
+Repo evidence shows feature use such as:
+- RSI
+- EMA fast / slow
+- ATR
+- momentum
+- MACD line / signal / histogram
+- volatility ratios
+- trend strength
+- band or pullback positioning
 
-- Moving Average (MA)
-- Exponential Moving Average (EMA)
+## Parameter Set
 
--------------------------------------------------------------------------------------------------------
+Settings-backed strategy parameters include:
 
-## Mean Reversion Strategy
+- RSI period
+- EMA fast
+- EMA slow
+- ATR period
+- oversold threshold
+- overbought threshold
+- breakout lookback
+- minimum confidence
+- signal amount
 
-Mean reversion assumes prices return to their average over time.
+## Preset Behavior
 
-### Logic
+### Trend Following
+Favors aligned directional movement and trend confirmation.
 
-Price significantly below average → BUY
+### Mean Reversion
+Looks for exhaustion or oversold / overbought conditions.
 
-Price significantly above average → SELL
+### Breakout
+Focuses on breakout windows, lookback context, and follow-through.
 
-### Indicators
+### AI Hybrid
+Blends model or AI-style confidence with strategy filtering and runtime context.
 
-- Bollinger Bands
-- Z-score
-- Moving Average
+### EMA Cross / MACD / Momentum / Pullback / Range Variants
+These presets expand the original set into more specialized directional, continuation, fade, and breakout behaviors.
 
-------------------------------------------------------------------------------------
+## Strategy Selection In The App
 
-## Arbitrage Strategy
+Strategies can be selected from:
+- the dashboard before launch
+- the settings window inside the terminal
+- backtesting and optimization workspaces
 
-Arbitrage strategies exploit price differences between exchanges.
+## Strategy Review Loop
 
-Example:
+A practical repo-backed workflow is:
 
-BTC price on Exchange A = 68000  
-BTC price on Exchange B = 68500
+1. choose the strategy in the dashboard or settings
+2. backtest the symbol and timeframe you plan to trade
+3. validate manual execution and order-state handling
+4. review the strategy in `Recommendations`, `Strategy Scorecard`, `Closed Journal`, and `Journal Review`
+5. only then allow AI trading to run that strategy on real broker data
 
-Trade:
+## Backtesting And Comparison
 
-Buy Exchange A  
-Sell Exchange B
+The repo now supports backtesting and optimization selection for:
+- symbol
+- strategy
+- timeframe
 
-Profit = spread − fees
+Strategy analytics also show up in the UI through recommendation, scorecard, or performance-style views.
 
-----------------------------------------------------------------------------------------------
+## Operational Guidance
 
-## Machine Learning Strategies
-
-Machine learning models predict market behavior using historical data.
-
-Examples:
-
-- Random Forest
-- XGBoost
-- Hidden Markov Models
-
-These models use features generated in the `data/features` pipeline.
-
------------------------------------------------------------------------------------------
-
-## Risk Controls
-
-Every strategy must pass through the risk engine before execution.
-
-Risk checks include:
-
-- max position size
-- portfolio exposure
-- drawdown protection
+1. Validate strategies on paper or practice first.
+2. Separate signal quality from execution quality.
+3. Confirm rejected-order handling as well as successful fills.
+4. Review performance by strategy, not only overall PnL.
+5. Use the journal and trade checklist to understand why a setup worked or failed.

@@ -1,17 +1,50 @@
-# Welcome to MkDocs
+# Documentation Home
 
-For full documentation visit [mkdocs.org](https://www.mkdocs.org).
+Sopotek Trading AI is a desktop trading workstation for broker connectivity, charting, manual and AI-assisted execution, analytics, journaling, and operational control.
 
-## Commands
+## Start Here
 
-* `mkdocs new [dir-name]` - Create a new project.
-* `mkdocs serve` - Start the live-reloading docs server.
-* `mkdocs build` - Build the documentation site.
-* `mkdocs -h` - Print help message and exit.
+- [Getting Started](../getting-started.md)
+- [Full App Guide](../FULL_APP_GUIDE.md)
+- [UI Workspace Guide](../ui-workspace.md)
+- [Brokers And Modes](../brokers-and-modes.md)
+- [Integrations](../integrations.md)
+- [Troubleshooting](../troubleshooting.md)
 
-## Project layout
+## What This Documentation Covers
 
-    mkdocs.yml    # The configuration file.
-    docs/
-        index.md  # The documentation homepage.
-        ...       # Other markdown pages, images and other files.
+- how to install and launch the desktop application
+- how dashboard and terminal workflows fit together
+- what the broker adapters and session modes do
+- how strategies, AI trading scope, and risk controls behave
+- how Telegram, OpenAI, speech, screenshots, and remote chart commands work
+- how journaling, trade review, checklists, and post-trade review fit into the workflow
+- how to run tests, build docs, and operate the repo locally
+
+## Quick Facts
+
+- Main UI entry point: `src/frontend/ui/app_controller.py`
+- Main terminal workspace: `src/frontend/ui/terminal.py`
+- Chart engine: `src/frontend/ui/chart/chart_widget.py`
+- Trading engine: `src/core/sopotek_trading.py`
+- Execution flow: `src/execution/execution_manager.py`
+- Broker adapters: `src/broker/`
+- Telegram integration: `src/integrations/telegram_service.py`
+- Voice and speech support: `src/integrations/voice_service.py`
+
+## Recommended First Run
+
+1. Install dependencies from `requirements.txt`.
+2. Launch with `python src\main.py`.
+3. Use `paper`, `practice`, or `sandbox` first.
+4. Confirm balances, candles, charts, and open orders.
+5. Test one small manual order.
+6. Review `Trade Checklist`, `Closed Journal`, and `System Health` before trusting live workflows.
+
+## High-Value Windows To Know
+
+- `System Health`: broker and data-path checks after login
+- `Position Analysis`: broker-aware account and position summary
+- `Trade Checklist`: pre-trade and post-trade discipline form
+- `Closed Journal` and `Journal Review`: history, notes, and weekly/monthly review
+- `Market ChatGPT`: app-aware assistant with voice, screenshots, and command control

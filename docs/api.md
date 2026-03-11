@@ -1,320 +1,113 @@
-docs/api.md
-
-# Sopotek Trading AI – Internal API Documentation
-
-This document describes the internal APIs used by Sopotek Trading AI.
-
-The system is modular and event-driven. Each module communicates through defined interfaces to ensure scalability and
-maintainability.
-
---------------------------------------------------------------------------------------
-
-# Core Components
-
-The main components of the system are:
-
-Market Data  
-Strategy Engine  
-Risk Engine  
-Execution Engine  
-Portfolio Manager  
-Broker Interface
-
-These components communicate using the Event Bus.
-
----
-
-# Event Bus API
-
-The event bus allows components to publish and subscribe to events.
-
-## Publish Event
-
-event_bus.publish(event)
-
-## Subscribe to Event
-
-event_bus.subscribe(event_type, handler)
-
-## Event Structure
-
-{
-"type": "MARKET_DATA",
-"symbol": "BTC/USDT",
-"data": {...}
-}
-
-
----
-
-# Broker API
-
-All broker implementations must inherit from `BaseBroker`.
-
-## Required Methods
-
-### connect()
-
-Establish connection to exchange.
-
-await broker.connect()
-
-### close()
-
-Close exchange connection.
-
-await broker.close()
-
-### fetch_ticker(symbol)
-
-Returns latest ticker information.
-
-Example:
-
-ticker = await broker.fetch_ticker("BTC/USDT")
-
-Response example:
-
-{
-"symbol": "BTC/USDT",
-"price": 68120.5
-}
-
-### fetch_order_book(symbol)
-
-Returns order book data.
-
-orderbook = await broker.fetch_order_book("BTC/USDT")
-
-### create_order()
-
-Submit trade order.
-
-await broker.create_order(
-symbol="BTC/USDT",
-side="BUY",
-amount=0.01,
-type="market"
-)
-
-### cancel_order()
-
-Cancel existing order.
-
-await broker.cancel_order(order_id)
-
-### fetch_balance()
-
-Returns account balance.
-
-Example:
-
-balance = await broker.fetch_balance()
-
-Response example:
-
-{
-"equity": 10000,
-"free": 9500,
-"used": 500
-}
-
-
----
-
-# Strategy API
-
-All strategies inherit from `BaseStrategy`.
-
-## on_bar(candle)
-
-Receives new market data and returns a trading signal.
-
-signal = strategy.on_bar(candle)
-
-Example candle:
-
-{
-"timestamp": "2026-03-07 10:00",
-"open": 68000,
-"high": 68200,
-"low": 67900,
-"close": 68100,
-"volume": 120
-}
-
-Example signal:
-
-{
-"symbol": "BTC/USDT",
-"side": "BUY",
-"amount": 0.01
-}
-
-
----
-
-# Risk Engine API
-
-Ensures trades comply with risk rules.
-
-## validate_trade()
-
-approved, message = risk_engine.validate_trade(price, quantity)
-
-## position_size()
-
-Calculates optimal position size.
-
-size = risk_engine.position_size(entry_price, stop_price)
-
-
----
-
-# Execution Manager API
-
-Handles order routing to broker.
-
-## execute_order()
-
-await execution_manager.execute_order(order)
-
-Order example:
-
-{
-"symbol": "BTC/USDT",
-"side": "BUY",
-"amount": 0.01
-}
-
-
----
-
-# Portfolio Manager API
-
-Tracks positions and PnL.
-
-## update_position()
-
-portfolio.update_position(symbol, quantity, price)
-
-## get_positions()
-
-positions = portfolio.get_positions()
-
-Example response:
-
-[
-{
-"symbol": "BTC/USDT",
-"quantity": 0.01,
-"entry_price": 68000
-}
-]
-
-
----
-
-# Market Data API
-
-Handles real-time data streaming.
-
-## subscribe()
-
-Subscribe to market data.
-
-market_data.subscribe("BTC/USDT")
-
-## on_tick()
-
-Processes incoming tick data.
-
-market_data.on_tick(data)
-
-Example tick:
-
-{
-"symbol": "BTC/USDT",
-"price": 68120,
-"timestamp": 1710000000
-}
-
-
----
-
-# Backtesting API
-
-Simulates trading strategies on historical data.
-
-## run()
-
-results = backtest_engine.run(dataframe)
-
-Example output:
-
-{
-"total_profit": 4200,
-"win_rate": 0.56,
-"max_drawdown": 800
-}
-
-
----
-
-# Storage API
-
-Handles persistence of trades and market data.
-
-## save_trade()
-
-trade_repository.save_trade(symbol, side, quantity, price)
-
-## get_trades()
-
-trades = trade_repository.get_trades()
-
-
----
-
-# Configuration API
-
-Configuration values are loaded from the `config/` folder.
-
-Example:
-
-from config.settings import settings
-
-settings.exchanges
-settings.strategies
-settings.risk
-
-
----
-
-# Testing API
-
-Run tests using:
-
-pytest tests/
-
-
----
-
-# Supported Markets
-
-Crypto → CCXT  
-Forex → OANDA  
-Stocks → Alpaca
-
----
-
-# Future API Extensions
-
-Planned additions include:
-
-- portfolio optimization API
-- reinforcement learning strategies
-- distributed strategy execution
-- GPU model inference
-
----
+# Internal API Notes
+
+## Entry Point
+
+- Application bootstrap: `src/main.py`
+- Main controller: `src/frontend/ui/app_controller.py`
+- Main terminal UI: `src/frontend/ui/terminal.py`
+
+## Core Interfaces
+
+### Broker Interface
+Representative broker behaviors used across adapters include:
+- `fetch_symbol()` or exchange symbol discovery
+- `fetch_balance()`
+- `fetch_ticker(symbol)`
+- `fetch_ohlcv(symbol, timeframe, limit)`
+- `fetch_orderbook(symbol)`
+- `fetch_positions()`
+- `fetch_open_orders()`
+- `create_order(...)`
+- `cancel_order(...)`
+- `fetch_order(order_id, symbol=None)` where supported
+
+### Execution Manager
+Primary file:
+- `src/execution/execution_manager.py`
+
+Key behavior surfaces include:
+- broker-aware normalization of order input
+- behavior-guard interception
+- order-state tracking and persistence
+- source tagging such as manual, bot, and chatgpt
+- rejected-order normalization
+
+### Strategy Interface
+Primary files:
+- `src/strategy/strategy.py`
+- `src/strategy/strategy_registry.py`
+
+The strategy layer exposes normalized strategy selection and signal reasoning behavior used by the terminal, bot, and analytics windows.
+
+### Controller Signals
+`AppController` publishes runtime signals such as:
+- symbols
+- candles
+- equity
+- trade updates
+- ticker updates
+- connection status
+- orderbook updates
+- news updates
+- AI signal monitor updates
+- strategy debug updates
+- autotrade toggle changes
+- license changes
+
+## Persistence APIs
+
+### Database
+- `src/storage/database.py`
+
+### Trade Repository
+- `src/storage/trade_repository.py`
+
+### Market Data Repository
+- `src/storage/market_data_repository.py`
+
+These APIs back local trade history, journal data, and market-data persistence.
+
+## Integration APIs
+
+### Telegram
+- `src/integrations/telegram_service.py`
+
+Supports:
+- bot polling
+- status, balances, positions, orders, screenshots, chart screenshots
+- command keyboard
+- plain-text ChatGPT relay and slash-command relay
+
+### OpenAI And Voice
+- OpenAI controller flow: `src/frontend/ui/app_controller.py`
+- local voice integration: `src/integrations/voice_service.py`
+
+Supports:
+- runtime context chat
+- Telegram question routing
+- Market ChatGPT in-app conversation
+- speech recognition and spoken replies
+
+### Review And Journal APIs
+Relevant surfaces span:
+- `src/storage/trade_repository.py`
+- `src/frontend/ui/app_controller.py`
+- `src/frontend/ui/terminal.py`
+
+These are responsible for:
+- merged closed-trade history
+- journal-field persistence
+- weekly and monthly review summaries
+- trade-history analysis consumed by Market ChatGPT
+
+## Testing Surfaces
+
+Representative tests include:
+- `src/tests/test_execution.py`
+- `src/tests/test_storage_runtime.py`
+- `src/tests/test_other_broker_adapters.py`
+- `src/tests/test_news_service.py`
+- `src/tests/test_telegram_service.py`
+- `src/tests/test_strategy_runtime.py`
+- `src/tests/test_chart_indicators.py`
+- `src/tests/test_chart_items.py`

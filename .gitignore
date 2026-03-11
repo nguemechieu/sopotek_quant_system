@@ -10,3 +10,7 @@ data/
 src/Sopotek_Screenshot_*.png
 src/reports/*.csv
 src/reports/*.pdf
+# Ignore generated docs and runtime artifacts
+output/docs-site/
+output/screenshots/
+src/output/

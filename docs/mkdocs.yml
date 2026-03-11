@@ -1,82 +1,45 @@
 site_name: Sopotek Trading AI
-site_description: Institutional-grade event-driven algorithmic trading platform
-site_author: Sopotek Technologies
-repo_url: https://github.com/sopotek/sopotek-trading-ai
-repo_name: sopotek-trading-ai
+site_description: Desktop trading workstation by Sopotek Corporation
+site_author: Sopotek Corporation
+repo_url: https://github.com/nguemechieu/sopotek-trading-ai
+repo_name: nguem/sopotek-trading-ai
+
+docs_dir: .
+site_dir: ../output/docs-site
 
 theme:
   name: material
-  logo: ./src/soptek_trading_ai/assets/logo.png
-  favicon:  ./src/soptek_trading_ai/assets/logo.png
   palette:
-    scheme: slate
-    primary: blue
-    accent: blue
+    - scheme: default
+      primary: blue grey
+      accent: blue
   features:
-    - navigation.tabs
     - navigation.sections
     - navigation.expand
+    - navigation.top
+    - content.action.edit
     - search.highlight
     - content.code.copy
 
 nav:
-
-  - Home: index.md
-
-  - Getting Started:
-      - Installation: installation.md
-      - Configuration: configuration.md
-      - Running the System: running.md
-
-  - Architecture:
-      - Overview: architecture.md
-      - Event Bus: event_bus.md
-      - Trading Engine: trading_engine.md
-      - Market Data Engine: market_data_engine.md
-      - Strategy Engine: strategy_engine.md
-      - Risk Engine: risk_engine.md
-      - Execution Engine: execution_engine.md
-      - Portfolio Engine: portfolio_engine.md
-
-  - Strategies:
-      - Strategy Overview: strategies.md
-      - Momentum Strategy: momentum_strategy.md
-      - Mean Reversion: mean_reversion.md
-      - Arbitrage Strategy: arbitrage_strategy.md
-      - ML Strategies: ml_strategies.md
-
-  - Machine Learning:
-      - ML Pipeline: ml_pipeline.md
-      - Feature Engineering: feature_engineering.md
-      - Model Training: model_training.md
-
-  - Backtesting:
-      - Backtesting Engine: backtesting.md
-      - Performance Metrics: metrics.md
-
-  - Brokers:
-      - CCXT Broker: ccxt_broker.md
-      - OANDA Broker: oanda_broker.md
-      - Alpaca Broker: alpaca_broker.md
-
-  - API Reference:
-      - Core API: api_core.md
-      - Strategy API: api_strategy.md
-      - Broker API: api_broker.md
-
-  - Development:
-      - Contributing: contributing.md
-      - Testing: testing.md
-      - Roadmap: roadmap.md
-
+  - Home: docs/index.md
+  - Getting Started: getting-started.md
+  - Full App Guide: FULL_APP_GUIDE.md
+  - Architecture: architecture.md
+  - Strategies: strategy_docs.md
+  - Brokers And Modes: brokers-and-modes.md
+  - UI Workspace: ui-workspace.md
+  - Integrations: integrations.md
+  - Internal API Notes: api.md
+  - Testing And Operations: testing-and-operations.md
+  - Troubleshooting: troubleshooting.md
+  - Development Notes: development.md
 
 markdown_extensions:
-
   - admonition
+  - tables
   - toc:
       permalink: true
-  - tables
-  - codehilite
   - pymdownx.superfences
   - pymdownx.details
   - pymdownx.highlight
@@ -85,8 +48,3 @@ markdown_extensions:
 
 plugins:
   - search
-
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/sopotek

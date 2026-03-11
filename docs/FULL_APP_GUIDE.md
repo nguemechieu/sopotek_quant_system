@@ -1,207 +1,257 @@
-# Sopotek Trading AI - Full Application Guide
+# Full App Guide
 
-## 1) What this app is
-Sopotek Trading AI is an event-driven trading application with:
-- Broker integrations (live and paper trading)
-- Real-time market data via websockets
-- Desktop UI (PySide6 + PyQtGraph)
-- Model persistence/checkpoint helpers
-- Basic backtest/reporting placeholders
+## Overview
 
-Current maturity: **alpha**. Core skeleton and module structure are in place; some advanced flows are currently lightweight implementations.
+Sopotek Trading AI is a desktop workstation that combines:
 
-## 2) High-level architecture
+- broker connection and session setup
+- live candles, orderbook views, and indicator studies
+- chart-linked manual trading and AI-assisted execution
+- risk, behavior, and session-safety tooling
+- backtesting, optimization, journaling, and trade review
+- Telegram notifications, command control, screenshots, and ChatGPT-assisted workflows
 
-```mermaid
-flowchart LR
-    UI["Frontend UI\nDashboard + Terminal"] --> APP["Controller / Trading App (external or app-specific)"]
-    APP --> BM["BrokerManager"]
-    BM --> PB["PaperBroker"]
-    BM --> AB["AlpacaBroker"]
-    APP --> WS["WebSocket Clients"]
-    WS --> EB["Event Bus (Event/EventType)"]
-    EB --> UI
-    APP --> MODELS["ModelManager / CheckpointManager"]
-    UI --> REPORTS["ReportGenerator"]
-```
+## Main Screens
 
-## 3) Repository layout
+## Dashboard
 
-```text
-sopotek-trading-ai/
-  pyproject.toml
-  requirements.txt
-  README.md
-  RELEASE_CHECKLIST.md
-  docs/
-    FULL_APP_GUIDE.md
-  src/
-    sopotek_trading_ai/
-      __main__.py
-      broker/
-      manager/
-      market_data/websocket/
-      event_bus/
-      frontend/ui/
-      backend/
-      models/
-      config/
-```
+The dashboard is the launch surface for:
 
-## 4) Component reference
+- broker type and exchange selection
+- mode selection (`paper`, `practice`, `sandbox`, `live`)
+- credentials and account details
+- strategy selection
+- profile save/load behavior
+- venue preference such as spot or option where supported
+- live safety interlock and licensing checks
 
-### 4.1 Broker layer
-- `broker/base_broker.py`
-  - Abstract async broker contract (`connect`, `close`, `fetch_balance`, `create_order`, `cancel_order`).
-- `broker/PaperBroker.py`
-  - In-memory paper execution: tracks balance, positions, orders, and unrealized PnL.
-- `broker/alpaca_broker.py`
-  - Alpaca integration through `alpaca_trade_api` REST client.
+## Terminal
 
-### 4.2 Broker orchestration
-- `manager/broker_manager.py`
-  - Registers brokers by asset class.
-  - Routes symbols to broker (`BTC/USDT` -> crypto, `EUR_USD` -> forex, `AAPL` -> stocks).
-  - Connect/close all registered brokers concurrently.
+The terminal is the main operator workspace. Evidence in `src/frontend/ui/terminal.py` shows support for:
 
-### 4.3 Market data and events
-- `market_data/websocket/alpaca_web_socket.py`
-- `market_data/websocket/coinbase_web_socket.py`
-  - Stream ticks/quotes and publish normalized events.
-- `event_bus/event.py`
-  - Event dataclass.
-- `event_bus/event_types.py`
-  - Event type enum (`MARKET_TICK`).
+- market watch and watchlist-scoped symbol selection
+- chart tabs plus detached/floating chart windows
+- timeframe controls and utility buttons
+- screenshot capture and chart-focused actions
+- manual trade ticket and chart trading interactions
+- trade log, open orders, positions, closed journal, and trade review
+- AI signal monitor, recommendations, strategy scorecard, and behavior guard status
+- risk heatmap, system status, system health, and performance analytics
+- Market ChatGPT, settings, documentation, and licensing windows
 
-### 4.4 UI
-- `frontend/ui/dashboard.py`
-  - Login/config dashboard with saved account handling.
-- `frontend/ui/terminal.py`
-  - Main trading terminal and panels (charts, trade logs, AI monitor, risk views, etc.).
-- `frontend/ui/chart/ChartWidget.py`
-  - Chart wrapper with fallback behavior if graph dependency is unavailable.
-- `frontend/ui/system_console.py`
-  - Logging widget/fallback logger.
-- `frontend/ui/report_generator.py`
-  - Lightweight export helpers.
-- `frontend/ui/login_dialog.py`
-  - Minimal credential dialog.
+## Charts
 
-### 4.5 Backend helpers
-- `backend/strategy/backtest_engine.py`
-  - Backtest stub used by the terminal flow.
-- `backend/utils/utils.py`
-  - Data normalization helper (`candles_to_df`).
+The chart engine in `src/frontend/ui/chart/chart_widget.py` supports:
 
-### 4.6 Models and persistence
-- `models/model_manager.py`
-  - Save/load model artifacts.
-- `models/checkpoints/checkpoint_manager.py`
-  - Save periodic checkpoint files.
+- candlestick rendering with MT4-style body and wick handling
+- orderbook heatmap updates
+- live bid/ask and last-price line updates
+- lower indicator panes and overlays
+- Fibonacci retracement overlay
+- news markers and news detail labels drawn on the chart
+- detachable single-chart windows
+- tiled and cascaded detached charts
+- restored detached chart layouts through settings
+- chart-driven manual trade interactions including entry, SL, and TP context actions
 
-### 4.7 Credentials
-- `config/credential_manager.py`
-  - Secure account profile storage via `keyring`.
+## Chart Trading
 
-## 5) Runtime flows
+The chart workflow now supports a more MT4-like interaction model:
 
-### 5.1 Login/connect flow
-1. User enters broker config on `Dashboard`.
-2. Config is emitted via `login_requested` signal.
-3. Controller handles async login and broker initialization.
-4. On success, terminal can be opened and streaming enabled.
+- double-click a chart price level to open a manual trade ticket
+- right-click chart levels for `Buy Limit Here`, `Sell Limit Here`, `Set Entry Here`, `Set Stop Loss Here`, and `Set Take Profit Here`
+- drag chart trade levels when the trade ticket is open
+- use broker-aware formatting for amount, SL, TP, and entry values
+- receive suggested SL/TP automatically while still being able to adjust them manually
 
-### 5.2 Market data flow
-1. Websocket client subscribes by symbol.
-2. Incoming payload is normalized.
-3. `Event(type=MARKET_TICK, data=...)` is published.
-4. UI/controller consumers update charts/tables/state.
+## Indicators
 
-### 5.3 Order flow
-1. UI triggers order action.
-2. Broker selection via `BrokerManager.get_broker(symbol)`.
-3. Order dispatched to selected broker (paper/live).
-4. Position, balance, and logs are refreshed.
+Repo evidence shows support for a broad MT4-style indicator set plus some extra overlays.
 
-## 6) Setup and install
+### Overlays
+- `Moving Average`, `EMA`, `SMMA`, `LWMA`
+- `VWAP`
+- `Bollinger Bands`, `Envelopes`, `Donchian`, `Keltner`
+- `Ichimoku`, `Alligator`, `Parabolic SAR`, `Fractals`, `ZigZag`
+- `Fibonacci Retracement`
+- `Volumes`
 
-### 6.1 Local development
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-python -m pip install -U pip
-python -m pip install -r requirements.txt
-```
+### Lower-Pane Indicators
+- `ADX`, `ATR`, `StdDev`
+- `Accumulation Distribution`, `MFI`, `OBV`
+- `Momentum`, `Bulls Power`, `Bears Power`, `Force Index`
+- `AC`, `AO`, `OsMA`, `Gator`, `Market Facilitation Index`
+- `CCI`, `DeMarker`, `MACD`, `RSI`, `RVI`, `Stochastic`, `Williams %R`
 
-### 6.2 Package install
-```bash
-python -m pip install .
-```
+## Strategies
 
-### 6.3 Dev tools
-```bash
-python -m pip install -U build twine pytest
-```
+The runtime registry now includes more than the original small preset list. Repo evidence supports presets such as:
 
-## 7) Testing, build, and release
+- `Trend Following`
+- `Mean Reversion`
+- `Breakout`
+- `AI Hybrid`
+- `EMA Cross`
+- `Momentum Continuation`
+- `Pullback Trend`
+- `Volatility Breakout`
+- `MACD Trend`
+- `Range Fade`
 
-### 7.1 Run tests
-```bash
-set PYTHONPATH=src
-python -m unittest discover -s tests -p "test_*.py" -v
-```
+The settings-backed parameter set includes:
 
-### 7.2 Build package artifacts
-```bash
-python -m build
-```
+- RSI period
+- EMA fast / slow
+- ATR period
+- oversold / overbought thresholds
+- breakout lookback
+- minimum confidence
+- signal amount
 
-### 7.3 Validate package metadata
-```bash
-python -m twine check dist/*
-```
+## Auto-Trading Scope
 
-### 7.4 Publish
-```bash
-python -m twine upload dist/*
-```
+The controller persists and applies AI scope settings for:
 
-## 8) Configuration
+- `All Symbols`
+- `Selected Symbol`
+- `Watchlist`
 
-Use `.env` for credentials and runtime secrets.
+The Market Watch UI can mark symbols for watchlist-scoped trading.
 
-Example:
-```env
-ALPACA_API_KEY=your_key
-ALPACA_SECRET=your_secret
-```
+## Orders And Trade State
 
-Security guidance:
-- Never commit real secrets.
-- `.env` is gitignored.
-- Prefer OS keyring for long-lived credential storage.
+The execution layer supports:
 
-## 9) Dependency notes
+- order preparation and broker-aware formatting
+- broker order submission
+- follow-up order tracking through `fetch_order()` where supported
+- terminal statuses such as `submitted`, `open`, `filled`, `canceled`, and `rejected`
+- open-order refresh in the UI
+- local persistence to the trade repository
+- source tagging such as `manual`, `bot`, and `chatgpt`
 
-For compatibility with `alpaca-trade-api` the project constrains:
-- `urllib3<2`
-- `websockets<11`
+## Risk, Behavior, And Safety
 
-If your environment already has newer versions, reinstall with project constraints:
-```bash
-python -m pip install -U "urllib3<2" "websockets<11"
-python -m pip install -r requirements.txt
-```
+The repo now includes several safety layers:
 
-## 10) Known limitations (alpha)
+- risk profiles such as `Capital Preservation`, `Conservative`, `Balanced`, `Growth`, `Active Trader`, and `Aggressive`
+- behavior guard limits for overtrading, size jumps, loss streaks, and drawdown locks
+- kill switch and resume flow
+- live safety interlock on launch
+- system health checks after session initialization
 
-- Terminal contains many advanced UI hooks that assume a rich external controller runtime.
-- Several backend components are currently placeholders intended for expansion.
-- End-to-end exchange connectivity and strategy execution should be validated in a staging environment before live use.
+## Journal, Checklist, And Review
 
-## 11) Suggested next enhancements
+The operator workflow now includes:
 
-- Add a concrete controller/app runner under `sopotek_trading_ai/app.py`.
-- Expand tests for broker routing, websocket message normalization, and UI signal wiring.
-- Introduce structured logging and runtime configuration schema.
-- Add CI workflow for lint/test/build/twine-check gates.
+- `Closed Journal`
+- `Trade Review`
+- `Journal Review`
+- `Trade Checklist`
+
+These windows support:
+
+- storing journal notes
+- linking reason, setup, TP/SL, outcome, and lessons
+- weekly and monthly review summaries
+- action items and discipline tracking
+- pre-trade validation before clicking submit
+
+## Backtesting And Optimization
+
+The repo includes:
+
+- backtesting engine
+- simulator
+- report generator
+- strategy optimization workspace
+- tester symbol, strategy, and timeframe selectors
+
+These paths are operationally useful, but they should still be validated with your own datasets and symbols before using them to justify risk.
+
+## Performance And Analytics
+
+Performance tooling now includes:
+
+- equity and profitability snapshotting
+- drawdown-aware metrics
+- strategy scorecard and symbol contribution views
+- fee, spread, and slippage analytics
+- trade replay / post-trade review context
+
+## Integrations
+
+Settings expose fields for:
+
+- Telegram enabled / disabled
+- Telegram bot token
+- Telegram chat ID
+- OpenAI API key
+- OpenAI model
+- voice recognition provider
+- speech output provider and voice preferences
+- news feed behavior
+
+Telegram now supports:
+
+- notifications
+- command keyboard
+- screenshots and chart screenshots
+- app status and analysis requests
+- normal ChatGPT-style conversation, not only slash commands
+
+Market ChatGPT inside the app supports:
+
+- app-aware questions
+- trading and order commands with confirmation
+- screenshots
+- Telegram management
+- position analysis
+- voice input and spoken replies
+- trade-history analysis and journal-aware summaries
+
+## Command Workflows
+
+### Telegram
+Repo evidence supports commands and keyboard actions for:
+
+- `/status`
+- `/balances`
+- `/positions`
+- `/orders`
+- `/recommendations`
+- `/performance`
+- `/analysis`
+- `/screenshot`
+- `/chart SYMBOL [TIMEFRAME]`
+- `/chartshot SYMBOL [TIMEFRAME]`
+- plain-text ChatGPT questions
+
+### Market ChatGPT
+Market ChatGPT can:
+
+- explain balances, positions, equity, profitability, and behavior guard status
+- open app windows and panels
+- manage Telegram state
+- trade, cancel, or close positions with confirmation
+- produce screenshots
+- analyze trade history, news, and recommendations using live app context
+
+## Local Persistence
+
+Repo-backed persistence currently includes:
+
+- local SQLite database in `data/sopotek_trading.db`
+- trade repository and market data repository
+- UI preferences and detached chart layouts via `QSettings`
+- saved checklist state and integration settings
+
+## Recommended Operating Practice
+
+1. Start on paper or practice.
+2. Validate a manual order.
+3. Validate a rejected order path.
+4. Validate chart refresh, open orders, positions, journal, and checklist flow.
+5. Validate Telegram or OpenAI features only after the base session is healthy.
+6. Validate Market ChatGPT, screenshots, and remote commands next.
+7. Only then test AI trading or live execution.
