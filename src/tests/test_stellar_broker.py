@@ -893,6 +893,124 @@ def test_stellar_broker_reuses_cached_ohlcv_after_rate_limit(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_stellar_broker_coalesces_concurrent_ohlcv_requests(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    def session_factory():
+        return FakeStellarSession()
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", session_factory)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=None,
+                mode="live",
+                params={"quote_assets": ["USDC", "XLM"], "ohlcv_cache_ttl": 0.0},
+            )
+        )
+
+        await broker.connect()
+        call_count = {"trade_aggregations": 0}
+
+        async def fake_request(method, path, params=None, payload=None):
+            if path == "/trade_aggregations":
+                call_count["trade_aggregations"] += 1
+                await asyncio.sleep(0.05)
+                return {
+                    "_embedded": {
+                        "records": [
+                            {
+                                "timestamp": 1700000000000,
+                                "open": "0.098",
+                                "high": "0.102",
+                                "low": "0.097",
+                                "close": "0.101",
+                                "base_volume": "500.0",
+                            }
+                        ]
+                    }
+                }
+            raise AssertionError(f"Unexpected request path: {path}")
+
+        broker._request = fake_request
+
+        first, second = await asyncio.gather(
+            broker.fetch_ohlcv("XLM/USDC", timeframe="1h", limit=1),
+            broker.fetch_ohlcv("XLM/USDC", timeframe="1h", limit=1),
+        )
+
+        assert first == second
+        assert call_count["trade_aggregations"] == 1
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stellar_broker_enters_ohlcv_cooldown_after_rate_limit_without_cache(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    def session_factory():
+        return FakeStellarSession()
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", session_factory)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=None,
+                mode="live",
+                params={
+                    "quote_assets": ["USDC", "XLM"],
+                    "ohlcv_cache_ttl": 0.0,
+                    "ohlcv_cooldown_seconds": 60.0,
+                    "rate_limit_retries": 0,
+                },
+            )
+        )
+
+        await broker.connect()
+        call_count = {"trade_aggregations": 0, "trades": 0}
+
+        async def fake_request(method, path, params=None, payload=None):
+            if path == "/trade_aggregations":
+                call_count["trade_aggregations"] += 1
+                raise aiohttp.ClientResponseError(
+                    request_info=SimpleNamespace(real_url="https://horizon.stellar.org/trade_aggregations"),
+                    history=(),
+                    status=429,
+                    message="Too Many Requests",
+                    headers={"Retry-After": "0"},
+                )
+            raise AssertionError(f"Unexpected request path: {path}")
+
+        async def fake_fetch_trades(symbol, limit=None):
+            call_count["trades"] += 1
+            raise aiohttp.ClientResponseError(
+                request_info=SimpleNamespace(real_url="https://horizon.stellar.org/trades"),
+                history=(),
+                status=429,
+                message="Too Many Requests",
+                headers={"Retry-After": "0"},
+            )
+
+        broker._request = fake_request
+        broker.fetch_trades = fake_fetch_trades
+
+        first = await broker.fetch_ohlcv("XLM/USDC", timeframe="1h", limit=1)
+        second = await broker.fetch_ohlcv("XLM/USDC", timeframe="1h", limit=1)
+
+        assert first == []
+        assert second == []
+        assert call_count["trade_aggregations"] == 1
+        assert call_count["trades"] == 1
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
 def test_stellar_broker_fetch_ticker_uses_orderbook_mid_without_trades(monkeypatch):
     import broker.stellar_broker as stellar_module
 

@@ -101,6 +101,86 @@ class SopotekTrading:
         strategy_params = getattr(self.controller, "strategy_params", None)
         self.strategy.configure(strategy_name=strategy_name, params=strategy_params)
 
+    def refresh_strategy_preferences(self):
+        self._apply_strategy_preferences()
+        if self.portfolio_allocator is not None:
+            weight_resolver = getattr(self.controller, "active_strategy_weight_map", None) if self.controller is not None else None
+            weights = weight_resolver() if callable(weight_resolver) else {str(getattr(self.controller, "strategy_name", "Trend Following")): 1.0}
+            self.portfolio_allocator.configure_strategy_weights(strategy_weights=weights, allocation_model="equal_weight")
+
+    def _safe_numeric_value(self, value, fallback):
+        if value in (None, ""):
+            return float(fallback)
+        if isinstance(value, str):
+            cleaned = value.strip().replace(",", "")
+            if not cleaned:
+                return float(fallback)
+            value = cleaned
+        try:
+            return float(value)
+        except Exception:
+            return float(fallback)
+
+    def _resolve_starting_equity(self, balance=None):
+        default_equity = self._safe_numeric_value(
+            getattr(self.controller, "initial_capital", 10000),
+            10000,
+        )
+        if not isinstance(balance, dict):
+            return default_equity
+
+        total = balance.get("total")
+        if isinstance(total, dict):
+            for currency in ("USDT", "USD", "USDC", "BUSD"):
+                value = total.get(currency)
+                numeric = self._safe_numeric_value(value, 0.0)
+                if numeric > 0:
+                    return numeric
+            for value in total.values():
+                numeric = self._safe_numeric_value(value, 0.0)
+                if numeric > 0:
+                    return numeric
+        return default_equity
+
+    def _assigned_strategies_for_symbol(self, symbol):
+        resolver = getattr(self.controller, "assigned_strategies_for_symbol", None) if self.controller is not None else None
+        if callable(resolver):
+            try:
+                assigned = list(resolver(symbol) or [])
+            except Exception:
+                assigned = []
+            if assigned:
+                return assigned
+        fallback_name = str(getattr(self.controller, "strategy_name", None) or "Trend Following").strip() or "Trend Following"
+        return [{"strategy_name": fallback_name, "score": 1.0, "weight": 1.0, "rank": 1}]
+
+    def _select_strategy_signal(self, normalized_symbol, candles, dataset):
+        assigned = self._assigned_strategies_for_symbol(normalized_symbol)
+        candidates = []
+        for assignment in assigned:
+            strategy_name = str(assignment.get("strategy_name") or "").strip()
+            if not strategy_name:
+                continue
+            signal = self.signal_engine.generate_signal(
+                candles=candles,
+                dataset=dataset,
+                strategy_name=strategy_name,
+                symbol=normalized_symbol,
+            )
+            if not signal:
+                continue
+            weighted_confidence = float(signal.get("confidence", 0.0) or 0.0) * max(0.0001, float(assignment.get("weight", 0.0) or 0.0))
+            enriched = dict(signal)
+            enriched["strategy_name"] = strategy_name
+            enriched["strategy_assignment_weight"] = float(assignment.get("weight", 0.0) or 0.0)
+            enriched["strategy_assignment_score"] = float(assignment.get("score", 0.0) or 0.0)
+            enriched["strategy_assignment_rank"] = int(assignment.get("rank", 0) or 0)
+            candidates.append((weighted_confidence, float(assignment.get("score", 0.0) or 0.0), enriched))
+        if not candidates:
+            return None, assigned
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2], assigned
+
     def _resolve_execution_strategy(self, symbol, side, amount, price, signal):
         requested = str(signal.get("execution_strategy") or "").strip().lower()
         if requested:
@@ -193,6 +273,33 @@ class SopotekTrading:
                     continue
         return 0.0
 
+    def _hedging_mode_active(self):
+        resolver = getattr(self.controller, "hedging_is_active", None) if self.controller is not None else None
+        if callable(resolver):
+            try:
+                return bool(resolver(self.broker))
+            except Exception:
+                return False
+        return bool(getattr(self.controller, "hedging_enabled", False)) and bool(getattr(self.broker, "hedging_supported", False))
+
+    def _signal_requests_position_reduction(self, signal):
+        signal = signal if isinstance(signal, dict) else {}
+        action = str(signal.get("action") or signal.get("intent") or "").strip().lower()
+        if action in {"exit", "close", "flatten", "reduce"}:
+            return True
+        reason = str(signal.get("reason") or "").strip().lower()
+        return any(token in reason for token in (" close", "flatten", "reduce", "take profit", "stop out"))
+
+    def _execution_params_for_signal(self, signal):
+        params = dict((signal or {}).get("params") or {})
+        if not self._hedging_mode_active():
+            return params
+        params.setdefault(
+            "positionFill",
+            "REDUCE_ONLY" if self._signal_requests_position_reduction(signal) else "OPEN_ONLY",
+        )
+        return params
+
     def _is_exit_like_signal(self, signal_side, position_side, signal):
         normalized_signal = str(signal_side or "").strip().lower()
         normalized_position = str(position_side or "").strip().lower()
@@ -255,6 +362,9 @@ class SopotekTrading:
         return filtered
 
     async def _cancel_stale_exit_orders(self, symbol, side, signal):
+        if self._hedging_mode_active() and not self._signal_requests_position_reduction(signal):
+            return 0, "Hedging mode keeps opposite-side entries open."
+
         positions = await self._fetch_symbol_positions(symbol)
         if not positions:
             return 0, "No live broker position to clean up."
@@ -325,21 +435,24 @@ class SopotekTrading:
             self._record_pipeline_status(normalized_symbol, "data_hub", "empty", "No candles returned for symbol")
             return None
 
-        signal = self.signal_engine.generate_signal(
-            candles=candles,
-            dataset=dataset,
-            strategy_name=getattr(self.controller, "strategy_name", None),
-            symbol=normalized_symbol,
-        )
+        signal, assigned_strategies = self._select_strategy_signal(normalized_symbol, candles, dataset)
 
         features = getattr(dataset, "frame", None)
+        default_strategy_name = str(getattr(self.controller, "strategy_name", None) or "Trend Following").strip() or "Trend Following"
+        display_strategy_name = signal.get("strategy_name") if isinstance(signal, dict) else None
+        if not display_strategy_name:
+            display_strategy_name = ", ".join(
+                str(item.get("strategy_name") or "").strip()
+                for item in assigned_strategies[:3]
+                if str(item.get("strategy_name") or "").strip()
+            ) or default_strategy_name
         display_signal = signal or {
             "symbol": normalized_symbol,
             "side": "hold",
             "amount": 0.0,
             "confidence": 0.0,
             "reason": "No entry signal on the latest scan.",
-            "strategy_name": getattr(self.controller, "strategy_name", None),
+            "strategy_name": display_strategy_name,
         }
 
         if publish_debug and self.controller and hasattr(self.controller, "publish_ai_signal"):
@@ -409,19 +522,7 @@ class SopotekTrading:
 
 
         balance = getattr(self.controller, "balances", {}) or {}
-        equity = float(getattr(self.controller, "initial_capital", 10000) or 10000)
-        if isinstance(balance, dict):
-            total = balance.get("total")
-            if isinstance(total, dict):
-                for currency in ("USDT", "USD", "USDC", "BUSD"):
-                    value = total.get(currency)
-                    if value is None:
-                        continue
-                    try:
-                        equity = float(value)
-                        break
-                    except Exception:
-                        continue
+        equity = self._resolve_starting_equity(balance)
 
 
 
@@ -433,9 +534,11 @@ class SopotekTrading:
             max_gross_exposure_pct=getattr(self.controller, "max_gross_exposure_pct", 30),
         )
         active_strategy = getattr(self.controller, "strategy_name", None) or "Trend Following"
+        weight_resolver = getattr(self.controller, "active_strategy_weight_map", None) if self.controller is not None else None
+        strategy_weights = weight_resolver() if callable(weight_resolver) else {str(active_strategy): 1.0}
         self.portfolio_allocator = PortfolioAllocator(
             account_equity=equity,
-            strategy_weights={str(active_strategy): 1.0},
+            strategy_weights=strategy_weights,
             allocation_model="equal_weight",
             max_strategy_allocation_pct=1.0,
             rebalance_threshold_pct=0.15,
@@ -631,6 +734,7 @@ class SopotekTrading:
             return
 
         execution_strategy = self._resolve_execution_strategy(symbol, side, amount, price, signal)
+        execution_params = self._execution_params_for_signal(signal)
 
         order = await self.execution_manager.execute(
             symbol=symbol,
@@ -645,7 +749,7 @@ class SopotekTrading:
             pnl=signal.get("pnl"),
             execution_strategy=execution_strategy,
             type=signal.get("type", "market"),
-            params=signal.get("params"),
+            params=execution_params,
         )
 
         return order

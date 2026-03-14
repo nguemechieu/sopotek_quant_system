@@ -270,6 +270,24 @@ def test_handle_market_chat_action_can_close_position_from_pilot():
     assert "Order ID: close-123" in reply
 
 
+def test_close_market_chat_position_rejects_ambiguous_hedge_symbol_without_side():
+    controller = _make_controller()
+    controller.hedging_enabled = True
+    controller.hedging_is_active = lambda broker=None: True
+    controller.broker = SimpleNamespace()
+    controller._market_chat_positions_snapshot = lambda: [
+        {"symbol": "EUR/USD", "position_id": "EUR/USD:long", "position_side": "long", "amount": 1000.0, "side": "long"},
+        {"symbol": "EUR/USD", "position_id": "EUR/USD:short", "position_side": "short", "amount": 1000.0, "side": "short"},
+    ]
+
+    try:
+        asyncio.run(controller.close_market_chat_position("EUR/USD"))
+    except RuntimeError as exc:
+        assert "multiple hedge legs" in str(exc).lower()
+    else:
+        raise AssertionError("Expected ambiguous hedge close to raise RuntimeError")
+
+
 def test_handle_market_chat_action_can_summarize_recent_bug_logs():
     controller = _make_controller()
     opened = []
@@ -323,3 +341,64 @@ def test_margin_closeout_snapshot_uses_reported_or_derived_balance_metrics():
     assert abs(float(snapshot["ratio"]) - 0.62) < 1e-9
     assert snapshot["blocked"] is True
     assert "blocked" in snapshot["reason"].lower()
+
+
+def test_assign_ranked_strategies_to_symbol_persists_top_ranked_variants():
+    stored = {}
+    controller = AppController.__new__(AppController)
+    controller.settings = SimpleNamespace(setValue=lambda key, value: stored.__setitem__(key, value))
+    controller.multi_strategy_enabled = True
+    controller.max_symbol_strategies = 3
+    controller.symbol_strategy_assignments = {}
+    controller.symbol_strategy_rankings = {}
+    controller.time_frame = "1h"
+    controller.trading_system = None
+
+    assigned = controller.assign_ranked_strategies_to_symbol(
+        "eur_usd",
+        [
+            {"strategy_name": "EMA Cross | London Session Aggressive", "score": 9.0, "total_profit": 120.0},
+            {"strategy_name": "Trend Following | Scalp Conservative", "score": 6.0, "total_profit": 90.0},
+            {"strategy_name": "MACD Trend", "score": 3.0, "total_profit": 40.0},
+        ],
+        top_n=2,
+        timeframe="4h",
+    )
+
+    assert len(assigned) == 2
+    assert assigned[0]["strategy_name"] == "EMA Cross | London Session Aggressive"
+    assert assigned[1]["strategy_name"] == "Trend Following | Scalp Conservative"
+    assert abs(sum(item["weight"] for item in assigned) - 1.0) < 1e-9
+    assert "EUR/USD" in controller.symbol_strategy_assignments
+    assert "strategy/symbol_assignments" in stored
+
+
+def test_assign_strategy_to_symbol_persists_manual_symbol_override_and_can_clear_it():
+    stored = {}
+    controller = AppController.__new__(AppController)
+    controller.settings = SimpleNamespace(setValue=lambda key, value: stored.__setitem__(key, value))
+    controller.multi_strategy_enabled = False
+    controller.max_symbol_strategies = 3
+    controller.symbol_strategy_assignments = {}
+    controller.symbol_strategy_rankings = {}
+    controller.time_frame = "1h"
+    controller.strategy_name = "Trend Following"
+    controller.trading_system = None
+
+    assigned = controller.assign_strategy_to_symbol(
+        "eur_usd",
+        "EMA Cross | London Session Aggressive",
+        timeframe="4h",
+    )
+
+    assert controller.multi_strategy_enabled is True
+    assert assigned == controller.assigned_strategies_for_symbol("EUR/USD")
+    assert assigned[0]["strategy_name"] == "EMA Cross | London Session Aggressive"
+    assert assigned[0]["assignment_mode"] == "single"
+    assert assigned[0]["timeframe"] == "4h"
+
+    removed = controller.clear_symbol_strategy_assignment("EUR/USD")
+
+    assert removed[0]["strategy_name"] == "EMA Cross | London Session Aggressive"
+    assert controller.assigned_strategies_for_symbol("EUR/USD")[0]["strategy_name"] == "Trend Following"
+    assert "strategy/symbol_assignments" in stored

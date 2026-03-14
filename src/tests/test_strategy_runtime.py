@@ -48,6 +48,28 @@ def test_strategy_registry_includes_expanded_strategy_library():
         "MACD Trend",
         "Range Fade",
     }.issubset(available)
+    assert len(available) == 617
+    assert "Trend Following | Scalp Conservative" in available
+    assert "AI Hybrid | Institutional Prime" in available
+
+
+def test_strategy_variant_names_resolve_to_base_signal_family():
+    resolved = Strategy.resolve_signal_strategy_name("EMA Cross | London Session Aggressive")
+
+    assert resolved == "EMA Cross"
+
+
+def test_strategy_registry_applies_variant_parameters():
+    registry = StrategyRegistry()
+
+    strategy = registry.get("Trend Following | Scalp Conservative")
+
+    assert strategy is not None
+    assert strategy.strategy_name == "Trend Following | Scalp Conservative"
+    assert strategy.ema_fast == 8
+    assert strategy.ema_slow == 21
+    assert strategy.min_confidence == 0.64
+    assert strategy.signal_amount == 0.50
 
 
 def test_breakout_strategy_generates_buy_signal_on_range_break():

@@ -7,48 +7,134 @@ from quant.feature_pipeline import FeaturePipeline, FeaturePipelineConfig
 from quant.signal_schema import SignalDecision
 
 
+CORE_STRATEGY_NAMES = (
+    "Trend Following",
+    "Mean Reversion",
+    "Breakout",
+    "AI Hybrid",
+    "EMA Cross",
+    "Momentum Continuation",
+    "Pullback Trend",
+    "Volatility Breakout",
+    "MACD Trend",
+    "Range Fade",
+    "ML Model",
+)
+
+VARIANT_STYLE_PROFILES = (
+    ("Scalp", {"rsi_period": 7, "ema_fast": 8, "ema_slow": 21, "atr_period": 7, "breakout_lookback": 8}),
+    ("Intraday", {"rsi_period": 9, "ema_fast": 12, "ema_slow": 26, "atr_period": 10, "breakout_lookback": 12}),
+    ("Swing", {"rsi_period": 14, "ema_fast": 20, "ema_slow": 50, "atr_period": 14, "breakout_lookback": 20}),
+    ("Position", {"rsi_period": 21, "ema_fast": 34, "ema_slow": 89, "atr_period": 21, "breakout_lookback": 34}),
+    ("Asia Session", {"rsi_period": 10, "ema_fast": 13, "ema_slow": 34, "atr_period": 10, "breakout_lookback": 10}),
+    ("London Session", {"rsi_period": 11, "ema_fast": 15, "ema_slow": 35, "atr_period": 12, "breakout_lookback": 14}),
+    ("New York Session", {"rsi_period": 12, "ema_fast": 17, "ema_slow": 40, "atr_period": 12, "breakout_lookback": 16}),
+    ("Volatility Focus", {"rsi_period": 10, "ema_fast": 18, "ema_slow": 45, "atr_period": 20, "breakout_lookback": 18}),
+    ("Mean Revert Focus", {"rsi_period": 6, "ema_fast": 10, "ema_slow": 24, "atr_period": 9, "breakout_lookback": 12, "oversold_threshold": 30, "overbought_threshold": 70}),
+    ("Trend Strength", {"rsi_period": 16, "ema_fast": 24, "ema_slow": 55, "atr_period": 16, "breakout_lookback": 24}),
+    ("Multi Confirm", {"rsi_period": 14, "ema_fast": 21, "ema_slow": 55, "atr_period": 18, "breakout_lookback": 21}),
+)
+
+VARIANT_RISK_PROFILES = (
+    ("Conservative", {"oversold_threshold": 32, "overbought_threshold": 68, "min_confidence": 0.64, "signal_amount": 0.50}),
+    ("Balanced", {"oversold_threshold": 35, "overbought_threshold": 65, "min_confidence": 0.58, "signal_amount": 1.00}),
+    ("Aggressive", {"oversold_threshold": 38, "overbought_threshold": 62, "min_confidence": 0.54, "signal_amount": 1.35}),
+    ("Institutional", {"oversold_threshold": 34, "overbought_threshold": 66, "min_confidence": 0.60, "signal_amount": 0.85}),
+    ("Quant", {"oversold_threshold": 33, "overbought_threshold": 67, "min_confidence": 0.57, "signal_amount": 1.15}),
+)
+
+BASE_STRATEGY_ALIASES = {
+    "DEFAULT": "Trend Following",
+    "EMA_RSI": "Trend Following",
+    "TREND": "Trend Following",
+    "TREND FOLLOWING": "Trend Following",
+    "MEAN REVERSION": "Mean Reversion",
+    "MEAN_REVERSION": "Mean Reversion",
+    "BREAKOUT": "Breakout",
+    "EMA CROSS": "EMA Cross",
+    "EMA_CROSS": "EMA Cross",
+    "MOMENTUM": "Momentum Continuation",
+    "MOMENTUM CONTINUATION": "Momentum Continuation",
+    "PULLBACK": "Pullback Trend",
+    "PULLBACK TREND": "Pullback Trend",
+    "VOLATILITY": "Volatility Breakout",
+    "VOLATILITY BREAKOUT": "Volatility Breakout",
+    "MACD": "MACD Trend",
+    "MACD_TREND": "MACD Trend",
+    "MACD TREND": "MACD Trend",
+    "RANGE": "Range Fade",
+    "RANGE FADE": "Range Fade",
+    "RSI_MEAN_REVERSION": "Mean Reversion",
+    "AI": "AI Hybrid",
+    "AI HYBRID": "AI Hybrid",
+    "LSTM": "AI Hybrid",
+    "ML": "ML Model",
+    "ML MODEL": "ML Model",
+}
+
+
+def _combine_strategy_params(*param_sets):
+    merged = {}
+    for params in param_sets:
+        if not isinstance(params, dict):
+            continue
+        merged.update(params)
+    return merged
+
+
+def _build_strategy_catalog():
+    catalog = []
+    for base_name in CORE_STRATEGY_NAMES:
+        catalog.append({"name": base_name, "base_name": base_name, "params": {}})
+        for style_label, style_params in VARIANT_STYLE_PROFILES:
+            for profile_label, profile_params in VARIANT_RISK_PROFILES:
+                catalog.append(
+                    {
+                        "name": f"{base_name} | {style_label} {profile_label}",
+                        "base_name": base_name,
+                        "params": _combine_strategy_params(style_params, profile_params),
+                    }
+                )
+
+    catalog.append(
+        {
+            "name": "AI Hybrid | Institutional Prime",
+            "base_name": "AI Hybrid",
+            "params": {
+                "rsi_period": 18,
+                "ema_fast": 34,
+                "ema_slow": 89,
+                "atr_period": 21,
+                "breakout_lookback": 34,
+                "oversold_threshold": 34,
+                "overbought_threshold": 66,
+                "min_confidence": 0.66,
+                "signal_amount": 0.90,
+            },
+        }
+    )
+
+    if len(catalog) != 617:
+        raise RuntimeError(f"Expected 617 strategy catalog entries, found {len(catalog)}.")
+    return tuple(catalog)
+
+
+STRATEGY_CATALOG = _build_strategy_catalog()
+STRATEGY_DEFINITIONS = {entry["name"]: entry for entry in STRATEGY_CATALOG}
+STRATEGY_VARIANT_BASE_MAP = {entry["name"]: entry["base_name"] for entry in STRATEGY_CATALOG}
+STRATEGY_NAME_ALIASES = dict(BASE_STRATEGY_ALIASES)
+for _entry in STRATEGY_CATALOG:
+    _name = str(_entry["name"])
+    STRATEGY_NAME_ALIASES[_name.upper()] = _name
+
+
 class Strategy:
-    AVAILABLE_STRATEGIES = [
-        "Trend Following",
-        "Mean Reversion",
-        "Breakout",
-        "AI Hybrid",
-        "EMA Cross",
-        "Momentum Continuation",
-        "Pullback Trend",
-        "Volatility Breakout",
-        "MACD Trend",
-        "Range Fade",
-        "ML Model",
-    ]
-    PRESET_ALIASES = {
-        "DEFAULT": "Trend Following",
-        "EMA_RSI": "Trend Following",
-        "TREND": "Trend Following",
-        "TREND FOLLOWING": "Trend Following",
-        "MEAN REVERSION": "Mean Reversion",
-        "MEAN_REVERSION": "Mean Reversion",
-        "BREAKOUT": "Breakout",
-        "EMA CROSS": "EMA Cross",
-        "EMA_CROSS": "EMA Cross",
-        "MOMENTUM": "Momentum Continuation",
-        "MOMENTUM CONTINUATION": "Momentum Continuation",
-        "PULLBACK": "Pullback Trend",
-        "PULLBACK TREND": "Pullback Trend",
-        "VOLATILITY": "Volatility Breakout",
-        "VOLATILITY BREAKOUT": "Volatility Breakout",
-        "MACD": "MACD Trend",
-        "MACD_TREND": "MACD Trend",
-        "MACD TREND": "MACD Trend",
-        "RANGE": "Range Fade",
-        "RANGE FADE": "Range Fade",
-        "RSI_MEAN_REVERSION": "Mean Reversion",
-        "AI": "AI Hybrid",
-        "AI HYBRID": "AI Hybrid",
-        "LSTM": "AI Hybrid",
-        "ML": "ML Model",
-        "ML MODEL": "ML Model",
-    }
+    CORE_STRATEGIES = list(CORE_STRATEGY_NAMES)
+    AVAILABLE_STRATEGIES = [entry["name"] for entry in STRATEGY_CATALOG]
+    PRESET_ALIASES = STRATEGY_NAME_ALIASES
+    STRATEGY_CATALOG = STRATEGY_CATALOG
+    STRATEGY_DEFINITIONS = STRATEGY_DEFINITIONS
+    STRATEGY_VARIANT_BASE_MAP = STRATEGY_VARIANT_BASE_MAP
 
     def __init__(self, model=None, strategy_name="Trend Following", feature_pipeline=None):
 
@@ -74,6 +160,23 @@ class Strategy:
         if not label:
             return "Trend Following"
         return cls.PRESET_ALIASES.get(label.upper(), label)
+
+    @classmethod
+    def resolve_signal_strategy_name(cls, strategy_name):
+        normalized = cls.normalize_strategy_name(strategy_name)
+        return cls.STRATEGY_VARIANT_BASE_MAP.get(normalized, normalized)
+
+    @classmethod
+    def strategy_definition(cls, strategy_name):
+        normalized = cls.normalize_strategy_name(strategy_name)
+        definition = cls.STRATEGY_DEFINITIONS.get(normalized)
+        if definition is not None:
+            return dict(definition)
+        return {
+            "name": normalized,
+            "base_name": cls.resolve_signal_strategy_name(normalized),
+            "params": {},
+        }
 
     def set_strategy_name(self, strategy_name):
         self.strategy_name = self.normalize_strategy_name(strategy_name)
@@ -125,7 +228,7 @@ class Strategy:
         return self.generate_signal_from_features(df, strategy_name=strategy_name)
 
     def generate_signal_from_features(self, df, strategy_name=None):
-        selected_name = self.normalize_strategy_name(strategy_name or self.strategy_name)
+        selected_name = self.resolve_signal_strategy_name(strategy_name or self.strategy_name)
         if selected_name == "AI Hybrid":
             ai_signal = self.generate_ai_signal_from_features(df)
             if ai_signal:

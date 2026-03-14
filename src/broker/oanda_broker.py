@@ -26,6 +26,8 @@ class OandaBroker(BaseBroker):
 
         self.logger = logging.getLogger("OandaBroker")
         self.config = config
+        self.exchange_name = "oanda"
+        self.hedging_supported = True
 
         self.token = getattr(config, "api_key", None) or getattr(config, "token", None)
         self.account_id = getattr(config, "account_id", None)
@@ -274,6 +276,49 @@ class OandaBroker(BaseBroker):
             "raw": payload,
         }
 
+    def _normalize_position_leg(self, instrument, leg_side, leg_payload, aggregate_position):
+        if not isinstance(leg_payload, dict):
+            return None
+        units = abs(float(leg_payload.get("units", 0) or 0))
+        if units <= 0:
+            return None
+
+        long_leg = aggregate_position.get("long", {}) or {}
+        short_leg = aggregate_position.get("short", {}) or {}
+        total_units = abs(float(long_leg.get("units", 0) or 0)) + abs(float(short_leg.get("units", 0) or 0))
+        share = (units / total_units) if total_units > 0 else 1.0
+        realized_pl = float(aggregate_position.get("pl", 0) or 0) * share
+        unrealized_pl = float(aggregate_position.get("unrealizedPL", 0) or 0) * share
+        resettable_pl = float(aggregate_position.get("resettablePL", 0) or 0) * share
+        financing = float(aggregate_position.get("financing", 0) or 0) * share
+        dividend_adjustment = float(aggregate_position.get("dividendAdjustment", 0) or 0) * share
+        margin_used = float(aggregate_position.get("marginUsed", 0) or 0) * share
+        value = float(aggregate_position.get("positionValue", 0) or 0) * share
+        signed_units = units if leg_side == "long" else -units
+
+        return {
+            "symbol": instrument,
+            "position_id": f"{instrument}:{leg_side}",
+            "position_key": f"{instrument}:{leg_side}",
+            "position_side": leg_side,
+            "amount": units,
+            "side": leg_side,
+            "entry_price": float(leg_payload.get("averagePrice", 0) or 0),
+            "units": signed_units,
+            "value": value,
+            "pnl": unrealized_pl,
+            "unrealized_pnl": unrealized_pl,
+            "unrealized_pl": unrealized_pl,
+            "realized_pnl": realized_pl,
+            "realized_pl": realized_pl,
+            "resettable_pl": resettable_pl,
+            "financing": financing,
+            "dividend_adjustment": dividend_adjustment,
+            "margin_used": margin_used,
+            "trade_ids": list(leg_payload.get("tradeIDs") or []),
+            "raw": aggregate_position,
+        }
+
     # ===============================
     # CONNECT
     # ===============================
@@ -462,38 +507,92 @@ class OandaBroker(BaseBroker):
                 continue
             long_leg = position.get("long", {}) or {}
             short_leg = position.get("short", {}) or {}
-            long_units = float(long_leg.get("units", 0) or 0)
-            short_units = float(short_leg.get("units", 0) or 0)
-            units = long_units if long_units else -short_units
-            realized_pl = float(position.get("pl", 0) or 0)
-            unrealized_pl = float(position.get("unrealizedPL", 0) or 0)
-            resettable_pl = float(position.get("resettablePL", 0) or 0)
-            financing = float(position.get("financing", 0) or 0)
-            dividend_adjustment = float(position.get("dividendAdjustment", 0) or 0)
-            margin_used = float(position.get("marginUsed", 0) or 0)
-            value = float(position.get("positionValue", 0) or 0)
-            normalized.append(
-                {
-                    "symbol": instrument,
-                    "amount": abs(units),
-                    "side": "long" if units >= 0 else "short",
-                    "entry_price": float(long_leg.get("averagePrice", 0) or short_leg.get("averagePrice", 0) or 0),
-                    "units": units,
-                    "value": value,
-                    "pnl": unrealized_pl,
-                    "unrealized_pnl": unrealized_pl,
-                    "unrealized_pl": unrealized_pl,
-                    "realized_pnl": realized_pl,
-                    "realized_pl": realized_pl,
-                    "resettable_pl": resettable_pl,
-                    "financing": financing,
-                    "dividend_adjustment": dividend_adjustment,
-                    "margin_used": margin_used,
-                    "long_units": long_units,
-                    "short_units": short_units,
-                    "raw": position,
-                }
-            )
+            long_position = self._normalize_position_leg(instrument, "long", long_leg, position)
+            short_position = self._normalize_position_leg(instrument, "short", short_leg, position)
+            if long_position is not None:
+                normalized.append(long_position)
+            if short_position is not None:
+                normalized.append(short_position)
+        return normalized
+
+    async def close_position(
+        self,
+        symbol,
+        amount=None,
+        params=None,
+        order_type="market",
+        position=None,
+        position_side=None,
+        position_id=None,
+    ):
+        instrument = self._normalize_symbol(symbol)
+        target_position = position if isinstance(position, dict) else None
+        if target_position is None:
+            targets = await self.fetch_positions(symbols=[instrument])
+            if position_id:
+                normalized_id = str(position_id).strip().lower()
+                targets = [
+                    item
+                    for item in targets
+                    if str(item.get("position_id") or item.get("id") or "").strip().lower() == normalized_id
+                ]
+            if position_side:
+                normalized_side = str(position_side).strip().lower()
+                targets = [
+                    item
+                    for item in targets
+                    if str(item.get("position_side") or item.get("side") or "").strip().lower() == normalized_side
+                ]
+            if len(targets) > 1:
+                raise ValueError(
+                    f"Multiple hedge legs are open for {instrument}. Choose the long or short leg to close."
+                )
+            target_position = targets[0] if targets else None
+
+        if not isinstance(target_position, dict):
+            return None
+
+        leg_side = str(
+            position_side
+            or target_position.get("position_side")
+            or target_position.get("side")
+            or ""
+        ).strip().lower()
+        if leg_side not in {"long", "short"}:
+            raise ValueError(f"Unable to resolve which hedge leg to close for {instrument}.")
+
+        meta = await self._get_instrument_meta(symbol)
+        units_precision = int(meta.get("tradeUnitsPrecision", 0) or 0)
+        close_amount = self._position_amount(target_position) if amount is None else abs(float(amount))
+        if close_amount <= 0:
+            return None
+
+        payload_key = "shortUnits" if leg_side == "short" else "longUnits"
+        payload_value = "ALL" if amount is None else self._format_units(close_amount, units_precision)
+        payload = {payload_key: payload_value}
+        payload.update(dict(params or {}))
+        response = await self._request(
+            "PUT",
+            f"/v3/accounts/{self.account_id}/positions/{instrument}/close",
+            payload=payload,
+        )
+        close_transaction = (
+            response.get("longOrderCreateTransaction")
+            or response.get("shortOrderCreateTransaction")
+            or {}
+        )
+        close_side = "sell" if leg_side == "long" else "buy"
+        normalized = self._normalize_order_payload(
+            {"order": close_transaction},
+            fallback_symbol=instrument,
+            fallback_side=close_side,
+            fallback_type=order_type,
+            fallback_amount=close_amount,
+        )
+        normalized["amount"] = close_amount
+        normalized["position_side"] = leg_side
+        normalized["position_id"] = target_position.get("position_id") or f"{instrument}:{leg_side}"
+        normalized["status"] = normalized.get("status") or "submitted"
         return normalized
 
     async def fetch_orders(self, symbol=None, limit=None):

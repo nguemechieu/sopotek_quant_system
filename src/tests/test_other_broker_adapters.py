@@ -34,6 +34,7 @@ class FakeOandaSession:
     def __init__(self, *args, **kwargs):
         self.closed = False
         self.last_order_payload = None
+        self.last_close_payload = None
 
     def request(self, method, url, headers=None, params=None, json=None):
         if url.endswith("/pricing"):
@@ -70,10 +71,23 @@ class FakeOandaSession:
             return FakeResponse(
                 {
                     "positions": [
-                        {"instrument": "EUR_USD", "long": {"units": "3", "averagePrice": "1.2"}, "short": {"units": "0"}}
+                        {
+                            "instrument": "EUR_USD",
+                            "long": {"units": "3", "averagePrice": "1.2"},
+                            "short": {"units": "2", "averagePrice": "1.3"},
+                            "pl": "12",
+                            "unrealizedPL": "8",
+                            "marginUsed": "50",
+                            "positionValue": "600",
+                        }
                     ]
                 }
             )
+        if "/positions/" in url and url.endswith("/close"):
+            self.last_close_payload = json
+            if "shortUnits" in (json or {}):
+                return FakeResponse({"shortOrderCreateTransaction": {"id": "3", "instrument": "EUR_USD", "type": "MARKET_ORDER"}})
+            return FakeResponse({"longOrderCreateTransaction": {"id": "4", "instrument": "EUR_USD", "type": "MARKET_ORDER"}})
         if "/cancel" in url:
             return FakeResponse({"orderCancelTransaction": {"id": "1"}})
         if "/orders/" in url:
@@ -159,7 +173,10 @@ def test_oanda_broker_normalizes_common_methods(monkeypatch):
         assert len(await broker.fetch_ohlcv("EUR/USD", timeframe="1h", limit=2)) == 2
         assert (await broker.fetch_balance())["equity"] == 1100.0
         assert await broker.fetch_symbols() == ["EUR_USD", "GBP_USD"]
-        assert (await broker.fetch_positions())[0]["symbol"] == "EUR_USD"
+        positions = await broker.fetch_positions()
+        assert len(positions) == 2
+        assert positions[0]["symbol"] == "EUR_USD"
+        assert {item["position_side"] for item in positions} == {"long", "short"}
         assert len(await broker.fetch_open_orders("EUR/USD")) == 1
         assert len(await broker.fetch_closed_orders("EUR/USD")) == 0
         await broker.close()
@@ -428,6 +445,23 @@ def test_oanda_broker_cancels_orders(monkeypatch):
         all_canceled = await broker.cancel_all_orders(symbol="EUR/USD")
         assert len(all_canceled) == 1
         assert all_canceled[0]["status"] == "canceled"
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_oanda_broker_closes_specific_hedge_leg(monkeypatch):
+    import broker.oanda_broker as oanda_module
+
+    monkeypatch.setattr(oanda_module.aiohttp, "ClientSession", FakeOandaSession)
+
+    async def scenario():
+        broker = OandaBroker(SimpleNamespace(api_key="token", account_id="acct-1", mode="practice"))
+        positions = await broker.fetch_positions(symbols=["EUR/USD"])
+        short_leg = next(item for item in positions if item["position_side"] == "short")
+        result = await broker.close_position("EUR/USD", position=short_leg)
+        assert result["position_side"] == "short"
+        assert broker.session.last_close_payload == {"shortUnits": "ALL"}
         await broker.close()
 
     asyncio.run(scenario())

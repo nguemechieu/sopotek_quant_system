@@ -17,7 +17,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, QDate, QSettings, QDateTime, Signal, QTimer
 from PySide6.QtGui import QAction, QColor, QTextCursor
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QDockWidget,
+    QMainWindow, QWidget, QVBoxLayout, QDockWidget, QSpinBox,
     QTableWidget, QTableWidgetItem,
     QAbstractItemView,
     QPushButton, QLabel, QComboBox, QProgressBar,
@@ -1159,6 +1159,7 @@ class Terminal(QMainWindow):
         self.backtest_menu.addAction(self.action_run_backtest)
         self.action_optimize_strategy = QAction(self)
         self.action_optimize_strategy.triggered.connect(self._optimize_strategy)
+        self.action_optimize_strategy.setShortcut("Ctrl+Shift+O")
         self.backtest_menu.addAction(self.action_optimize_strategy)
 
         self.charts_menu = menu_bar.addMenu("")
@@ -1270,6 +1271,12 @@ class Terminal(QMainWindow):
         self.action_position_analysis = QAction("Position Analysis", self)
         self.action_position_analysis.triggered.connect(self._open_position_analysis_window)
         self.tools_menu.addAction(self.action_position_analysis)
+        self.action_strategy_optimization = QAction("Strategy Optimization", self)
+        self.action_strategy_optimization.triggered.connect(self._optimize_strategy)
+        self.tools_menu.addAction(self.action_strategy_optimization)
+        self.action_strategy_assigner = QAction("Strategy Assigner", self)
+        self.action_strategy_assigner.triggered.connect(self._open_strategy_assignment_window)
+        self.tools_menu.addAction(self.action_strategy_assigner)
 
         self.help_menu = menu_bar.addMenu("")
         self.action_documentation = QAction(self)
@@ -1331,7 +1338,7 @@ class Terminal(QMainWindow):
             self.action_cancel_orders.setText(self._tr("terminal.action.cancel_all"))
             self.action_kill_switch.setText("Emergency Kill Switch")
             self.action_run_backtest.setText(self._tr("terminal.action.run_backtest"))
-            self.action_optimize_strategy.setText(self._tr("terminal.action.optimize"))
+            self.action_optimize_strategy.setText("Strategy Optimization")
             self.action_new_chart.setText(self._tr("terminal.action.new_chart"))
             self.action_multi_chart.setText(self._tr("terminal.action.multi_chart"))
             self.action_detach_chart.setText("Detach Current Tab")
@@ -1359,6 +1366,8 @@ class Terminal(QMainWindow):
             self.action_quant_pm.setText("Quant PM")
             self.action_ml_research.setText("ML Research Lab")
             self.action_position_analysis.setText("Position Analysis")
+            self.action_strategy_optimization.setText("Strategy Optimization")
+            self.action_strategy_assigner.setText("Strategy Assigner")
             self.action_license.setText("License")
             self.action_documentation.setText(self._tr("terminal.action.documentation"))
             self.action_api_docs.setText(self._tr("terminal.action.api_reference"))
@@ -2282,6 +2291,58 @@ class Terminal(QMainWindow):
             self.equity_curve.setData(self.controller.performance_engine.equity_history)
         self._refresh_performance_views()
 
+    def _strategy_family_name(self, strategy_name):
+        normalized = Strategy.normalize_strategy_name(strategy_name)
+        if " | " in normalized:
+            return normalized.split(" | ", 1)[0].strip()
+        return Strategy.resolve_signal_strategy_name(normalized)
+
+    def _grouped_strategy_names(self, selected_strategy=None):
+        names = list(Strategy.AVAILABLE_STRATEGIES)
+        selected = str(selected_strategy or "").strip()
+        if selected and selected not in names:
+            names.append(selected)
+
+        grouped = []
+        seen = set()
+        core_families = list(getattr(Strategy, "CORE_STRATEGIES", []) or [])
+        for family in core_families:
+            family_items = [name for name in names if self._strategy_family_name(name) == family]
+            if not family_items:
+                continue
+            family_items.sort(key=lambda item: (0 if Strategy.normalize_strategy_name(item) == family else 1, item))
+            grouped.append(family_items)
+            seen.update(family_items)
+
+        remaining = [name for name in names if name not in seen]
+        if remaining:
+            remaining.sort()
+            grouped.append(remaining)
+        return grouped
+
+    def _populate_strategy_picker(self, picker, selected_strategy=None):
+        if picker is None:
+            return
+        target = Strategy.normalize_strategy_name(selected_strategy or "")
+        blocked = picker.blockSignals(True)
+        picker.clear()
+        first_group = True
+        for group in self._grouped_strategy_names(selected_strategy=target):
+            if not group:
+                continue
+            if not first_group:
+                picker.insertSeparator(picker.count())
+            for name in group:
+                picker.addItem(name)
+            first_group = False
+        if target:
+            if picker.findText(target) < 0:
+                if picker.count() > 0:
+                    picker.insertSeparator(picker.count())
+                picker.addItem(target)
+            picker.setCurrentText(target)
+        picker.blockSignals(blocked)
+
     def _lookup_symbol_mid_price(self, symbol):
         ticker = None
         ticker_buffer = getattr(self.controller, "ticker_buffer", None)
@@ -2337,6 +2398,9 @@ class Terminal(QMainWindow):
             margin_used = raw.get("margin_used", raw.get("marginUsed"))
             resettable_pl = raw.get("resettable_pl", raw.get("resettablePL"))
             units = raw.get("units")
+            position_id = raw.get("position_id", raw.get("id", raw.get("trade_id")))
+            position_key = raw.get("position_key", raw.get("key", position_id))
+            position_side = raw.get("position_side", side)
         else:
             symbol = getattr(raw, "symbol", "")
             side = getattr(raw, "side", "")
@@ -2349,6 +2413,9 @@ class Terminal(QMainWindow):
             margin_used = getattr(raw, "margin_used", getattr(raw, "marginUsed", None))
             resettable_pl = getattr(raw, "resettable_pl", getattr(raw, "resettablePL", None))
             units = getattr(raw, "units", None)
+            position_id = getattr(raw, "position_id", getattr(raw, "id", getattr(raw, "trade_id", None)))
+            position_key = getattr(raw, "position_key", getattr(raw, "key", position_id))
+            position_side = getattr(raw, "position_side", side)
 
         try:
             amount = float(amount or 0)
@@ -2407,6 +2474,9 @@ class Terminal(QMainWindow):
         return {
             "symbol": normalized_symbol,
             "side": normalized_side,
+            "position_side": str(position_side or normalized_side).lower(),
+            "position_id": str(position_id or "").strip(),
+            "position_key": str(position_key or position_id or "").strip(),
             "amount": abs_amount,
             "units": float(units if units is not None else (abs_amount if normalized_side != "short" else -abs_amount)),
             "entry_price": entry,
@@ -2445,6 +2515,11 @@ class Terminal(QMainWindow):
         if table is None:
             return
         close_all_btn = getattr(self, "positions_close_all_button", None)
+        if table.columnCount() < 8:
+            table.setColumnCount(8)
+            table.setHorizontalHeaderLabels(
+                ["Symbol", "Side", "Amount", "Entry", "Mark", "Value", "P/L", "Action"]
+            )
 
         normalized_positions = []
         for pos in positions or []:
@@ -2452,7 +2527,13 @@ class Terminal(QMainWindow):
             if normalized is not None and normalized["amount"] > 0:
                 normalized_positions.append(normalized)
 
-        normalized_positions.sort(key=lambda item: (item["symbol"], item["side"]))
+        normalized_positions.sort(
+            key=lambda item: (
+                item["symbol"],
+                item["side"],
+                item.get("position_id") or item.get("position_key") or "",
+            )
+        )
         table.setRowCount(len(normalized_positions))
         if close_all_btn is not None:
             close_all_btn.setEnabled(bool(getattr(self.controller, "broker", None)) and bool(normalized_positions))
@@ -2503,26 +2584,28 @@ class Terminal(QMainWindow):
         if not symbol or amount <= 0:
             QMessageBox.warning(self, "Close Position", "Unable to determine a valid position to close.")
             return
+        side_label = str(normalized.get("position_side") or normalized.get("side") or "").strip().upper()
+        descriptor = f"{side_label} {symbol}".strip()
 
         confirm = QMessageBox.question(
             self,
             "Close Position",
-            f"Close {amount:.6f}".rstrip("0").rstrip(".") + f" {symbol} with a market order?",
+            f"Close {amount:.6f}".rstrip("0").rstrip(".") + f" {descriptor} with a market order?",
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        self._run_close_position_task(symbol, amount=amount)
+        self._run_close_position_task(symbol, amount=amount, position=normalized)
 
-    def _run_close_position_task(self, symbol, amount=None):
-        runner = self._close_position_async(symbol, amount=amount, show_dialog=True)
+    def _run_close_position_task(self, symbol, amount=None, position=None):
+        runner = self._close_position_async(symbol, amount=amount, position=position, show_dialog=True)
         create_task = getattr(self.controller, "_create_task", None)
         if callable(create_task):
             create_task(runner, "close_single_position")
         else:
             asyncio.create_task(runner)
 
-    async def _close_position_async(self, symbol, amount=None, show_dialog=True):
+    async def _close_position_async(self, symbol, amount=None, position=None, show_dialog=True):
         controller = getattr(self, "controller", None)
         if controller is None or not hasattr(controller, "close_market_chat_position"):
             if show_dialog:
@@ -2530,12 +2613,17 @@ class Terminal(QMainWindow):
             return
 
         try:
-            result = await controller.close_market_chat_position(symbol, amount=amount)
+            result = await controller.close_market_chat_position(symbol, amount=amount, position=position)
             status_text = str((result or {}).get("status") or "submitted").replace("_", " ").upper()
             amount_text = ""
             if amount is not None:
                 amount_text = f" {float(amount):.6f}".rstrip("0").rstrip(".")
-            self.system_console.log(f"Close position {status_text}: {symbol}{amount_text}", "INFO")
+            side_text = ""
+            if isinstance(position, dict):
+                resolved_side = str(position.get("position_side") or position.get("side") or "").strip().upper()
+                if resolved_side:
+                    side_text = f" [{resolved_side}]"
+            self.system_console.log(f"Close position {status_text}: {symbol}{side_text}{amount_text}", "INFO")
             self._schedule_positions_refresh()
             self._refresh_position_analysis_window()
             if show_dialog:
@@ -10873,15 +10961,15 @@ def _hotfix_backtest_requested_limit(window=None, context=None, fallback=None):
     widget = getattr(window, "_backtest_history_limit", None) if window is not None else None
     if widget is not None:
         try:
-            return max(100, min(int(widget.value()), 50000))
+            return max(1, min(int(widget.value()), 50000))
         except Exception:
             pass
     value = context.get("history_limit", fallback if fallback is not None else 50000)
     try:
-        return max(100, min(int(value), 50000))
+        return max(1, min(int(value), 50000))
     except Exception:
         fallback_value = fallback if fallback is not None else 50000
-        return max(100, min(int(fallback_value), 50000))
+        return max(1, min(int(fallback_value), 50000))
 
 
 def _hotfix_backtest_apply_history_limit(frame, requested_limit):
@@ -10974,9 +11062,16 @@ def _hotfix_backtest_frame_covers_range(frame, start_date, end_date):
     if pd.isna(min_ts) or pd.isna(max_ts):
         return False
 
-    start_ts = pd.Timestamp(f"{start_qdate.toString('yyyy-MM-dd')} 00:00:00", tz="UTC")
-    end_ts = pd.Timestamp(f"{end_qdate.toString('yyyy-MM-dd')} 23:59:59", tz="UTC")
-    return bool(min_ts <= start_ts and max_ts >= end_ts)
+    try:
+        min_day = min_ts.tz_convert("UTC").date() if min_ts.tzinfo is not None else min_ts.date()
+        max_day = max_ts.tz_convert("UTC").date() if max_ts.tzinfo is not None else max_ts.date()
+    except Exception:
+        min_day = min_ts.date()
+        max_day = max_ts.date()
+
+    start_day = pd.Timestamp(f"{start_qdate.toString('yyyy-MM-dd')}").date()
+    end_day = pd.Timestamp(f"{end_qdate.toString('yyyy-MM-dd')}").date()
+    return bool(min_day <= start_day and max_day >= end_day)
 
 
 def _hotfix_backtest_date_bounds(frame):
@@ -11106,12 +11201,7 @@ def _hotfix_refresh_backtest_selectors(self, window=None):
         symbol_picker.setCurrentText(target_symbol)
     symbol_picker.blockSignals(False)
 
-    strategy_picker.blockSignals(True)
-    strategy_picker.clear()
-    for name in list(dict.fromkeys([*Strategy.AVAILABLE_STRATEGIES, target_strategy])):
-        strategy_picker.addItem(name)
-    strategy_picker.setCurrentText(target_strategy)
-    strategy_picker.blockSignals(False)
+    self._populate_strategy_picker(strategy_picker, selected_strategy=target_strategy)
 
     timeframe_picker.blockSignals(True)
     timeframe_picker.clear()
@@ -11605,94 +11695,134 @@ def _hotfix_generate_report(self):
 
 
 def _hotfix_show_optimization_window(self):
-    window = self._get_or_create_tool_window(
-        "strategy_optimization",
-        "Strategy Optimization",
-        width=980,
-        height=640,
-    )
-
-    if getattr(window, "_optimization_container", None) is None:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-
-        status = QLabel("Optimization workspace ready.")
-        status.setStyleSheet("color: #e6edf7; font-weight: 700;")
-        layout.addWidget(status)
-
-        selection_frame = QFrame()
-        selection_frame.setStyleSheet(
-            "QFrame { background-color: #0f1727; border: 1px solid #24344f; border-radius: 10px; }"
-            "QLabel { color: #d7dfeb; font-weight: 700; }"
-            "QComboBox { background-color: #0b1220; color: #f4f8ff; border: 1px solid #2a3d5c; border-radius: 6px; padding: 6px 10px; min-width: 180px; }"
+    try:
+        setattr(self, "_optimization_bootstrapping", True)
+        window = self._get_or_create_tool_window(
+            "strategy_optimization",
+            "Strategy Optimization",
+            width=980,
+            height=640,
         )
-        selection_layout = QGridLayout(selection_frame)
-        selection_layout.setContentsMargins(14, 12, 14, 12)
-        selection_layout.setHorizontalSpacing(16)
-        selection_layout.setVerticalSpacing(8)
 
-        symbol_picker = QComboBox()
-        strategy_picker = QComboBox()
-        timeframe_picker = QComboBox()
-        selection_layout.addWidget(QLabel("Optimize Symbol"), 0, 0)
-        selection_layout.addWidget(symbol_picker, 0, 1)
-        selection_layout.addWidget(QLabel("Optimize Strategy"), 0, 2)
-        selection_layout.addWidget(strategy_picker, 0, 3)
-        selection_layout.addWidget(QLabel("Timeframe"), 1, 0)
-        selection_layout.addWidget(timeframe_picker, 1, 1)
-        layout.addWidget(selection_frame)
+        if getattr(window, "_optimization_container", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
 
-        controls = QHBoxLayout()
-        run_btn = QPushButton("Run Optimization")
-        apply_btn = QPushButton("Apply Best Params")
-        run_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_strategy_optimization()))
-        apply_btn.clicked.connect(self._apply_best_optimization_params)
-        controls.addWidget(run_btn)
-        controls.addWidget(apply_btn)
-        controls.addStretch()
-        layout.addLayout(controls)
+            status = QLabel("Choose your symbol and click Run Optimization or Rank All Strategies to start.")
+            status.setStyleSheet("color: #e6edf7; font-weight: 700;")
+            layout.addWidget(status)
 
-        summary = QLabel("-")
-        summary.setWordWrap(True)
-        summary.setStyleSheet("color: #9fb0c7;")
-        layout.addWidget(summary)
+            selection_frame = QFrame()
+            selection_frame.setStyleSheet(
+                "QFrame { background-color: #0f1727; border: 1px solid #24344f; border-radius: 10px; }"
+                "QLabel { color: #d7dfeb; font-weight: 700; }"
+                "QComboBox { background-color: #0b1220; color: #f4f8ff; border: 1px solid #2a3d5c; border-radius: 6px; padding: 6px 10px; min-width: 180px; }"
+            )
+            selection_layout = QGridLayout(selection_frame)
+            selection_layout.setContentsMargins(14, 12, 14, 12)
+            selection_layout.setHorizontalSpacing(16)
+            selection_layout.setVerticalSpacing(8)
 
-        table = QTableWidget()
-        table.setColumnCount(8)
-        table.setHorizontalHeaderLabels(
-            [
-                "RSI",
-                "EMA Fast",
-                "EMA Slow",
-                "ATR",
-                "Profit",
-                "Sharpe",
-                "Win Rate",
-                "Final Equity",
-            ]
-        )
-        layout.addWidget(table)
+            symbol_picker = QComboBox()
+            strategy_picker = QComboBox()
+            timeframe_picker = QComboBox()
+            selection_layout.addWidget(QLabel("Optimize Symbol"), 0, 0)
+            selection_layout.addWidget(symbol_picker, 0, 1)
+            selection_layout.addWidget(QLabel("Optimize Strategy"), 0, 2)
+            selection_layout.addWidget(strategy_picker, 0, 3)
+            selection_layout.addWidget(QLabel("Timeframe"), 1, 0)
+            selection_layout.addWidget(timeframe_picker, 1, 1)
+            layout.addWidget(selection_frame)
 
-        window.setCentralWidget(container)
-        window._optimization_container = container
-        window._optimization_status = status
-        window._optimization_summary = summary
-        window._optimization_table = table
-        window._optimization_run_btn = run_btn
-        window._optimization_apply_btn = apply_btn
-        window._optimization_symbol_picker = symbol_picker
-        window._optimization_strategy_picker = strategy_picker
-        window._optimization_timeframe_picker = timeframe_picker
-        symbol_picker.currentTextChanged.connect(lambda _text: _hotfix_optimization_selection_changed(self))
-        strategy_picker.currentTextChanged.connect(lambda _text: _hotfix_optimization_selection_changed(self))
-        timeframe_picker.currentTextChanged.connect(lambda _text: _hotfix_optimization_selection_changed(self))
+            controls = QHBoxLayout()
+            run_btn = QPushButton("Run Optimization")
+            rank_btn = QPushButton("Rank All Strategies")
+            apply_btn = QPushButton("Apply Best Params")
+            assign_btn = QPushButton("Assign Best To Symbol")
+            assign_count = QSpinBox()
+            assign_count.setRange(1, 10)
+            assign_count.setValue(int(getattr(self.controller, "max_symbol_strategies", 3) or 3))
+            run_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_strategy_optimization()))
+            rank_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_strategy_ranking()))
+            apply_btn.clicked.connect(self._apply_best_optimization_params)
+            assign_btn.clicked.connect(self._assign_ranked_strategies_to_symbol)
+            controls.addWidget(run_btn)
+            controls.addWidget(rank_btn)
+            controls.addWidget(apply_btn)
+            controls.addWidget(QLabel("Assign Top"))
+            controls.addWidget(assign_count)
+            controls.addWidget(assign_btn)
+            controls.addStretch()
+            layout.addLayout(controls)
 
-    _hotfix_refresh_optimization_selectors(self, window)
-    self._refresh_optimization_window(window)
-    window.show()
-    window.raise_()
-    window.activateWindow()
-    return window
+            summary = QLabel("-")
+            summary.setWordWrap(True)
+            summary.setStyleSheet("color: #9fb0c7;")
+            layout.addWidget(summary)
+
+            table = QTableWidget()
+            table.setColumnCount(8)
+            table.setHorizontalHeaderLabels(
+                [
+                    "RSI",
+                    "EMA Fast",
+                    "EMA Slow",
+                    "ATR",
+                    "Profit",
+                    "Sharpe",
+                    "Win Rate",
+                    "Final Equity",
+                ]
+            )
+            layout.addWidget(table)
+
+            window.setCentralWidget(container)
+            window._optimization_container = container
+            window._optimization_status = status
+            window._optimization_summary = summary
+            window._optimization_table = table
+            window._optimization_run_btn = run_btn
+            window._optimization_rank_btn = rank_btn
+            window._optimization_apply_btn = apply_btn
+            window._optimization_assign_btn = assign_btn
+            window._optimization_assign_count = assign_count
+            window._optimization_symbol_picker = symbol_picker
+            window._optimization_strategy_picker = strategy_picker
+            window._optimization_timeframe_picker = timeframe_picker
+            symbol_picker.currentTextChanged.connect(lambda _text: _hotfix_optimization_selection_changed(self))
+            strategy_picker.currentTextChanged.connect(lambda _text: _hotfix_optimization_selection_changed(self))
+            timeframe_picker.currentTextChanged.connect(lambda _text: _hotfix_optimization_selection_changed(self))
+
+        try:
+            _hotfix_refresh_optimization_selectors(self, window)
+            self._refresh_optimization_window(
+                window,
+                message="Optimization is idle. Nothing will run until you click Run Optimization or Rank All Strategies.",
+            )
+        except Exception as exc:
+            if hasattr(self, "logger"):
+                self.logger.exception("Unable to refresh strategy optimization window")
+            status = getattr(window, "_optimization_status", None)
+            summary = getattr(window, "_optimization_summary", None)
+            if status is not None:
+                status.setText("Strategy Optimization opened with limited data.")
+            if summary is not None:
+                summary.setText(f"Window opened, but some optimization controls could not refresh yet: {exc}")
+
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+    except Exception as exc:
+        if hasattr(self, "logger"):
+            self.logger.exception("Unable to open strategy optimization window")
+        if hasattr(self, "system_console"):
+            self.system_console.log(f"Strategy Optimization failed to open: {exc}", "ERROR")
+        if hasattr(self, "_show_async_message"):
+            self._show_async_message("Strategy Optimization Failed", str(exc), QMessageBox.Icon.Critical)
+        return None
+    finally:
+        setattr(self, "_optimization_bootstrapping", False)
 
 
 def _hotfix_refresh_optimization_window(self, window=None, message=None):
@@ -11704,7 +11834,10 @@ def _hotfix_refresh_optimization_window(self, window=None, message=None):
     summary = getattr(window, "_optimization_summary", None)
     table = getattr(window, "_optimization_table", None)
     run_btn = getattr(window, "_optimization_run_btn", None)
+    rank_btn = getattr(window, "_optimization_rank_btn", None)
     apply_btn = getattr(window, "_optimization_apply_btn", None)
+    assign_btn = getattr(window, "_optimization_assign_btn", None)
+    assign_count = getattr(window, "_optimization_assign_count", None)
     symbol_picker = getattr(window, "_optimization_symbol_picker", None)
     strategy_picker = getattr(window, "_optimization_strategy_picker", None)
     timeframe_picker = getattr(window, "_optimization_timeframe_picker", None)
@@ -11720,6 +11853,14 @@ def _hotfix_refresh_optimization_window(self, window=None, message=None):
     strategy_name = context.get("strategy_name", None) or selected_strategy or getattr(self.controller, "strategy_name", None) or getattr(getattr(self.controller, "config", None), "strategy", "Trend Following")
     dataset = context.get("data")
     candle_count = len(dataset) if hasattr(dataset, "__len__") else 0
+    assigned = []
+    if hasattr(self.controller, "assigned_strategies_for_symbol"):
+        try:
+            assigned = list(self.controller.assigned_strategies_for_symbol(symbol) or [])
+        except Exception:
+            assigned = []
+    assigned_text = ", ".join(str(row.get("strategy_name") or "").strip() for row in assigned[:3] if str(row.get("strategy_name") or "").strip())
+    mode = str(getattr(self, "_optimization_mode", "param") or "param")
 
     if message is not None:
         self._optimization_status_message = message
@@ -11727,12 +11868,28 @@ def _hotfix_refresh_optimization_window(self, window=None, message=None):
     running = bool(getattr(self, "_optimization_running", False))
     status_message = getattr(self, "_optimization_status_message", None)
     status.setText(status_message or ("Optimization running..." if running else "Optimization workspace ready."))
-    summary.setText(f"Symbol: {symbol} | Timeframe: {timeframe} | Strategy: {strategy_name} | Candles: {candle_count}")
+    summary.setText(
+        f"Symbol: {symbol} | Timeframe: {timeframe} | Strategy: {strategy_name} | "
+        f"Mode: {'Rank All' if mode == 'ranking' else 'Parameter Optimize'} | Candles: {candle_count}"
+        + (f" | Assigned: {assigned_text}" if assigned_text else "")
+    )
     if run_btn is not None:
         run_btn.setEnabled(not running)
         run_btn.setText("Running..." if running else "Run Optimization")
+    if rank_btn is not None:
+        rank_btn.setEnabled(not running)
+        rank_btn.setText("Running..." if running and mode == "ranking" else "Rank All Strategies")
     if apply_btn is not None:
-        apply_btn.setEnabled((not running) and isinstance(getattr(self, "optimization_best", None), dict))
+        apply_btn.setEnabled((not running) and mode == "param" and isinstance(getattr(self, "optimization_best", None), dict))
+    if assign_btn is not None:
+        assign_btn.setEnabled(
+            (not running)
+            and mode == "ranking"
+            and getattr(self, "strategy_ranking_results", None) is not None
+            and not getattr(getattr(self, "strategy_ranking_results", None), "empty", True)
+        )
+    if assign_count is not None:
+        assign_count.setEnabled(not running)
     if symbol_picker is not None:
         symbol_picker.setEnabled(not running)
     if strategy_picker is not None:
@@ -11740,24 +11897,39 @@ def _hotfix_refresh_optimization_window(self, window=None, message=None):
     if timeframe_picker is not None:
         timeframe_picker.setEnabled(not running)
 
-    results = getattr(self, "optimization_results", None)
+    results = getattr(self, "strategy_ranking_results", None) if mode == "ranking" else getattr(self, "optimization_results", None)
     if results is None or getattr(results, "empty", True):
         table.setRowCount(0)
         return
 
     display = results.head(25).reset_index(drop=True)
     table.setRowCount(len(display))
-
-    columns = [
-        ("rsi_period", "{:g}"),
-        ("ema_fast", "{:g}"),
-        ("ema_slow", "{:g}"),
-        ("atr_period", "{:g}"),
-        ("total_profit", "{:.2f}"),
-        ("sharpe_ratio", "{:.3f}"),
-        ("win_rate", "{:.2%}"),
-        ("final_equity", "{:.2f}"),
-    ]
+    if mode == "ranking":
+        columns = [
+            ("strategy_name", "{}"),
+            ("score", "{:.3f}"),
+            ("total_profit", "{:.2f}"),
+            ("sharpe_ratio", "{:.3f}"),
+            ("win_rate", "{:.2%}"),
+            ("max_drawdown", "{:.2f}"),
+            ("final_equity", "{:.2f}"),
+            ("closed_trades", "{:g}"),
+        ]
+        headers = ["Strategy", "Score", "Profit", "Sharpe", "Win Rate", "Drawdown", "Final Equity", "Closed Trades"]
+    else:
+        columns = [
+            ("rsi_period", "{:g}"),
+            ("ema_fast", "{:g}"),
+            ("ema_slow", "{:g}"),
+            ("atr_period", "{:g}"),
+            ("total_profit", "{:.2f}"),
+            ("sharpe_ratio", "{:.3f}"),
+            ("win_rate", "{:.2%}"),
+            ("final_equity", "{:.2f}"),
+        ]
+        headers = ["RSI", "EMA Fast", "EMA Slow", "ATR", "Profit", "Sharpe", "Win Rate", "Final Equity"]
+    table.setColumnCount(len(headers))
+    table.setHorizontalHeaderLabels(headers)
 
     for row_idx, (_, row) in enumerate(display.iterrows()):
         for col_idx, (column, fmt) in enumerate(columns):
@@ -11812,12 +11984,7 @@ def _hotfix_refresh_optimization_selectors(self, window=None):
         symbol_picker.setCurrentText(target_symbol)
     symbol_picker.blockSignals(False)
 
-    strategy_picker.blockSignals(True)
-    strategy_picker.clear()
-    for name in list(dict.fromkeys([*Strategy.AVAILABLE_STRATEGIES, target_strategy])):
-        strategy_picker.addItem(name)
-    strategy_picker.setCurrentText(target_strategy)
-    strategy_picker.blockSignals(False)
+    self._populate_strategy_picker(strategy_picker, selected_strategy=target_strategy)
 
     timeframe_picker.blockSignals(True)
     timeframe_picker.clear()
@@ -11830,6 +11997,8 @@ def _hotfix_refresh_optimization_selectors(self, window=None):
 
 
 def _hotfix_optimization_selection_changed(self):
+    if bool(getattr(self, "_optimization_bootstrapping", False)):
+        return
     if getattr(self, "_optimization_running", False):
         return
 
@@ -11870,10 +12039,12 @@ def _hotfix_optimization_selection_changed(self):
     if selection_changed:
         self.optimization_results = None
         self.optimization_best = None
+        self.strategy_ranking_results = None
+        self.strategy_ranking_best = None
 
-    info = "Selection updated. Run optimization when ready."
+    info = "Selection updated. Nothing runs until you click Run Optimization or Rank All Strategies."
     if dataset is None or getattr(dataset, "empty", False):
-        info = "Selection updated. Candle data will load when optimization starts."
+        info = "Selection updated. Candle data will load only after you start Optimization or Rank All Strategies."
     self._refresh_optimization_window(message=info)
 
 
@@ -11902,6 +12073,7 @@ async def _hotfix_run_strategy_optimization(self):
             initial_balance=getattr(self.controller, "initial_capital", 10000),
         )
         self._optimization_running = True
+        self._optimization_mode = "param"
         self._optimization_status_message = "Optimization running..."
         self._optimization_context = context
         _hotfix_refresh_optimization_selectors(self)
@@ -11915,6 +12087,8 @@ async def _hotfix_run_strategy_optimization(self):
             context["symbol"],
             context.get("strategy_name"),
         )
+        self.strategy_ranking_results = None
+        self.strategy_ranking_best = None
         self.optimization_best = None
         if self.optimization_results is not None and not self.optimization_results.empty:
             self.optimization_best = self.optimization_results.iloc[0].to_dict()
@@ -11932,6 +12106,95 @@ async def _hotfix_run_strategy_optimization(self):
     finally:
         self._optimization_running = False
         self._refresh_optimization_window()
+
+
+async def _hotfix_run_strategy_ranking(self):
+    if getattr(self, "_optimization_running", False):
+        self._show_optimization_window()
+        self._refresh_optimization_window(message="Optimization is already running.")
+        return
+
+    try:
+        from backtesting.strategy_ranker import StrategyRanker
+
+        self._show_optimization_window()
+        context = await _hotfix_prepare_backtest_context_with_selection(
+            self,
+            symbol=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_symbol_picker", None), "currentText", lambda: "")()).strip() or None,
+            timeframe=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_timeframe_picker", None), "currentText", lambda: "")()).strip() or None,
+            strategy_name=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_strategy_picker", None), "currentText", lambda: "")()).strip() or None,
+        )
+        data = candles_to_df(context.get("data"))
+        if data is None or not hasattr(data, "__len__") or len(data) == 0:
+            raise RuntimeError("No historical data available for strategy ranking")
+
+        ranker = StrategyRanker(
+            strategy_registry=context["strategy"],
+            initial_balance=getattr(self.controller, "initial_capital", 10000),
+        )
+        self._optimization_running = True
+        self._optimization_mode = "ranking"
+        self._optimization_status_message = "Ranking all strategies..."
+        self._optimization_context = context
+        _hotfix_refresh_optimization_selectors(self)
+        self._show_optimization_window()
+        self._refresh_optimization_window(message="Ranking all strategies...")
+        await asyncio.sleep(0)
+
+        self.strategy_ranking_results = await asyncio.to_thread(
+            ranker.rank,
+            data,
+            context["symbol"],
+            context.get("timeframe"),
+            list(getattr(context["strategy"], "list", lambda: [])()),
+        )
+        self.strategy_ranking_best = None
+        if self.strategy_ranking_results is not None and not self.strategy_ranking_results.empty:
+            self.strategy_ranking_best = self.strategy_ranking_results.iloc[0].to_dict()
+
+        self.system_console.log("Strategy ranking completed.", "INFO")
+        self._optimization_status_message = "Strategy ranking completed."
+        self._show_optimization_window()
+        self._refresh_optimization_window(message="Strategy ranking completed.")
+
+    except Exception as e:
+        self.system_console.log(f"Strategy ranking failed: {e}", "ERROR")
+        self._optimization_status_message = f"Strategy ranking failed: {e}"
+        self._show_optimization_window()
+        self._refresh_optimization_window(message=f"Strategy ranking failed: {e}")
+    finally:
+        self._optimization_running = False
+        self._refresh_optimization_window()
+
+
+def _hotfix_assign_ranked_strategies_to_symbol(self):
+    try:
+        results = getattr(self, "strategy_ranking_results", None)
+        if results is None or getattr(results, "empty", True):
+            raise RuntimeError("Run strategy ranking before assigning strategies to a symbol")
+
+        window = getattr(self, "detached_tool_windows", {}).get("strategy_optimization")
+        assign_count = getattr(window, "_optimization_assign_count", None) if window is not None else None
+        top_n = int(assign_count.value()) if assign_count is not None else int(getattr(self.controller, "max_symbol_strategies", 3) or 3)
+        context = getattr(self, "_optimization_context", {}) or {}
+        symbol = str(context.get("symbol") or "").strip()
+        if not symbol:
+            raise RuntimeError("No symbol selected for strategy assignment")
+
+        timeframe = str(context.get("timeframe") or "").strip()
+        self.controller.multi_strategy_enabled = True
+        assigned = self.controller.assign_ranked_strategies_to_symbol(
+            symbol,
+            results.to_dict("records"),
+            top_n=top_n,
+            timeframe=timeframe,
+        )
+        assigned_names = ", ".join(str(item.get("strategy_name") or "").strip() for item in assigned)
+        self.system_console.log(f"Assigned top {len(assigned)} strategies to {symbol}: {assigned_names}", "INFO")
+        self._refresh_optimization_window(message=f"Assigned top {len(assigned)} strategies to {symbol}.")
+    except Exception as e:
+        self.system_console.log(f"Strategy assignment failed: {e}", "ERROR")
+        self._refresh_optimization_window(message=f"Strategy assignment failed: {e}")
 
 
 def _hotfix_apply_best_optimization_params(self):
@@ -11980,12 +12243,403 @@ def _hotfix_apply_best_optimization_params(self):
 
 
 def _hotfix_optimize_strategy(self):
-    self._show_optimization_window()
-    task_factory = getattr(self.controller, "_create_task", None)
-    if callable(task_factory):
-        task_factory(self._run_strategy_optimization(), "strategy_optimization")
+    try:
+        self._show_optimization_window()
+        if hasattr(self, "_refresh_optimization_window"):
+            self._refresh_optimization_window(
+                message="Optimization is idle. Nothing will run until you click Run Optimization or Rank All Strategies."
+            )
         return
-    asyncio.get_event_loop().create_task(self._run_strategy_optimization())
+    except Exception as exc:
+        if hasattr(self, "logger"):
+            self.logger.exception("Strategy Optimization open failed")
+        if hasattr(self, "system_console"):
+            self.system_console.log(f"Strategy Optimization failed to open: {exc}", "ERROR")
+        if hasattr(self, "_show_async_message"):
+            self._show_async_message("Strategy Optimization Failed", str(exc), QMessageBox.Icon.Critical)
+        return
+
+
+def _hotfix_strategy_assignment_mode_label(mode):
+    normalized = str(mode or "").strip().lower()
+    if normalized == "single":
+        return "Assigned Strategy"
+    if normalized == "ranked":
+        return "Ranked Mix"
+    return "Default Strategy"
+
+
+def _hotfix_strategy_assignment_rows(self):
+    controller = getattr(self, "controller", None)
+    if controller is None:
+        return []
+
+    symbols = []
+    for source in (
+        getattr(controller, "symbols", []) or [],
+        list(getattr(controller, "symbol_strategy_assignments", {}).keys()),
+        list(getattr(controller, "symbol_strategy_rankings", {}).keys()),
+        [self._current_chart_symbol()] if hasattr(self, "_current_chart_symbol") else [],
+    ):
+        for symbol in list(source or []):
+            normalized = str(symbol or "").strip().upper().replace("-", "/").replace("_", "/")
+            if normalized and normalized not in symbols:
+                symbols.append(normalized)
+
+    rows = []
+    state_resolver = getattr(controller, "strategy_assignment_state_for_symbol", None)
+    default_strategy = str(getattr(controller, "strategy_name", "Trend Following") or "Trend Following").strip()
+    default_timeframe = str(getattr(self, "current_timeframe", getattr(controller, "time_frame", "1h")) or "1h").strip()
+    for symbol in symbols:
+        state = state_resolver(symbol) if callable(state_resolver) else {}
+        explicit_rows = list(state.get("explicit_rows", []) or [])
+        active_rows = list(state.get("active_rows", []) or [])
+        ranked_rows = list(state.get("ranked_rows", []) or [])
+        mode = str(state.get("mode") or "default").strip().lower()
+        timeframe = str(
+            (explicit_rows[0].get("timeframe") if explicit_rows else "")
+            or (active_rows[0].get("timeframe") if active_rows else "")
+            or default_timeframe
+        ).strip() or default_timeframe
+        if active_rows:
+            strategy_text = ", ".join(
+                str(item.get("strategy_name") or "").strip()
+                for item in active_rows[:3]
+                if str(item.get("strategy_name") or "").strip()
+            )
+            if len(active_rows) > 3:
+                strategy_text = f"{strategy_text}, +{len(active_rows) - 3} more"
+        else:
+            strategy_text = default_strategy
+        rows.append(
+            {
+                "symbol": symbol,
+                "mode": _hotfix_strategy_assignment_mode_label(mode),
+                "strategies": strategy_text or default_strategy,
+                "timeframe": timeframe,
+                "ranked_count": len(ranked_rows),
+                "active_count": len(active_rows),
+            }
+        )
+    return rows
+
+
+def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None:
+        return
+
+    status = getattr(window, "_strategy_assignment_status", None)
+    summary = getattr(window, "_strategy_assignment_summary", None)
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    strategy_picker = getattr(window, "_strategy_assignment_strategy_picker", None)
+    timeframe_picker = getattr(window, "_strategy_assignment_timeframe_picker", None)
+    top_n = getattr(window, "_strategy_assignment_top_n", None)
+    table = getattr(window, "_strategy_assignment_table", None)
+    if any(part is None for part in (status, summary, symbol_picker, strategy_picker, timeframe_picker, top_n, table)):
+        return
+
+    controller = getattr(self, "controller", None)
+    if controller is None:
+        return
+
+    rows = _hotfix_strategy_assignment_rows(self)
+    selected_symbol = str(
+        getattr(window, "_strategy_assignment_selected_symbol", "")
+        or symbol_picker.currentText()
+        or (rows[0]["symbol"] if rows else "")
+    ).strip()
+    state_resolver = getattr(controller, "strategy_assignment_state_for_symbol", None)
+    state = state_resolver(selected_symbol) if callable(state_resolver) and selected_symbol else {}
+    explicit_rows = list(state.get("explicit_rows", []) or [])
+    active_rows = list(state.get("active_rows", []) or [])
+    ranked_rows = list(state.get("ranked_rows", []) or [])
+    default_strategy = str(getattr(controller, "strategy_name", "Trend Following") or "Trend Following").strip()
+    selected_strategy = str(
+        (explicit_rows[0].get("strategy_name") if explicit_rows else "")
+        or (active_rows[0].get("strategy_name") if active_rows else "")
+        or default_strategy
+    ).strip()
+    selected_timeframe = str(
+        (explicit_rows[0].get("timeframe") if explicit_rows else "")
+        or (active_rows[0].get("timeframe") if active_rows else "")
+        or getattr(self, "current_timeframe", getattr(controller, "time_frame", "1h"))
+    ).strip()
+
+    setattr(self, "_strategy_assignment_bootstrapping", True)
+    try:
+        current_symbols = [row["symbol"] for row in rows]
+        blocked = symbol_picker.blockSignals(True)
+        symbol_picker.clear()
+        for symbol in current_symbols:
+            symbol_picker.addItem(symbol)
+        if selected_symbol and symbol_picker.findText(selected_symbol) < 0:
+            symbol_picker.addItem(selected_symbol)
+        if selected_symbol:
+            symbol_picker.setCurrentText(selected_symbol)
+        symbol_picker.blockSignals(blocked)
+
+        self._populate_strategy_picker(strategy_picker, selected_strategy=selected_strategy)
+
+        timeframe_candidates = _hotfix_backtest_timeframe_candidates(self)
+        blocked = timeframe_picker.blockSignals(True)
+        timeframe_picker.clear()
+        for timeframe in timeframe_candidates:
+            timeframe_picker.addItem(timeframe)
+        if selected_timeframe and timeframe_picker.findText(selected_timeframe) < 0:
+            timeframe_picker.addItem(selected_timeframe)
+        if selected_timeframe:
+            timeframe_picker.setCurrentText(selected_timeframe)
+        timeframe_picker.blockSignals(blocked)
+
+        top_n.setValue(max(1, min(10, len(explicit_rows) if len(explicit_rows) > 1 else int(getattr(controller, "max_symbol_strategies", 3) or 3))))
+    finally:
+        setattr(self, "_strategy_assignment_bootstrapping", False)
+
+    window._strategy_assignment_selected_symbol = selected_symbol
+    status.setText(message or "Assign a symbol to the default strategy, one strategy, or a ranked mix.")
+
+    mode_label = _hotfix_strategy_assignment_mode_label(state.get("mode"))
+    active_text = ", ".join(
+        str(item.get("strategy_name") or "").strip()
+        for item in active_rows[:3]
+        if str(item.get("strategy_name") or "").strip()
+    ) or default_strategy
+    if len(active_rows) > 3:
+        active_text = f"{active_text}, +{len(active_rows) - 3} more"
+    summary.setText(
+        f"Selected Symbol: {selected_symbol or '-'} | Mode: {mode_label} | "
+        f"Trading With: {active_text} | Ranked Candidates: {len(ranked_rows)}"
+    )
+
+    table.setColumnCount(6)
+    table.setHorizontalHeaderLabels(["Symbol", "Mode", "Strategies", "Timeframe", "Ranked", "Live"])
+    table.setRowCount(len(rows))
+    selected_row = -1
+    for row_index, row in enumerate(rows):
+        values = [
+            row.get("symbol", ""),
+            row.get("mode", ""),
+            row.get("strategies", ""),
+            row.get("timeframe", ""),
+            str(row.get("ranked_count", 0)),
+            f"{int(row.get('active_count', 0))} {'strategy' if int(row.get('active_count', 0)) == 1 else 'strategies'}",
+        ]
+        for col_index, value in enumerate(values):
+            table.setItem(row_index, col_index, QTableWidgetItem(str(value)))
+        if str(row.get("symbol") or "").strip() == selected_symbol:
+            selected_row = row_index
+    table.resizeColumnsToContents()
+    table.horizontalHeader().setStretchLastSection(True)
+    if selected_row >= 0:
+        table.selectRow(selected_row)
+
+
+def _hotfix_strategy_assignment_selection_changed(self):
+    if bool(getattr(self, "_strategy_assignment_bootstrapping", False)):
+        return
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None:
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    if symbol_picker is None:
+        return
+    window._strategy_assignment_selected_symbol = str(symbol_picker.currentText() or "").strip()
+    _hotfix_refresh_strategy_assignment_window(self, window=window)
+
+
+def _hotfix_strategy_assignment_table_selected(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None or bool(getattr(self, "_strategy_assignment_bootstrapping", False)):
+        return
+    table = getattr(window, "_strategy_assignment_table", None)
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    if table is None or symbol_picker is None or table.currentRow() < 0:
+        return
+    item = table.item(table.currentRow(), 0)
+    symbol = str(item.text() if item is not None else "").strip()
+    if not symbol:
+        return
+    blocked = symbol_picker.blockSignals(True)
+    symbol_picker.setCurrentText(symbol)
+    symbol_picker.blockSignals(blocked)
+    window._strategy_assignment_selected_symbol = symbol
+    _hotfix_refresh_strategy_assignment_window(self, window=window)
+
+
+def _hotfix_apply_default_strategy_assignment(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    controller = getattr(self, "controller", None)
+    if window is None or controller is None:
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    symbol = str(symbol_picker.currentText() if symbol_picker is not None else "").strip()
+    if not symbol:
+        self.system_console.log("Select a symbol before clearing its strategy assignment.", "ERROR")
+        return
+    controller.clear_symbol_strategy_assignment(symbol)
+    _hotfix_refresh_strategy_assignment_window(
+        self,
+        window=window,
+        message=f"{symbol} now uses the default strategy with the rest of the system.",
+    )
+
+
+def _hotfix_apply_single_strategy_assignment(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    controller = getattr(self, "controller", None)
+    if window is None or controller is None:
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    strategy_picker = getattr(window, "_strategy_assignment_strategy_picker", None)
+    timeframe_picker = getattr(window, "_strategy_assignment_timeframe_picker", None)
+    symbol = str(symbol_picker.currentText() if symbol_picker is not None else "").strip()
+    strategy_name = str(strategy_picker.currentText() if strategy_picker is not None else "").strip()
+    timeframe = str(timeframe_picker.currentText() if timeframe_picker is not None else "").strip()
+    if not symbol:
+        self.system_console.log("Select a symbol before assigning a strategy.", "ERROR")
+        return
+    try:
+        assigned = controller.assign_strategy_to_symbol(symbol, strategy_name, timeframe=timeframe)
+        strategy_label = str(assigned[0].get("strategy_name") or strategy_name).strip()
+        _hotfix_refresh_strategy_assignment_window(
+            self,
+            window=window,
+            message=f"{symbol} is now assigned to {strategy_label}.",
+        )
+    except Exception as exc:
+        self.system_console.log(f"Strategy assignment failed: {exc}", "ERROR")
+        _hotfix_refresh_strategy_assignment_window(self, window=window, message=f"Strategy assignment failed: {exc}")
+
+
+def _hotfix_apply_ranked_strategy_assignment_from_window(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    controller = getattr(self, "controller", None)
+    if window is None or controller is None:
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    timeframe_picker = getattr(window, "_strategy_assignment_timeframe_picker", None)
+    top_n = getattr(window, "_strategy_assignment_top_n", None)
+    symbol = str(symbol_picker.currentText() if symbol_picker is not None else "").strip()
+    timeframe = str(timeframe_picker.currentText() if timeframe_picker is not None else "").strip()
+    if not symbol:
+        self.system_console.log("Select a symbol before assigning a ranked mix.", "ERROR")
+        return
+    rankings = controller.ranked_strategies_for_symbol(symbol) if hasattr(controller, "ranked_strategies_for_symbol") else []
+    if not rankings:
+        self.system_console.log(f"No ranked strategies are saved for {symbol}. Run Rank All Strategies first.", "ERROR")
+        _hotfix_refresh_strategy_assignment_window(
+            self,
+            window=window,
+            message=f"No ranked strategies are saved for {symbol} yet. Run Rank All Strategies first.",
+        )
+        return
+    assigned = controller.assign_ranked_strategies_to_symbol(
+        symbol,
+        rankings,
+        top_n=int(top_n.value()) if top_n is not None else None,
+        timeframe=timeframe,
+    )
+    _hotfix_refresh_strategy_assignment_window(
+        self,
+        window=window,
+        message=f"{symbol} now uses a ranked mix of {len(assigned)} strategies.",
+    )
+
+
+def _hotfix_show_strategy_assignment_window(self):
+    window = self._get_or_create_tool_window(
+        "strategy_assignments",
+        "Strategy Assigner",
+        width=1080,
+        height=680,
+    )
+
+    if getattr(window, "_strategy_assignment_container", None) is None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        status = QLabel("Assign a symbol to the default strategy, one strategy, or a ranked mix.")
+        status.setWordWrap(True)
+        status.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; padding: 10px; border-radius: 8px;")
+        layout.addWidget(status)
+
+        controls_frame = QFrame()
+        controls_frame.setStyleSheet(
+            "QFrame { background-color: #0f1727; border: 1px solid #24344f; border-radius: 10px; }"
+            "QLabel { color: #d7dfeb; font-weight: 700; }"
+            "QComboBox, QSpinBox { background-color: #0b1220; color: #f4f8ff; border: 1px solid #2a3d5c; border-radius: 6px; padding: 6px 10px; min-width: 160px; }"
+        )
+        controls_layout = QGridLayout(controls_frame)
+        controls_layout.setContentsMargins(14, 12, 14, 12)
+        controls_layout.setHorizontalSpacing(16)
+        controls_layout.setVerticalSpacing(8)
+
+        symbol_picker = QComboBox()
+        strategy_picker = QComboBox()
+        timeframe_picker = QComboBox()
+        top_n = QSpinBox()
+        top_n.setRange(1, 10)
+        top_n.setValue(int(getattr(self.controller, "max_symbol_strategies", 3) or 3))
+
+        controls_layout.addWidget(QLabel("Symbol"), 0, 0)
+        controls_layout.addWidget(symbol_picker, 0, 1)
+        controls_layout.addWidget(QLabel("Assigned Strategy"), 0, 2)
+        controls_layout.addWidget(strategy_picker, 0, 3)
+        controls_layout.addWidget(QLabel("Timeframe"), 1, 0)
+        controls_layout.addWidget(timeframe_picker, 1, 1)
+        controls_layout.addWidget(QLabel("Ranked Mix Size"), 1, 2)
+        controls_layout.addWidget(top_n, 1, 3)
+        layout.addWidget(controls_frame)
+
+        button_row = QHBoxLayout()
+        use_default_btn = QPushButton("Use Default")
+        assign_single_btn = QPushButton("Assign Strategy")
+        assign_ranked_btn = QPushButton("Use Ranked Mix")
+        open_optimization_btn = QPushButton("Open Strategy Optimization")
+        use_default_btn.clicked.connect(self._apply_default_strategy_assignment)
+        assign_single_btn.clicked.connect(self._apply_single_strategy_assignment)
+        assign_ranked_btn.clicked.connect(self._apply_ranked_strategy_assignment)
+        open_optimization_btn.clicked.connect(self._optimize_strategy)
+        button_row.addWidget(use_default_btn)
+        button_row.addWidget(assign_single_btn)
+        button_row.addWidget(assign_ranked_btn)
+        button_row.addWidget(open_optimization_btn)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        summary = QLabel("Loading symbol assignments.")
+        summary.setWordWrap(True)
+        summary.setStyleSheet("color: #9fb0c7;")
+        layout.addWidget(summary)
+
+        table = QTableWidget()
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.itemSelectionChanged.connect(lambda: _hotfix_strategy_assignment_table_selected(self))
+        layout.addWidget(table)
+
+        symbol_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
+        strategy_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
+        timeframe_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
+
+        window.setCentralWidget(container)
+        window._strategy_assignment_container = container
+        window._strategy_assignment_status = status
+        window._strategy_assignment_summary = summary
+        window._strategy_assignment_symbol_picker = symbol_picker
+        window._strategy_assignment_strategy_picker = strategy_picker
+        window._strategy_assignment_timeframe_picker = timeframe_picker
+        window._strategy_assignment_top_n = top_n
+        window._strategy_assignment_table = table
+
+    _hotfix_refresh_strategy_assignment_window(self, window=window)
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    return window
 
 
 def _hotfix_ml_model_family_options():
@@ -12863,6 +13517,7 @@ def _hotfix_collect_settings_values(self, window=None):
         "database_url": window._settings_database_url.text().strip(),
         "history_limit": int(window._settings_history_limit.value()),
         "initial_capital": float(window._settings_initial_capital.value()),
+        "hedging_enabled": bool(window._settings_hedging_enabled.currentData()),
         "refresh_interval_ms": int(window._settings_refresh_ms.value()),
         "orderbook_interval_ms": int(window._settings_orderbook_ms.value()),
         "show_bid_ask_lines": window._settings_bid_ask_mode.currentData(),
@@ -13016,6 +13671,12 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
     self.controller.max_risk_per_trade = float(values.get("max_risk_per_trade", getattr(self.controller, "max_risk_per_trade", 0.02)))
     self.controller.max_position_size_pct = float(values.get("max_position_size_pct", getattr(self.controller, "max_position_size_pct", 0.05)))
     self.controller.max_gross_exposure_pct = float(values.get("max_gross_exposure_pct", getattr(self.controller, "max_gross_exposure_pct", 1.0)))
+    self.controller.hedging_enabled = bool(
+        values.get(
+            "hedging_enabled",
+            getattr(self.controller, "hedging_enabled", True),
+        )
+    )
     self.controller.margin_closeout_guard_enabled = bool(
         values.get(
             "margin_closeout_guard_enabled",
@@ -13151,6 +13812,7 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
         self.settings.setValue("risk/max_risk_per_trade", self.controller.max_risk_per_trade)
         self.settings.setValue("risk/max_position_size_pct", self.controller.max_position_size_pct)
         self.settings.setValue("risk/max_gross_exposure_pct", self.controller.max_gross_exposure_pct)
+        self.settings.setValue("trading/hedging_enabled", bool(getattr(self.controller, "hedging_enabled", True)))
         self.settings.setValue("risk/margin_closeout_guard_enabled", bool(self.controller.margin_closeout_guard_enabled))
         self.settings.setValue("risk/max_margin_closeout_pct", float(self.controller.max_margin_closeout_pct))
         self.settings.setValue("strategy/name", strategy_name)
@@ -13228,9 +13890,14 @@ def _hotfix_show_settings_window(self):
         orderbook_ms.setRange(250, 60000)
         orderbook_ms.setSingleStep(250)
 
+        hedging_mode = QComboBox()
+        hedging_mode.addItem("Enabled (when broker supports hedging)", True)
+        hedging_mode.addItem("Disabled", False)
+
         general_form.addRow("Default timeframe", timeframe)
         general_form.addRow("Default order type", order_type)
         general_form.addRow("Trading venue", market_type)
+        general_form.addRow("Hedging mode", hedging_mode)
         general_form.addRow("History limit (candles)", history_limit)
         general_form.addRow("Initial capital", initial_capital)
         general_form.addRow("Terminal refresh (ms)", refresh_ms)
@@ -13340,7 +14007,7 @@ def _hotfix_show_settings_window(self):
         strategy_form = QFormLayout(strategy_tab)
 
         strategy_name = QComboBox()
-        strategy_name.addItems(list(Strategy.AVAILABLE_STRATEGIES))
+        self._populate_strategy_picker(strategy_name, selected_strategy=getattr(self.controller, "strategy_name", "Trend Following"))
 
         strategy_rsi_period = QDoubleSpinBox()
         strategy_rsi_period.setDecimals(0)
@@ -13483,6 +14150,7 @@ def _hotfix_show_settings_window(self):
         window._settings_timeframe = timeframe
         window._settings_order_type = order_type
         window._settings_market_type = market_type
+        window._settings_hedging_enabled = hedging_mode
         window._settings_database_mode = database_mode
         window._settings_database_url = database_url
         window._settings_database_hint = database_hint
@@ -13549,6 +14217,7 @@ def _hotfix_show_settings_window(self):
     window._settings_database_mode.setCurrentIndex(database_mode_index if database_mode_index >= 0 else 0)
     window._settings_database_url.setText(str(getattr(self.controller, "database_url", "") or ""))
     _hotfix_update_database_mode_state(window)
+    window._settings_hedging_enabled.setCurrentIndex(0 if getattr(self.controller, "hedging_enabled", True) else 1)
     window._settings_history_limit.setValue(float(getattr(self.controller, "limit", 50000)))
     window._settings_initial_capital.setValue(float(getattr(self.controller, "initial_capital", 10000)))
     window._settings_refresh_ms.setValue(float(refresh_interval))
@@ -13621,6 +14290,7 @@ def _hotfix_show_settings_window(self):
         f"{window._settings_risk_profile.currentText()} risk | "
         f"closeout {'on' if window._settings_margin_closeout_guard.currentData() else 'off'} @ {window._settings_margin_closeout_pct.value():.2%} | "
         f"{window._settings_strategy_name.currentText()} | "
+        f"hedging {'on' if window._settings_hedging_enabled.currentData() else 'off'} | "
         f"history {int(window._settings_history_limit.value())} candles | "
         f"capital {window._settings_initial_capital.value():.2f} | "
         f"Telegram {'on' if window._settings_telegram_enabled.currentData() else 'off'} | "
@@ -13650,6 +14320,7 @@ def _hotfix_apply_settings_window(self, window=None):
                 f"Storage: {getattr(self.controller, 'current_database_label', lambda: values.get('database_mode', 'local'))()} | "
                 f"Risk profile: {values.get('risk_profile_name', 'Custom')} | "
                 f"Closeout guard: {'enabled' if values.get('margin_closeout_guard_enabled') else 'disabled'} @ {float(values.get('max_margin_closeout_pct', 0.50) or 0.50):.2%} | "
+                f"Hedging: {'enabled' if values.get('hedging_enabled', True) else 'disabled'} | "
                 f"Strategy: {values['strategy_name']} | "
                 f"Timeframe: {values['timeframe']} | "
                 f"Order type: {values['order_type']} | "
@@ -13694,6 +14365,7 @@ def _hotfix_restore_settings(self):
         "database_url": self.settings.value("storage/database_url", getattr(self.controller, "database_url", "")),
         "history_limit": _hotfix_settings_int(self.settings.value("terminal/history_limit", getattr(self.controller, "limit", 50000)), getattr(self.controller, "limit", 50000)),
         "initial_capital": _hotfix_settings_float(self.settings.value("terminal/initial_capital", getattr(self.controller, "initial_capital", 10000)), getattr(self.controller, "initial_capital", 10000)),
+        "hedging_enabled": _hotfix_settings_bool(self.settings.value("trading/hedging_enabled", getattr(self.controller, "hedging_enabled", True)), getattr(self.controller, "hedging_enabled", True)),
         "refresh_interval_ms": _hotfix_settings_int(self.settings.value("terminal/refresh_interval_ms", 1000), 1000),
         "orderbook_interval_ms": _hotfix_settings_int(self.settings.value("terminal/orderbook_interval_ms", 1500), 1500),
         "show_bid_ask_lines": _hotfix_settings_bool(self.settings.value("terminal/show_bid_ask_lines", getattr(self, "show_bid_ask_lines", True)), getattr(self, "show_bid_ask_lines", True)),
@@ -13758,6 +14430,7 @@ def _hotfix_close_event(self, event):
         "market_trade_preference": getattr(self.controller, "market_trade_preference", "auto"),
         "history_limit": getattr(self.controller, "limit", 50000),
         "initial_capital": getattr(self.controller, "initial_capital", 10000),
+        "hedging_enabled": getattr(self.controller, "hedging_enabled", True),
         "refresh_interval_ms": self.refresh_timer.interval() if hasattr(self, "refresh_timer") and self.refresh_timer is not None else 1000,
         "orderbook_interval_ms": self.orderbook_timer.interval() if hasattr(self, "orderbook_timer") and self.orderbook_timer is not None else 1500,
         "show_bid_ask_lines": getattr(self, "show_bid_ask_lines", True),
@@ -13937,8 +14610,16 @@ Terminal._generate_report = _hotfix_generate_report
 Terminal._show_optimization_window = _hotfix_show_optimization_window
 Terminal._refresh_optimization_window = _hotfix_refresh_optimization_window
 Terminal._run_strategy_optimization = _hotfix_run_strategy_optimization
+Terminal._run_strategy_ranking = _hotfix_run_strategy_ranking
 Terminal._apply_best_optimization_params = _hotfix_apply_best_optimization_params
+Terminal._assign_ranked_strategies_to_symbol = _hotfix_assign_ranked_strategies_to_symbol
 Terminal._optimize_strategy = _hotfix_optimize_strategy
+Terminal._open_strategy_assignment_window = _hotfix_show_strategy_assignment_window
+Terminal._show_strategy_assignment_window = _hotfix_show_strategy_assignment_window
+Terminal._refresh_strategy_assignment_window = _hotfix_refresh_strategy_assignment_window
+Terminal._apply_default_strategy_assignment = _hotfix_apply_default_strategy_assignment
+Terminal._apply_single_strategy_assignment = _hotfix_apply_single_strategy_assignment
+Terminal._apply_ranked_strategy_assignment = _hotfix_apply_ranked_strategy_assignment_from_window
 Terminal._open_ml_research_window = _hotfix_show_ml_research_window
 Terminal._show_ml_research_window = _hotfix_show_ml_research_window
 Terminal._refresh_ml_research_window = _hotfix_refresh_ml_research_window

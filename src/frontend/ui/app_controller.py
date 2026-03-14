@@ -160,6 +160,9 @@ class AppController(QMainWindow):
         self.max_risk_per_trade = float(self.settings.value("risk/max_risk_per_trade", 0.02) or 0.02)
         self.max_position_size_pct = float(self.settings.value("risk/max_position_size_pct", 0.10) or 0.10)
         self.max_gross_exposure_pct = float(self.settings.value("risk/max_gross_exposure_pct", 2.0) or 2.0)
+        self.hedging_enabled = str(
+            self.settings.value("trading/hedging_enabled", "true")
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self.margin_closeout_guard_enabled = str(
             self.settings.value("risk/margin_closeout_guard_enabled", "true")
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -231,6 +234,15 @@ class AppController(QMainWindow):
             "min_confidence": float(self.settings.value("strategy/min_confidence", 0.55)),
             "signal_amount": float(self.settings.value("strategy/signal_amount", 1.0)),
         }
+        self.multi_strategy_enabled = str(
+            self.settings.value("strategy/multi_strategy_enabled", "true")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.max_symbol_strategies = max(
+            1,
+            min(10, int(self.settings.value("strategy/max_symbol_strategies", 3) or 3)),
+        )
+        self.symbol_strategy_assignments = self._load_strategy_symbol_payload("strategy/symbol_assignments")
+        self.symbol_strategy_rankings = self._load_strategy_symbol_payload("strategy/symbol_rankings")
 
         self.portfolio = None
         self.ai_signal = None
@@ -1173,6 +1185,257 @@ class AppController(QMainWindow):
         )
         return result
 
+    def _normalize_strategy_symbol_key(self, symbol):
+        return str(symbol or "").strip().upper().replace("-", "/").replace("_", "/")
+
+    def _load_strategy_symbol_payload(self, key):
+        raw_value = self.settings.value(key, "{}")
+        try:
+            payload = json.loads(raw_value or "{}")
+        except Exception:
+            payload = {}
+        normalized = {}
+        if not isinstance(payload, dict):
+            return normalized
+        for symbol, rows in payload.items():
+            normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+            source_rows = list(rows or [])
+            cleaned_rows = []
+            for row in source_rows:
+                if not isinstance(row, dict):
+                    continue
+                strategy_name = Strategy.normalize_strategy_name(row.get("strategy_name"))
+                if not strategy_name:
+                    continue
+                assignment_mode = str(
+                    row.get("assignment_mode") or ("ranked" if len(source_rows) > 1 else "single")
+                ).strip().lower()
+                cleaned_rows.append(
+                    {
+                        "strategy_name": strategy_name,
+                        "score": float(row.get("score", 0.0) or 0.0),
+                        "weight": float(row.get("weight", 0.0) or 0.0),
+                        "symbol": normalized_symbol,
+                        "timeframe": str(row.get("timeframe") or "").strip(),
+                        "assignment_mode": assignment_mode if assignment_mode in {"single", "ranked"} else "single",
+                        "rank": int(row.get("rank", len(cleaned_rows) + 1) or (len(cleaned_rows) + 1)),
+                        "total_profit": float(row.get("total_profit", 0.0) or 0.0),
+                        "sharpe_ratio": float(row.get("sharpe_ratio", 0.0) or 0.0),
+                        "win_rate": float(row.get("win_rate", 0.0) or 0.0),
+                        "final_equity": float(row.get("final_equity", 0.0) or 0.0),
+                        "max_drawdown": float(row.get("max_drawdown", 0.0) or 0.0),
+                        "closed_trades": int(row.get("closed_trades", 0) or 0),
+                    }
+                )
+            if cleaned_rows:
+                normalized[normalized_symbol] = cleaned_rows
+        return normalized
+
+    def _persist_strategy_symbol_state(self):
+        self.settings.setValue("strategy/multi_strategy_enabled", bool(self.multi_strategy_enabled))
+        self.settings.setValue("strategy/max_symbol_strategies", int(self.max_symbol_strategies))
+        self.settings.setValue("strategy/symbol_assignments", json.dumps(self.symbol_strategy_assignments))
+        self.settings.setValue("strategy/symbol_rankings", json.dumps(self.symbol_strategy_rankings))
+
+    def ranked_strategies_for_symbol(self, symbol):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        return list(self.symbol_strategy_rankings.get(normalized_symbol, []) or [])
+
+    def raw_assigned_strategies_for_symbol(self, symbol):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        return list(self.symbol_strategy_assignments.get(normalized_symbol, []) or [])
+
+    def strategy_assignment_state_for_symbol(self, symbol):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        explicit_rows = self.raw_assigned_strategies_for_symbol(normalized_symbol)
+        active_rows = self.assigned_strategies_for_symbol(normalized_symbol)
+        ranked_rows = self.ranked_strategies_for_symbol(normalized_symbol)
+        if explicit_rows:
+            mode = str(explicit_rows[0].get("assignment_mode") or "").strip().lower()
+            if mode not in {"single", "ranked"}:
+                mode = "ranked" if len(explicit_rows) > 1 else "single"
+        else:
+            mode = "default"
+        return {
+            "symbol": normalized_symbol,
+            "mode": mode,
+            "explicit_rows": explicit_rows,
+            "active_rows": active_rows,
+            "ranked_rows": ranked_rows,
+        }
+
+    def assigned_strategies_for_symbol(self, symbol):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        assigned = list(self.symbol_strategy_assignments.get(normalized_symbol, []) or [])
+        if assigned:
+            if self.multi_strategy_enabled or len(assigned) <= 1:
+                return assigned
+            primary = dict(assigned[0])
+            primary["weight"] = 1.0
+            primary["rank"] = 1
+            return [primary]
+        fallback_name = Strategy.normalize_strategy_name(getattr(self, "strategy_name", "Trend Following"))
+        return [
+            {
+                "strategy_name": fallback_name,
+                "score": 1.0,
+                "weight": 1.0,
+                "symbol": normalized_symbol,
+                "timeframe": str(getattr(self, "time_frame", "") or "").strip(),
+                "rank": 1,
+            }
+        ]
+
+    def clear_symbol_strategy_assignment(self, symbol):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        removed = list(self.symbol_strategy_assignments.pop(normalized_symbol, []) or [])
+        self._persist_strategy_symbol_state()
+
+        trading_system = getattr(self, "trading_system", None)
+        if trading_system is not None and hasattr(trading_system, "refresh_strategy_preferences"):
+            try:
+                trading_system.refresh_strategy_preferences()
+            except Exception:
+                pass
+        return removed
+
+    def assign_strategy_to_symbol(self, symbol, strategy_name, timeframe=None):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        normalized_strategy = Strategy.normalize_strategy_name(strategy_name)
+        if not normalized_symbol:
+            raise ValueError("Select a symbol before assigning a strategy.")
+        if not normalized_strategy:
+            raise ValueError("Select a valid strategy before assigning it to a symbol.")
+
+        self.multi_strategy_enabled = True
+        assigned = [
+            {
+                "strategy_name": normalized_strategy,
+                "score": 1.0,
+                "weight": 1.0,
+                "symbol": normalized_symbol,
+                "timeframe": str(timeframe or self.time_frame or "").strip(),
+                "assignment_mode": "single",
+                "rank": 1,
+                "total_profit": 0.0,
+                "sharpe_ratio": 0.0,
+                "win_rate": 0.0,
+                "final_equity": 0.0,
+                "max_drawdown": 0.0,
+                "closed_trades": 0,
+            }
+        ]
+        self.symbol_strategy_assignments[normalized_symbol] = assigned
+        self._persist_strategy_symbol_state()
+
+        trading_system = getattr(self, "trading_system", None)
+        if trading_system is not None and hasattr(trading_system, "refresh_strategy_preferences"):
+            try:
+                trading_system.refresh_strategy_preferences()
+            except Exception:
+                pass
+        return list(assigned)
+
+    def active_strategy_weight_map(self):
+        if not self.multi_strategy_enabled:
+            return {Strategy.normalize_strategy_name(getattr(self, "strategy_name", "Trend Following")): 1.0}
+
+        totals = {}
+        for rows in (self.symbol_strategy_assignments or {}).values():
+            for row in list(rows or []):
+                if not isinstance(row, dict):
+                    continue
+                strategy_name = Strategy.normalize_strategy_name(row.get("strategy_name"))
+                if not strategy_name:
+                    continue
+                totals[strategy_name] = totals.get(strategy_name, 0.0) + max(0.0001, float(row.get("weight", 0.0) or 0.0))
+        if not totals:
+            return {Strategy.normalize_strategy_name(getattr(self, "strategy_name", "Trend Following")): 1.0}
+        total_weight = sum(totals.values())
+        if total_weight <= 0:
+            return {name: 1.0 / len(totals) for name in totals}
+        return {name: value / total_weight for name, value in totals.items()}
+
+    def broker_supports_hedging(self, broker=None):
+        broker = broker or getattr(self, "broker", None)
+        if broker is None:
+            return False
+        resolver = getattr(broker, "supports_hedging", None)
+        if callable(resolver):
+            try:
+                return bool(resolver())
+            except Exception:
+                return False
+        advertised = getattr(broker, "hedging_supported", None)
+        if advertised is not None:
+            return bool(advertised)
+        exchange_name = str(
+            getattr(broker, "exchange_name", None)
+            or getattr(getattr(broker, "config", None), "exchange", None)
+            or ""
+        ).strip().lower()
+        return exchange_name in {"oanda"}
+
+    def hedging_is_active(self, broker=None):
+        return bool(getattr(self, "hedging_enabled", True)) and self.broker_supports_hedging(broker)
+
+    def assign_ranked_strategies_to_symbol(self, symbol, rankings, top_n=None, timeframe=None):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        limit = max(1, int(top_n or self.max_symbol_strategies or 1))
+        self.max_symbol_strategies = limit
+        cleaned_rows = []
+        for index, row in enumerate(list(rankings or []), start=1):
+            if not isinstance(row, dict):
+                continue
+            strategy_name = Strategy.normalize_strategy_name(row.get("strategy_name"))
+            if not strategy_name:
+                continue
+            cleaned_rows.append(
+                {
+                    "strategy_name": strategy_name,
+                    "score": float(row.get("score", 0.0) or 0.0),
+                    "weight": 0.0,
+                    "symbol": normalized_symbol,
+                    "timeframe": str(row.get("timeframe") or timeframe or self.time_frame or "").strip(),
+                    "assignment_mode": "ranked",
+                    "rank": int(row.get("rank", index) or index),
+                    "total_profit": float(row.get("total_profit", 0.0) or 0.0),
+                    "sharpe_ratio": float(row.get("sharpe_ratio", 0.0) or 0.0),
+                    "win_rate": float(row.get("win_rate", 0.0) or 0.0),
+                    "final_equity": float(row.get("final_equity", 0.0) or 0.0),
+                    "max_drawdown": float(row.get("max_drawdown", 0.0) or 0.0),
+                    "closed_trades": int(row.get("closed_trades", 0) or 0),
+                }
+            )
+        cleaned_rows.sort(key=lambda item: (-float(item.get("score", 0.0) or 0.0), int(item.get("rank", 0) or 0)))
+        if cleaned_rows:
+            self.symbol_strategy_rankings[normalized_symbol] = cleaned_rows
+        top_rows = cleaned_rows[:limit]
+        if not top_rows:
+            self.symbol_strategy_assignments.pop(normalized_symbol, None)
+            self._persist_strategy_symbol_state()
+            return []
+
+        self.multi_strategy_enabled = True
+        weight_seed = [max(0.0001, float(item.get("score", 0.0) or 0.0)) for item in top_rows]
+        total_weight = sum(weight_seed) or float(len(top_rows))
+        assigned = []
+        for index, item in enumerate(top_rows, start=1):
+            assigned_item = dict(item)
+            assigned_item["rank"] = index
+            assigned_item["weight"] = float(weight_seed[index - 1] / total_weight)
+            assigned.append(assigned_item)
+        self.symbol_strategy_assignments[normalized_symbol] = assigned
+        self._persist_strategy_symbol_state()
+
+        trading_system = getattr(self, "trading_system", None)
+        if trading_system is not None and hasattr(trading_system, "refresh_strategy_preferences"):
+            try:
+                trading_system.refresh_strategy_preferences()
+            except Exception:
+                pass
+        return assigned
+
     async def submit_market_chat_trade(
         self,
         symbol,
@@ -1838,7 +2101,7 @@ class AppController(QMainWindow):
             terminal._schedule_open_orders_refresh()
         return results
 
-    async def close_market_chat_position(self, symbol, amount=None, quantity_mode=None):
+    async def close_market_chat_position(self, symbol, amount=None, quantity_mode=None, position=None, position_side=None, position_id=None):
         broker = getattr(self, "broker", None)
         if broker is None:
             raise RuntimeError("Connect a broker before closing positions from Sopotek Pilot.")
@@ -1848,11 +2111,44 @@ class AppController(QMainWindow):
             raise RuntimeError("Close position command needs a symbol.")
 
         positions = self._market_chat_positions_snapshot()
-        target = None
-        for position in positions:
-            if str(position.get("symbol") or "").strip().upper() == normalized_symbol:
-                target = position
-                break
+        selected_position = position if isinstance(position, dict) else None
+        selected_side = str(
+            position_side
+            or (selected_position or {}).get("position_side")
+            or (selected_position or {}).get("side")
+            or ""
+        ).strip().lower()
+        selected_id = str(
+            position_id
+            or (selected_position or {}).get("position_id")
+            or (selected_position or {}).get("id")
+            or ""
+        ).strip().lower()
+
+        matches = [
+            item
+            for item in positions
+            if str(item.get("symbol") or "").strip().upper() == normalized_symbol
+        ]
+        if selected_id:
+            matches = [
+                item
+                for item in matches
+                if str(item.get("position_id") or item.get("id") or "").strip().lower() == selected_id
+            ]
+        if selected_side:
+            matches = [
+                item
+                for item in matches
+                if str(item.get("position_side") or item.get("side") or "").strip().lower() == selected_side
+            ]
+        if selected_position is not None and not matches:
+            matches = [selected_position]
+        if len(matches) > 1 and self.hedging_is_active(broker):
+            raise RuntimeError(
+                f"Multiple hedge legs are open for {normalized_symbol}. Choose the specific LONG or SHORT position from Positions or Position Analysis."
+            )
+        target = matches[0] if matches else None
         if target is None:
             raise RuntimeError(f"No open position for {normalized_symbol} was found.")
 
@@ -1867,7 +2163,14 @@ class AppController(QMainWindow):
         result = None
         if hasattr(broker, "close_position"):
             try:
-                result = await broker.close_position(normalized_symbol, amount=resolved_amount, order_type="market")
+                result = await broker.close_position(
+                    normalized_symbol,
+                    amount=resolved_amount,
+                    order_type="market",
+                    position=target,
+                    position_side=selected_side or target.get("position_side") or target.get("side"),
+                    position_id=selected_id or target.get("position_id") or target.get("id"),
+                )
             except TypeError:
                 result = await broker.close_position(normalized_symbol, amount=resolved_amount)
 
@@ -1884,6 +2187,7 @@ class AppController(QMainWindow):
                 side=close_side,
                 amount=fallback_amount,
                 type="market",
+                params={"positionFill": "REDUCE_ONLY"} if self.hedging_is_active(broker) else None,
             )
 
         terminal = getattr(self, "terminal", None)
@@ -2386,33 +2690,53 @@ class AppController(QMainWindow):
             return f"Canceled order {order_id}." if count else f"No cancellation was performed for order {order_id}."
 
         close_match = re.search(
-            r"(?:close)\s+position\s+([A-Za-z0-9_:/.-]+)(?:\s+(?:amount|size|units)\s+([-+]?\d*\.?\d+)(?:\s+(lots?|units?))?)?",
+            r"(?:close)\s+(?:(long|short)\s+)?position\s+([A-Za-z0-9_:/.-]+)(?:\s+(?:amount|size|units)\s+([-+]?\d*\.?\d+)(?:\s+(lots?|units?))?)?",
             lowered,
         )
         if close_match:
-            symbol, amount_text, quantity_mode = close_match.groups()
+            position_side, symbol, amount_text, quantity_mode = close_match.groups()
             if "confirm" not in lowered:
+                side_text = f" side={position_side.upper()}" if position_side else ""
                 mode_text = f" {quantity_mode}" if quantity_mode else ""
                 return (
                     "Close-position command detected but not executed.\n"
                     "Add the word CONFIRM to execute it.\n"
-                    f"Parsed target: symbol={symbol.upper()} amount={amount_text or 'full position'}{mode_text}"
+                    f"Parsed target: symbol={symbol.upper()}{side_text} amount={amount_text or 'full position'}{mode_text}"
                 )
             amount = float(amount_text) if amount_text else None
             try:
-                result = await self.close_market_chat_position(symbol.upper(), amount=amount, quantity_mode=quantity_mode)
+                try:
+                    result = await self.close_market_chat_position(
+                        symbol.upper(),
+                        amount=amount,
+                        quantity_mode=quantity_mode,
+                        position_side=position_side,
+                    )
+                except TypeError:
+                    result = await self.close_market_chat_position(
+                        symbol.upper(),
+                        amount=amount,
+                        quantity_mode=quantity_mode,
+                    )
             except Exception as exc:
                 return f"Close-position command failed: {exc}"
             status = str(result.get("status") or "submitted").replace("_", " ").upper() if isinstance(result, dict) else "SUBMITTED"
             order_id = str(result.get("order_id") or result.get("id") or "-") if isinstance(result, dict) else "-"
             amount_label = f"{amount} {quantity_mode}" if amount is not None and quantity_mode else amount if amount is not None else "FULL POSITION"
-            return (
-                f"Close-position command executed.\n"
-                f"Symbol: {symbol.upper()}\n"
-                f"Amount: {amount_label}\n"
-                f"Status: {status}\n"
-                f"Order ID: {order_id}"
+            lines = [
+                "Close-position command executed.\n",
+                f"Symbol: {symbol.upper()}\n",
+            ]
+            if position_side:
+                lines.append(f"Side: {position_side.upper()}\n")
+            lines.extend(
+                [
+                    f"Amount: {amount_label}\n",
+                    f"Status: {status}\n",
+                    f"Order ID: {order_id}",
+                ]
             )
+            return "".join(lines)
 
         if (
             any(token in lowered for token in ("position analysis", "broker positions", "my positions", "account positions"))
@@ -2488,16 +2812,18 @@ class AppController(QMainWindow):
                 return "Limit trade commands need a positive price."
 
             try:
-                order = await self.submit_market_chat_trade(
-                    symbol=symbol.upper(),
-                    side=side,
-                    amount=amount,
-                    quantity_mode=quantity_mode,
-                    order_type=resolved_type,
-                    price=price,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                )
+                trade_kwargs = {
+                    "symbol": symbol.upper(),
+                    "side": side,
+                    "amount": amount,
+                    "order_type": resolved_type,
+                    "price": price,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                }
+                if quantity_mode:
+                    trade_kwargs["quantity_mode"] = quantity_mode
+                order = await self.submit_market_chat_trade(**trade_kwargs)
             except Exception as exc:
                 return f"Trade command failed: {exc}"
 
@@ -3095,6 +3421,9 @@ class AppController(QMainWindow):
                 key_text.replace("_", " "),
                 "".join(part.capitalize() for part in key_text.split("_")),
             }
+            parts = [part for part in key_text.split("_") if part]
+            if parts:
+                variants.add(parts[0].lower() + "".join(part.capitalize() for part in parts[1:]))
             for variant in variants:
                 if variant not in candidates:
                     candidates.append(variant)

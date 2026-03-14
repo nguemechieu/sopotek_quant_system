@@ -7,6 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import core.sopotek_trading as sopotek_trading_module
 import worker.symbol_worker as symbol_worker_module
 from core.sopotek_trading import SopotekTrading
 from engines.risk_engine import RiskEngine
@@ -184,6 +185,69 @@ def test_sopotek_trading_process_symbol_routes_through_central_pipeline():
     assert trading.pipeline_status_snapshot()["BTC/USDT"]["stage"] == "execution_manager"
 
 
+def test_sopotek_trading_process_symbol_uses_symbol_assigned_strategy_variants():
+    controller = SimpleNamespace(
+        broker=DummyBroker(),
+        symbols=["EUR/USD"],
+        time_frame="1h",
+        limit=200,
+        strategy_name="Trend Following",
+        strategy_params={},
+        max_portfolio_risk=0.10,
+        max_risk_per_trade=0.02,
+        max_position_size_pct=0.10,
+        max_gross_exposure_pct=2.0,
+        balances={"total": {"USDT": 10000}},
+        initial_capital=10000,
+        market_data_repository=None,
+        trade_repository=None,
+        handle_trade_execution=lambda trade: None,
+        assigned_strategies_for_symbol=lambda symbol: [
+            {"strategy_name": "Trend Following", "weight": 0.40, "score": 4.0, "rank": 1},
+            {"strategy_name": "EMA Cross | London Session Aggressive", "weight": 0.60, "score": 9.0, "rank": 2},
+        ],
+    )
+
+    trading = SopotekTrading(controller=controller)
+    dataset = FakeDataset(_sample_frame())
+
+    async def fake_get_symbol_dataset(**kwargs):
+        return dataset
+
+    chosen = {}
+
+    async def fake_process_signal(symbol, signal, dataset=None):
+        chosen["symbol"] = symbol
+        chosen["signal"] = dict(signal)
+        return {"status": "filled"}
+
+    calls = []
+
+    def fake_generate_signal(**kwargs):
+        calls.append(kwargs["strategy_name"])
+        if kwargs["strategy_name"] == "EMA Cross | London Session Aggressive":
+            return {
+                "symbol": "EUR/USD",
+                "side": "buy",
+                "amount": 0.5,
+                "confidence": 0.72,
+                "reason": "assigned strategy fired",
+                "strategy_name": kwargs["strategy_name"],
+            }
+        return None
+
+    trading.data_hub.get_symbol_dataset = fake_get_symbol_dataset
+    trading.signal_engine.generate_signal = fake_generate_signal
+    trading.process_signal = fake_process_signal
+
+    result = asyncio.run(trading.process_symbol("EUR/USD", timeframe="1h", limit=50, publish_debug=False))
+
+    assert result["status"] == "filled"
+    assert calls == ["Trend Following", "EMA Cross | London Session Aggressive"]
+    assert chosen["signal"]["strategy_name"] == "EMA Cross | London Session Aggressive"
+    assert chosen["signal"]["strategy_assignment_weight"] == 0.60
+
+
 def test_sopotek_trading_scales_basic_risk_rejections_into_smaller_orders():
     controller = SimpleNamespace(
         broker=DummyBroker(),
@@ -348,6 +412,60 @@ def test_sopotek_trading_does_not_cancel_orders_for_same_direction_signal():
     assert controller.broker.canceled == []
 
 
+def test_sopotek_trading_uses_open_only_orders_for_hedge_entries():
+    controller = SimpleNamespace(
+        broker=DummyBroker(),
+        symbols=["EUR/USD"],
+        time_frame="1h",
+        limit=200,
+        strategy_name="Trend Following",
+        strategy_params={},
+        max_portfolio_risk=0.10,
+        max_risk_per_trade=0.02,
+        max_position_size_pct=0.10,
+        max_gross_exposure_pct=2.0,
+        balances={"total": {"USDT": 10000}},
+        initial_capital=10000,
+        market_data_repository=None,
+        trade_repository=None,
+        handle_trade_execution=lambda trade: None,
+        hedging_enabled=True,
+        hedging_is_active=lambda broker=None: True,
+    )
+
+    trading = SopotekTrading(controller=controller)
+    trading.risk_engine = RiskEngine(account_equity=10000, max_position_size_pct=0.10)
+    trading.portfolio_allocator = None
+    trading.portfolio_risk_engine = None
+    trading.broker.hedging_supported = True
+
+    captured = {}
+
+    async def fake_execute(**kwargs):
+        captured.update(kwargs)
+        return {"status": "filled", "amount": kwargs["amount"], "reason": "submitted"}
+
+    trading.execution_manager.execute = fake_execute
+
+    asyncio.run(
+        trading.process_signal(
+            "EUR/USD",
+            {
+                "symbol": "EUR/USD",
+                "side": "sell",
+                "amount": 1.0,
+                "price": 1.10,
+                "confidence": 0.80,
+                "reason": "fresh hedge entry",
+                "strategy_name": "Trend Following",
+            },
+            dataset=FakeDataset(_sample_frame()),
+        )
+    )
+
+    assert captured["params"]["positionFill"] == "OPEN_ONLY"
+
+
 def test_sopotek_trading_blocks_trade_when_margin_closeout_guard_is_triggered():
     controller = SimpleNamespace(
         broker=DummyBroker(),
@@ -404,3 +522,36 @@ def test_sopotek_trading_blocks_trade_when_margin_closeout_guard_is_triggered():
     assert result is None
     assert trading.pipeline_status_snapshot()["BTC/USDT"]["stage"] == "margin_closeout_guard"
     assert trading.pipeline_status_snapshot()["BTC/USDT"]["status"] == "rejected"
+
+
+def test_sopotek_trading_start_tolerates_invalid_initial_capital_text(monkeypatch):
+    controller = SimpleNamespace(
+        broker=DummyBroker(),
+        symbols=["BTC/USDT"],
+        time_frame="1h",
+        limit=200,
+        strategy_name="Trend Following",
+        strategy_params={},
+        max_portfolio_risk=0.10,
+        max_risk_per_trade=0.02,
+        max_position_size_pct=0.10,
+        max_gross_exposure_pct=2.0,
+        balances={"total": {"USDT": 15000}},
+        initial_capital="abc",
+        market_data_repository=None,
+        trade_repository=None,
+        handle_trade_execution=lambda trade: None,
+    )
+
+    trading = SopotekTrading(controller=controller)
+    async def _noop_start(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(trading.execution_manager, "start", _noop_start)
+    monkeypatch.setattr(sopotek_trading_module.MultiSymbolOrchestrator, "start", _noop_start)
+    trading.behavior_guard.record_equity = lambda _equity: None
+
+    asyncio.run(trading.start())
+
+    assert trading.risk_engine is not None
+    assert abs(float(trading.risk_engine.account_equity) - 15000.0) < 1e-9

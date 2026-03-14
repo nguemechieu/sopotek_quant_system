@@ -9,6 +9,7 @@ from backtesting.experiment_tracker import ExperimentTracker
 from backtesting.optimizer import StrategyOptimizer
 from backtesting.report_generator import ReportGenerator
 from backtesting.simulator import Simulator
+from backtesting.strategy_ranker import StrategyRanker
 from backtesting.walk_forward import WalkForwardAnalyzer
 
 
@@ -126,3 +127,34 @@ def test_experiment_tracker_flattens_records():
     assert frame.iloc[0]["param_ema_fast"] == 10
     assert frame.iloc[0]["data_rows"] == 500
     assert frame.iloc[0]["total_profit"] == 120.0
+
+
+def test_strategy_ranker_ranks_multiple_strategies_for_symbol():
+    class RankedRegistry:
+        def list(self):
+            return ["Fast Winner", "Slow Loser"]
+
+        def _resolve_strategy(self, strategy_name=None):
+            return self
+
+        def generate_signal(self, candles, strategy_name=None):
+            length = len(candles)
+            if strategy_name == "Fast Winner":
+                if length == 2:
+                    return {"side": "buy", "amount": 1}
+                if length == 5:
+                    return {"side": "sell", "amount": 1}
+            if strategy_name == "Slow Loser":
+                if length == 3:
+                    return {"side": "buy", "amount": 1}
+                if length == 4:
+                    return {"side": "sell", "amount": 1}
+            return None
+
+    ranker = StrategyRanker(strategy_registry=RankedRegistry(), initial_balance=1000)
+
+    results = ranker.rank(make_frame(8), symbol="EUR/USD", timeframe="1h")
+
+    assert not results.empty
+    assert list(results["strategy_name"]) == ["Fast Winner", "Slow Loser"]
+    assert float(results.iloc[0]["score"]) >= float(results.iloc[1]["score"])

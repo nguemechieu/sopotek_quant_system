@@ -85,6 +85,8 @@ class BacktestEngine:
             return pd.DataFrame()
 
         warmup = self._min_history(strategy_name)
+        if warmup >= len(df):
+            warmup = 1
         last_row = None
         stopped_early = False
         feature_frame, generate_from_features = self._precompute_feature_frame(df, strategy_name=strategy_name)

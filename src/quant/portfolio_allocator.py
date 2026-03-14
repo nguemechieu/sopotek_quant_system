@@ -40,6 +40,12 @@ class PortfolioAllocator:
         if value > 0:
             self.account_equity = value
 
+    def configure_strategy_weights(self, strategy_weights=None, allocation_model=None):
+        self.strategy_weights = normalize_weights(strategy_weights or {})
+        if allocation_model is not None:
+            self.allocation_model = str(allocation_model or "equal_weight").strip().lower()
+        self._latest_snapshot = self.status_snapshot()
+
     def register_strategy_symbol(self, symbol, strategy_name):
         normalized_symbol = str(symbol or "").strip().upper()
         normalized_strategy = str(strategy_name or "").strip()

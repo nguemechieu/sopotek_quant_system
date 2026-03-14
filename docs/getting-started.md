@@ -8,7 +8,7 @@
 - Broker credentials are optional for paper mode but required for real broker sessions.
 
 ## Install
-
+-
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\activate

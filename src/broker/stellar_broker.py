@@ -79,6 +79,7 @@ class StellarBroker(BaseBroker):
     DEFAULT_RATE_LIMIT_RETRIES = 2
     DEFAULT_TRADES_CACHE_TTL = 20.0
     DEFAULT_TRADES_COOLDOWN_SECONDS = 30.0
+    DEFAULT_OHLCV_COOLDOWN_SECONDS = 45.0
     VALID_ASSET_CODE_RE = re.compile(r"^[A-Z]{2,12}$")
     VALID_PUBLIC_KEY_RE = re.compile(r"^G[A-Z2-7]{55}$")
     VALID_SECRET_KEY_RE = re.compile(r"^S[A-Z2-7]{55}$")
@@ -106,6 +107,9 @@ class StellarBroker(BaseBroker):
         self.orderbook_cache_ttl = float(self.params.get("orderbook_cache_ttl", 5.0))
         self.orderbook_cooldown_seconds = float(self.params.get("orderbook_cooldown_seconds", 10.0))
         self.ohlcv_cache_ttl = float(self.params.get("ohlcv_cache_ttl", 60.0))
+        self.ohlcv_cooldown_seconds = float(
+            self.params.get("ohlcv_cooldown_seconds", self.DEFAULT_OHLCV_COOLDOWN_SECONDS)
+        )
         self.trades_cache_ttl = float(self.params.get("trades_cache_ttl", self.DEFAULT_TRADES_CACHE_TTL))
         self.trades_cooldown_seconds = float(
             self.params.get("trades_cooldown_seconds", self.DEFAULT_TRADES_COOLDOWN_SECONDS)
@@ -129,6 +133,8 @@ class StellarBroker(BaseBroker):
         self._orderbook_cooldown_until: Dict[str, float] = {}
         self._ohlcv_cache: Dict[str, List[List[float]]] = {}
         self._ohlcv_cache_until: Dict[str, float] = {}
+        self._ohlcv_cooldown_until: Dict[str, float] = {}
+        self._ohlcv_inflight: Dict[str, asyncio.Task] = {}
         self._trades_cache: Dict[str, List[dict]] = {}
         self._trades_cache_until: Dict[str, float] = {}
         self._trades_cooldown_until: Dict[str, float] = {}
@@ -638,6 +644,10 @@ class StellarBroker(BaseBroker):
     def _ohlcv_cache_key(self, symbol: str, timeframe: str) -> str:
         return f"{str(symbol or '').upper()}|{str(timeframe or '1h').lower()}"
 
+    def _ohlcv_request_key(self, symbol: str, timeframe: str, limit: int) -> str:
+        normalized_limit = max(int(limit or 0), 1)
+        return f"{self._ohlcv_cache_key(symbol, timeframe)}|{normalized_limit}"
+
     def _trades_cache_key(self, symbol: str, limit: Optional[int]) -> str:
         normalized_limit = int(limit) if limit else 0
         return f"{str(symbol or '').upper()}|{normalized_limit}"
@@ -722,7 +732,6 @@ class StellarBroker(BaseBroker):
     def _aggregate_trades_to_candles(self, trades: List[dict], resolution: int, end_time: int, limit: int) -> List[List[float]]:
         if not trades:
             return []
-        start_time = end_time - (resolution * max(limit + 2, 1))
         buckets: Dict[int, List[float]] = {}
         ordered_trades = sorted(trades, key=self._trade_timestamp)
         for trade in ordered_trades:
@@ -730,8 +739,6 @@ class StellarBroker(BaseBroker):
             if timestamp <= 0:
                 continue
             bucket = (timestamp // resolution) * resolution
-            if bucket < start_time or bucket > end_time:
-                continue
             price = self._trade_price(trade)
             if price <= 0:
                 continue
@@ -1010,18 +1017,10 @@ class StellarBroker(BaseBroker):
                 filtered.append(record)
         return filtered[:limit] if limit else filtered
 
-    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+    async def _fetch_ohlcv_uncached(self, symbol, normalized_timeframe, requested_limit, cache_key, cached_candles):
         base_asset, quote_asset = self._resolve_symbol_assets(symbol)
-        normalized_timeframe = str(timeframe or "1h").lower()
         resolution = self.RESOLUTION_MAP.get(normalized_timeframe, 3600000)
-        cache_key = self._ohlcv_cache_key(symbol, normalized_timeframe)
-        cached_candles = self._ohlcv_cache.get(cache_key)
-        if cached_candles and time.time() < self._ohlcv_cache_until.get(cache_key, 0.0):
-            return cached_candles[-limit:]
-
-        requested_limit = max(int(limit or 0), 1)
         now_ms = int(time.time() * 1000)
-        # Horizon trade aggregations behave best with bucket-aligned time ranges.
         end_time = max((now_ms // resolution) * resolution, resolution)
         start_time = end_time - (resolution * max(requested_limit + 2, 4))
 
@@ -1056,27 +1055,68 @@ class StellarBroker(BaseBroker):
             try:
                 trades = await self.fetch_trades(symbol, limit=min(max(requested_limit * 20, 120), 600))
             except aiohttp.ClientResponseError as exc:
-                if exc.status == 429 and cached_candles:
-                    self.logger.warning("Using cached Stellar OHLCV for %s after Horizon rate limit.", symbol)
-                    return cached_candles[-limit:]
-                if last_rate_limit_error is not None and cached_candles:
-                    self.logger.warning("Using cached Stellar OHLCV for %s after Horizon rate limit.", symbol)
-                    return cached_candles[-limit:]
+                if exc.status == 429:
+                    self._ohlcv_cooldown_until[cache_key] = time.time() + self.ohlcv_cooldown_seconds
+                    if cached_candles:
+                        self.logger.warning("Using cached Stellar OHLCV for %s after Horizon rate limit.", symbol)
+                        return cached_candles
+                    self.logger.warning(
+                        "Stellar Horizon rate limited OHLCV for %s; using an empty candle set during cooldown.",
+                        symbol,
+                    )
+                    return []
                 raise
-            # Some Stellar markets return sparse aggregation data, so we synthesize
-            # candles from raw trades instead of leaving charts/backtests empty.
             candles = self._aggregate_trades_to_candles(trades, resolution, end_time, requested_limit)
 
         if candles:
             self._ohlcv_cache[cache_key] = candles
             self._ohlcv_cache_until[cache_key] = time.time() + self.ohlcv_cache_ttl
-            return candles[-limit:]
+            self._ohlcv_cooldown_until.pop(cache_key, None)
+            return candles
 
         if cached_candles:
-            return cached_candles[-limit:]
+            return cached_candles
         if last_rate_limit_error is not None:
-            raise last_rate_limit_error
+            self._ohlcv_cooldown_until[cache_key] = time.time() + self.ohlcv_cooldown_seconds
+            self.logger.warning(
+                "Stellar Horizon rate limited OHLCV for %s; using an empty candle set during cooldown.",
+                symbol,
+            )
+            return []
         return []
+
+    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+        normalized_timeframe = str(timeframe or "1h").lower()
+        cache_key = self._ohlcv_cache_key(symbol, normalized_timeframe)
+        cached_candles = self._ohlcv_cache.get(cache_key)
+        if cached_candles and time.time() < self._ohlcv_cache_until.get(cache_key, 0.0):
+            return cached_candles[-limit:]
+
+        if time.time() < self._ohlcv_cooldown_until.get(cache_key, 0.0):
+            return cached_candles[-limit:] if cached_candles else []
+
+        requested_limit = max(int(limit or 0), 1)
+        request_key = self._ohlcv_request_key(symbol, normalized_timeframe, requested_limit)
+        inflight = self._ohlcv_inflight.get(request_key)
+        if inflight is not None:
+            candles = await inflight
+            return candles[-limit:] if candles else []
+
+        task = asyncio.create_task(
+            self._fetch_ohlcv_uncached(
+                symbol,
+                normalized_timeframe,
+                requested_limit,
+                cache_key,
+                cached_candles,
+            )
+        )
+        self._ohlcv_inflight[request_key] = task
+        try:
+            candles = await task
+        finally:
+            self._ohlcv_inflight.pop(request_key, None)
+        return candles[-limit:] if candles else []
 
     async def fetch_balance(self):
         account = await self._load_account(suppress_rate_limit=True)
