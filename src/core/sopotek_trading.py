@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -8,6 +9,9 @@ from agents.orchestrator import AgentOrchestrator
 from agents.portfolio_agent import PortfolioAgent
 from agents.regime_agent import RegimeAgent
 from agents.risk_agent import RiskAgent as TradingRiskAgent
+from agents.signal_aggregation_agent import SignalAggregationAgent
+from agents.signal_consensus_agent import SignalConsensusAgent
+from agents.signal_fanout import run_signal_agents_parallel
 from agents.signal_agent import SignalAgent
 from agents.execution_agent import ExecutionAgent as TradingExecutionAgent
 from agents.event_driven_runtime import EventDrivenAgentRuntime
@@ -27,6 +31,10 @@ from risk.trader_behavior_guard import TraderBehaviorGuard
 
 class SopotekTrading:
     MAX_RUNTIME_ANALYSIS_BARS = 500
+    ADAPTIVE_TRADE_HISTORY_LIMIT = 300
+    ADAPTIVE_TRADE_CACHE_TTL_SECONDS = 15.0
+    ADAPTIVE_WEIGHT_MIN = 0.75
+    ADAPTIVE_WEIGHT_MAX = 1.35
 
     def __init__(self, controller=None):
 
@@ -97,14 +105,31 @@ class SopotekTrading:
         self.agent_decision_repository = None
         self.agent_memory = AgentMemory(max_events=2000)
         self.agent_memory.add_sink(self._persist_agent_memory_event)
-        self.signal_agent = SignalAgent(
-            selector=self._select_strategy_signal,
+        self.signal_agent_slots = max(1, int(getattr(controller, "max_signal_agents", 3) or 3))
+        self.signal_agents = []
+        for slot_index in range(self.signal_agent_slots):
+            self.signal_agents.append(
+                SignalAgent(
+                    selector=self._select_strategy_signal_for_slot(slot_index),
+                    name="SignalAgent" if slot_index == 0 else f"SignalAgent{slot_index + 1}",
+                    news_bias_applier=self._apply_news_bias,
+                    memory=self.agent_memory,
+                    event_bus=self.event_bus,
+                    candidate_mode=True,
+                )
+            )
+        self.signal_aggregation_agent = SignalAggregationAgent(
             display_builder=self._build_display_signal,
             publisher=self._publish_signal_context,
-            news_bias_applier=self._apply_news_bias,
             memory=self.agent_memory,
             event_bus=self.event_bus,
         )
+        self.signal_consensus_agent = SignalConsensusAgent(
+            minimum_votes=max(1, int(getattr(controller, "minimum_signal_votes", 2) or 2)),
+            memory=self.agent_memory,
+            event_bus=self.event_bus,
+        )
+        self.signal_agent = self.signal_agents[0]
         self.agent_orchestrator = AgentOrchestrator(
             agents=[
                 RegimeAgent(
@@ -131,7 +156,9 @@ class SopotekTrading:
         )
         self.event_driven_runtime = EventDrivenAgentRuntime(
             bus=self.event_bus,
-            signal_agent=self.signal_agent,
+            signal_agents=self.signal_agents,
+            signal_consensus_agent=self.signal_consensus_agent,
+            signal_aggregation_agent=self.signal_aggregation_agent,
             regime_agent=self.agent_orchestrator.agents[0],
             portfolio_agent=self.agent_orchestrator.agents[1],
             risk_agent=self.agent_orchestrator.agents[2],
@@ -147,12 +174,20 @@ class SopotekTrading:
         self.running = False
         self._pipeline_status = {}
         self._rejection_log_cache = {}
+        self._adaptive_trade_cache = {
+            "expires_at": 0.0,
+            "limit": 0,
+            "rows": [],
+        }
 
         if self.controller is not None:
             self.controller.agent_memory = self.agent_memory
             self.controller.agent_orchestrator = self.agent_orchestrator
             self.controller.event_bus = self.event_bus
             self.controller.agent_event_runtime = self.event_driven_runtime
+            self.controller.signal_agents = self.signal_agents
+            self.controller.signal_consensus_agent = self.signal_consensus_agent
+            self.controller.signal_aggregation_agent = self.signal_aggregation_agent
 
         self.bind_agent_decision_repository(getattr(self.controller, "agent_decision_repository", None))
         self.logger.info("Sopotek Trading System initialized")
@@ -243,11 +278,24 @@ class SopotekTrading:
 
     def _select_strategy_signal(self, normalized_symbol, candles, dataset):
         assigned = self._assigned_strategies_for_symbol(normalized_symbol)
+        candidates = self._strategy_signal_candidates(normalized_symbol, candles, dataset, assigned)
+        if not candidates:
+            return None, assigned
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2], assigned
+
+    def _strategy_signal_candidates(self, normalized_symbol, candles, dataset, assignments):
         candidates = []
-        for assignment in assigned:
+        for assignment in list(assignments or []):
             strategy_name = str(assignment.get("strategy_name") or "").strip()
             if not strategy_name:
                 continue
+            assignment_timeframe = str(
+                assignment.get("timeframe")
+                or getattr(dataset, "timeframe", None)
+                or self.time_frame
+                or "1h"
+            ).strip() or "1h"
             signal = self.signal_engine.generate_signal(
                 candles=candles,
                 dataset=dataset,
@@ -257,16 +305,313 @@ class SopotekTrading:
             if not signal:
                 continue
             weighted_confidence = float(signal.get("confidence", 0.0) or 0.0) * max(0.0001, float(assignment.get("weight", 0.0) or 0.0))
+            adaptive_profile = self._adaptive_profile_for_strategy(
+                normalized_symbol,
+                strategy_name,
+                timeframe=assignment_timeframe,
+            )
             enriched = dict(signal)
             enriched["strategy_name"] = strategy_name
+            enriched["timeframe"] = assignment_timeframe
             enriched["strategy_assignment_weight"] = float(assignment.get("weight", 0.0) or 0.0)
             enriched["strategy_assignment_score"] = float(assignment.get("score", 0.0) or 0.0)
             enriched["strategy_assignment_rank"] = int(assignment.get("rank", 0) or 0)
-            candidates.append((weighted_confidence, float(assignment.get("score", 0.0) or 0.0), enriched))
-        if not candidates:
-            return None, assigned
-        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return candidates[0][2], assigned
+            enriched["adaptive_weight"] = float(adaptive_profile.get("adaptive_weight", 1.0) or 1.0)
+            enriched["adaptive_score"] = weighted_confidence * enriched["adaptive_weight"]
+            enriched["adaptive_sample_size"] = int(adaptive_profile.get("sample_size", 0) or 0)
+            enriched["adaptive_win_rate"] = adaptive_profile.get("win_rate")
+            enriched["adaptive_avg_pnl"] = adaptive_profile.get("average_pnl")
+            enriched["adaptive_feedback_scope"] = adaptive_profile.get("scope")
+            candidates.append((enriched["adaptive_score"], float(assignment.get("score", 0.0) or 0.0), enriched))
+        return candidates
+
+    def _normalized_symbol_aliases(self, symbol):
+        normalized = str(symbol or "").strip().upper()
+        if not normalized:
+            return set()
+        aliases = {normalized}
+        if "/" in normalized:
+            aliases.add(normalized.replace("/", "_"))
+        if "_" in normalized:
+            aliases.add(normalized.replace("_", "/"))
+        return aliases
+
+    def _recent_trade_history(self, limit=None):
+        requested_limit = max(10, int(limit or self.ADAPTIVE_TRADE_HISTORY_LIMIT))
+        repository = getattr(self.controller, "trade_repository", None) if self.controller is not None else None
+        if repository is None or not hasattr(repository, "get_trades"):
+            return []
+
+        now = time.monotonic()
+        cache = dict(self._adaptive_trade_cache or {})
+        cached_rows = list(cache.get("rows") or [])
+        if (
+            cached_rows
+            and now < float(cache.get("expires_at", 0.0) or 0.0)
+            and int(cache.get("limit", 0) or 0) >= requested_limit
+        ):
+            return cached_rows[:requested_limit]
+
+        try:
+            rows = list(repository.get_trades(limit=requested_limit) or [])
+        except Exception:
+            self.logger.debug("Unable to load recent trade history for adaptive scoring", exc_info=True)
+            rows = []
+        self._adaptive_trade_cache = {
+            "expires_at": now + self.ADAPTIVE_TRADE_CACHE_TTL_SECONDS,
+            "limit": requested_limit,
+            "rows": list(rows),
+        }
+        return rows
+
+    def _trade_feedback_signal(self, trade):
+        pnl_value = getattr(trade, "pnl", None)
+        pnl = None
+        if pnl_value not in (None, ""):
+            try:
+                pnl = float(pnl_value)
+            except Exception:
+                pnl = None
+        if pnl is not None:
+            if pnl > 0:
+                return {"score": 1.0, "pnl": pnl}
+            if pnl < 0:
+                return {"score": -1.0, "pnl": pnl}
+            return {"score": 0.0, "pnl": pnl}
+
+        outcome = str(getattr(trade, "outcome", None) or "").strip().lower()
+        if outcome:
+            if any(token in outcome for token in ("win", "profit", "target", "take profit")):
+                return {"score": 1.0, "pnl": None}
+            if any(token in outcome for token in ("loss", "losing", "stop", "stopped")):
+                return {"score": -1.0, "pnl": None}
+            if "break even" in outcome or "breakeven" in outcome:
+                return {"score": 0.0, "pnl": None}
+
+        return None
+
+    def _trade_timestamp_value(self, value):
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc).timestamp()
+            return value.astimezone(timezone.utc).timestamp()
+        if value in (None, ""):
+            return None
+        try:
+            numeric = float(value)
+        except Exception:
+            numeric = None
+        if numeric is not None:
+            if abs(numeric) > 1e11:
+                numeric = numeric / 1000.0
+            return float(numeric)
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).timestamp()
+
+    def _adaptive_profile_for_strategy(self, normalized_symbol, strategy_name, timeframe=None):
+        strategy_text = str(strategy_name or "").strip().lower()
+        if not strategy_text:
+            return {
+                "adaptive_weight": 1.0,
+                "sample_size": 0,
+                "win_rate": None,
+                "average_pnl": None,
+                "scope": "none",
+            }
+
+        symbol_aliases = self._normalized_symbol_aliases(normalized_symbol)
+        timeframe_text = str(timeframe or "").strip().lower()
+        matched_exact = []
+        matched_fallback = []
+        for trade in self._recent_trade_history():
+            trade_symbol = str(getattr(trade, "symbol", None) or "").strip().upper()
+            if symbol_aliases and trade_symbol not in symbol_aliases:
+                continue
+            if str(getattr(trade, "strategy_name", None) or "").strip().lower() != strategy_text:
+                continue
+            trade_timeframe = str(getattr(trade, "timeframe", None) or "").strip().lower()
+            if timeframe_text and trade_timeframe == timeframe_text:
+                matched_exact.append(trade)
+            elif not timeframe_text or not trade_timeframe:
+                matched_fallback.append(trade)
+
+        scoped_rows = matched_exact or matched_fallback
+        feedback = [row for row in (self._trade_feedback_signal(trade) for trade in scoped_rows) if row is not None]
+        if not feedback:
+            return {
+                "adaptive_weight": 1.0,
+                "sample_size": 0,
+                "win_rate": None,
+                "average_pnl": None,
+                "scope": "timeframe" if matched_exact else "strategy",
+            }
+
+        sample_size = len(feedback)
+        average_score = sum(float(item.get("score", 0.0) or 0.0) for item in feedback) / float(sample_size)
+        sample_strength = min(1.0, float(sample_size) / 6.0)
+        adaptive_weight = 1.0 + (0.35 * average_score * sample_strength)
+        adaptive_weight = max(self.ADAPTIVE_WEIGHT_MIN, min(self.ADAPTIVE_WEIGHT_MAX, adaptive_weight))
+        pnl_samples = [float(item["pnl"]) for item in feedback if item.get("pnl") is not None]
+        wins = sum(1 for item in feedback if float(item.get("score", 0.0) or 0.0) > 0)
+        return {
+            "adaptive_weight": adaptive_weight,
+            "sample_size": sample_size,
+            "win_rate": wins / float(sample_size),
+            "average_pnl": (sum(pnl_samples) / float(len(pnl_samples))) if pnl_samples else None,
+            "scope": "timeframe" if matched_exact else "strategy",
+        }
+
+    def adaptive_profile_for_strategy(self, symbol, strategy_name, timeframe=None):
+        normalized_symbol = str(symbol or "").strip().upper()
+        timeframe_value = str(timeframe or self.time_frame or "1h").strip() or "1h"
+        profile = dict(
+            self._adaptive_profile_for_strategy(
+                normalized_symbol,
+                strategy_name,
+                timeframe=timeframe_value,
+            )
+        )
+        profile["symbol"] = normalized_symbol
+        profile["strategy_name"] = str(strategy_name or "").strip()
+        profile["timeframe"] = timeframe_value
+        return profile
+
+    def adaptive_trade_samples_for_strategy(self, symbol, strategy_name, timeframe=None, limit=8):
+        normalized_symbol = str(symbol or "").strip().upper()
+        strategy_text = str(strategy_name or "").strip()
+        timeframe_value = str(timeframe or self.time_frame or "1h").strip() or "1h"
+        if not normalized_symbol or not strategy_text:
+            return {
+                "symbol": normalized_symbol,
+                "strategy_name": strategy_text,
+                "timeframe": timeframe_value,
+                "scope": "none",
+                "samples": [],
+                "profile": {},
+            }
+
+        strategy_key = strategy_text.lower()
+        symbol_aliases = self._normalized_symbol_aliases(normalized_symbol)
+        exact_matches = []
+        fallback_matches = []
+        scan_limit = max(max(1, int(limit or 8)) * 10, self.ADAPTIVE_TRADE_HISTORY_LIMIT)
+
+        for trade in self._recent_trade_history(limit=scan_limit):
+            trade_symbol = str(getattr(trade, "symbol", None) or "").strip().upper()
+            if symbol_aliases and trade_symbol not in symbol_aliases:
+                continue
+            if str(getattr(trade, "strategy_name", None) or "").strip().lower() != strategy_key:
+                continue
+
+            feedback = self._trade_feedback_signal(trade)
+            if feedback is None:
+                continue
+
+            trade_timeframe = str(getattr(trade, "timeframe", None) or "").strip() or ""
+            sample = {
+                "timestamp": getattr(trade, "timestamp", None),
+                "status": str(getattr(trade, "status", None) or "").strip(),
+                "side": str(getattr(trade, "side", None) or "").strip(),
+                "timeframe": trade_timeframe,
+                "pnl": feedback.get("pnl"),
+                "score": float(feedback.get("score", 0.0) or 0.0),
+                "outcome": str(getattr(trade, "outcome", None) or "").strip(),
+                "reason": str(getattr(trade, "reason", None) or "").strip(),
+                "source_agent": str(getattr(trade, "signal_source_agent", None) or "").strip(),
+                "consensus_status": str(getattr(trade, "consensus_status", None) or "").strip(),
+                "adaptive_weight": getattr(trade, "adaptive_weight", None),
+                "adaptive_score": getattr(trade, "adaptive_score", None),
+            }
+            if trade_timeframe.lower() == timeframe_value.lower():
+                exact_matches.append(sample)
+            elif not trade_timeframe:
+                fallback_matches.append(sample)
+
+        samples = list((exact_matches or fallback_matches)[: max(1, int(limit or 8))])
+        return {
+            "symbol": normalized_symbol,
+            "strategy_name": strategy_text,
+            "timeframe": timeframe_value,
+            "scope": "timeframe" if exact_matches else "strategy",
+            "samples": samples,
+            "profile": self.adaptive_profile_for_strategy(normalized_symbol, strategy_text, timeframe=timeframe_value),
+        }
+
+    def adaptive_weight_timeline_for_strategy(self, symbol, strategy_name, timeframe=None, limit=16):
+        detail = self.adaptive_trade_samples_for_strategy(
+            symbol,
+            strategy_name,
+            timeframe=timeframe,
+            limit=max(8, int(limit or 16)),
+        )
+        sample_rows = list(detail.get("samples") or [])
+        if not sample_rows:
+            return {
+                "symbol": detail.get("symbol"),
+                "strategy_name": detail.get("strategy_name"),
+                "timeframe": detail.get("timeframe"),
+                "scope": detail.get("scope"),
+                "timeline": [],
+                "profile": dict(detail.get("profile") or {}),
+            }
+
+        ordered_samples = list(sample_rows)
+        ordered_samples.sort(
+            key=lambda row: (
+                self._trade_timestamp_value(row.get("timestamp")) if isinstance(row, dict) else None
+            ) or 0.0
+        )
+
+        timeline = []
+        running_scores = []
+        for index, sample in enumerate(ordered_samples, start=1):
+            score = float(sample.get("score", 0.0) or 0.0)
+            running_scores.append(score)
+            average_score = sum(running_scores) / float(len(running_scores))
+            sample_strength = min(1.0, float(len(running_scores)) / 6.0)
+            adaptive_weight = 1.0 + (0.35 * average_score * sample_strength)
+            adaptive_weight = max(self.ADAPTIVE_WEIGHT_MIN, min(self.ADAPTIVE_WEIGHT_MAX, adaptive_weight))
+            timeline.append(
+                {
+                    "timestamp": sample.get("timestamp"),
+                    "timestamp_value": self._trade_timestamp_value(sample.get("timestamp")),
+                    "adaptive_weight": adaptive_weight,
+                    "score": score,
+                    "pnl": sample.get("pnl"),
+                    "reason": sample.get("reason"),
+                    "side": sample.get("side"),
+                    "sample_index": index,
+                }
+            )
+
+        return {
+            "symbol": detail.get("symbol"),
+            "strategy_name": detail.get("strategy_name"),
+            "timeframe": detail.get("timeframe"),
+            "scope": detail.get("scope"),
+            "timeline": timeline[-max(1, int(limit or 16)) :],
+            "profile": dict(detail.get("profile") or {}),
+        }
+
+    def _select_strategy_signal_for_slot(self, slot_index):
+        def selector(normalized_symbol, candles, dataset):
+            assigned = self._assigned_strategies_for_symbol(normalized_symbol)
+            scoped_assignments = list(assigned[slot_index : slot_index + 1])
+            candidates = self._strategy_signal_candidates(normalized_symbol, candles, dataset, scoped_assignments)
+            if not candidates:
+                return None, scoped_assignments
+            candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            return candidates[0][2], scoped_assignments
+
+        return selector
 
     def _resolve_execution_strategy(self, symbol, side, amount, price, signal):
         requested = str(signal.get("execution_strategy") or "").strip().lower()
@@ -373,6 +718,19 @@ class SopotekTrading:
     def _custom_process_signal_handler(self):
         handler = self.__dict__.get("process_signal")
         return handler if callable(handler) else None
+
+    async def _run_signal_agents(self, context):
+        working = dict(context or {})
+        if len(list(self.signal_agents or [])) <= 1 and self.signal_aggregation_agent is None:
+            signal_agent = self.signal_agent
+            return await signal_agent.process(working) if signal_agent is not None else working
+
+        working = await run_signal_agents_parallel(self.signal_agents, working)
+        if self.signal_consensus_agent is not None:
+            working = await self.signal_consensus_agent.process(working)
+        if self.signal_aggregation_agent is not None:
+            working = await self.signal_aggregation_agent.process(working)
+        return working
 
     def _build_display_signal(self, context, signal, assigned_strategies):
         symbol = str((context or {}).get("symbol") or "").strip().upper()
@@ -752,7 +1110,7 @@ class SopotekTrading:
 
         custom_handler = self._custom_process_signal_handler()
         if custom_handler is not None:
-            context = await self.signal_agent.process(context)
+            context = await self._run_signal_agents(context)
             signal = context.get("signal")
             display_signal = context.get("display_signal") or self._build_display_signal(context, signal, context.get("assigned_strategies") or [])
             if signal:
@@ -948,6 +1306,10 @@ class SopotekTrading:
             "timeframe": review_timeframe,
             "dataset": dataset,
             "strategy_name": strategy_name,
+            "signal_source_agent": str(normalized_signal.get("signal_source_agent") or "").strip() or None,
+            "consensus_status": str(normalized_signal.get("consensus_status") or "").strip() or None,
+            "adaptive_weight": normalized_signal.get("adaptive_weight"),
+            "adaptive_score": normalized_signal.get("adaptive_score"),
             "stage": "review",
             "reason": "",
             "portfolio_snapshot": dict(portfolio_snapshot or self._build_portfolio_snapshot(normalized_symbol)),
@@ -1142,6 +1504,11 @@ class SopotekTrading:
             price=review.get("price"),
             source="bot",
             strategy_name=review.get("strategy_name"),
+            timeframe=review.get("timeframe"),
+            signal_source_agent=review.get("signal_source_agent"),
+            consensus_status=review.get("consensus_status"),
+            adaptive_weight=review.get("adaptive_weight"),
+            adaptive_score=review.get("adaptive_score"),
             reason=signal.get("reason"),
             confidence=signal.get("confidence"),
             expected_price=signal.get("price"),

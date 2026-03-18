@@ -91,6 +91,11 @@ def _migrate_sqlite_schema():
     _ensure_sqlite_column("trades", "setup", "setup TEXT")
     _ensure_sqlite_column("trades", "outcome", "outcome TEXT")
     _ensure_sqlite_column("trades", "lessons", "lessons TEXT")
+    _ensure_sqlite_column("trades", "timeframe", "timeframe VARCHAR")
+    _ensure_sqlite_column("trades", "signal_source_agent", "signal_source_agent VARCHAR")
+    _ensure_sqlite_column("trades", "consensus_status", "consensus_status VARCHAR")
+    _ensure_sqlite_column("trades", "adaptive_weight", "adaptive_weight FLOAT")
+    _ensure_sqlite_column("trades", "adaptive_score", "adaptive_score FLOAT")
 
     _ensure_sqlite_column("equity_snapshots", "exchange", "exchange VARCHAR")
     _ensure_sqlite_column("equity_snapshots", "account_label", "account_label VARCHAR")

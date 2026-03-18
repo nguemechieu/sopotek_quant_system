@@ -1,3 +1,4 @@
+from frontend.console.system_console import SystemConsole
 import asyncio
 import json
 import logging
@@ -57,6 +58,8 @@ from storage.equity_repository import EquitySnapshotRepository
 from storage.market_data_repository import MarketDataRepository
 from storage.trade_repository import TradeRepository
 from strategy.strategy import Strategy
+from frontend.console.system_console import SystemConsole
+
 
 try:
     import winsound
@@ -79,6 +82,8 @@ def _bounded_window_extent(requested, available, *, margin=24, minimum=640):
     bounded_minimum = min(max(320, int(minimum)), usable)
     bounded_size = max(bounded_minimum, min(requested_value, usable))
     return bounded_size, bounded_minimum
+
+
 
 
 class AppController(QMainWindow):
@@ -177,22 +182,19 @@ class AppController(QMainWindow):
         self.health_check_summary = "Not run"
         self._live_agent_decision_events = {}
         self._live_agent_runtime_feed = []
-
         self.risk_profile_name = str(self.settings.value("risk/profile_name", "Balanced") or "Balanced").strip() or "Balanced"
-        self.max_portfolio_risk = float(self.settings.value("risk/max_portfolio_risk", 0.10) or 0.10)
-        self.max_risk_per_trade = float(self.settings.value("risk/max_risk_per_trade", 0.02) or 0.02)
-        self.max_position_size_pct = float(self.settings.value("risk/max_position_size_pct", 0.10) or 0.10)
-        self.max_gross_exposure_pct = float(self.settings.value("risk/max_gross_exposure_pct", 2.0) or 2.0)
+        self.max_portfolio_risk = self.settings.value("risk/max_portfolio_risk", 0.10) or 0.10
+        self.max_risk_per_trade = self.settings.value("risk/max_risk_per_trade", 0.02) or 0.02
+        self.max_position_size_pct = self.settings.value("risk/max_position_size_pct", 0.10) or 0.10
+        self.max_gross_exposure_pct = self.settings.value("risk/max_gross_exposure_pct", 2.0) or 2.0
         self.hedging_enabled = str(
             self.settings.value("trading/hedging_enabled", "true")
         ).strip().lower() in {"1", "true", "yes", "on"}
         self.margin_closeout_guard_enabled = str(
             self.settings.value("risk/margin_closeout_guard_enabled", "true")
         ).strip().lower() in {"1", "true", "yes", "on"}
-        self.max_margin_closeout_pct = max(
-            0.01,
-            min(1.0, float(self.settings.value("risk/max_margin_closeout_pct", 0.50) or 0.50)),
-        )
+        self.max_margin_closeout_pct = max(0.01,
+            min(1.0, float(self.settings.value("risk/max_margin_closeout_pct", 0.50) )))
         self.confidence = 0
         self.volatility = 0
         self.order_type = "limit"
@@ -2181,7 +2183,8 @@ class AppController(QMainWindow):
         )
         return self._strategy_auto_assignment_task
 
-    async def auto_rank_and_assign_strategies(self, symbols=None, timeframe=None, force=False, min_candles=120, history_limit=240):
+    async def auto_rank_and_assign_strategies(self,
+                                              symbols=None, timeframe=None, force=False, min_candles=120, history_limit=240):
         if not bool(getattr(self, "strategy_auto_assignment_enabled", True)) and not force:
             self.strategy_auto_assignment_ready = True
             return self.strategy_auto_assignment_status()
@@ -2227,8 +2230,9 @@ class AppController(QMainWindow):
             current_symbol="",
             timeframe=timeframe_value,
             message=scan_message,
-            failed_symbols=[],
+            failed_symbols=[]
         )
+        self.system_console= SystemConsole(self.controller)  # Ensure system_console is available for logging
 
         terminal = getattr(self, "terminal", None)
         system_console = getattr(terminal, "system_console", None) if terminal is not None else None
@@ -2458,6 +2462,150 @@ class AppController(QMainWindow):
                 "rank": 1,
             }
         ]
+
+    def adaptive_strategy_profiles_for_symbol(self, symbol):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        if not normalized_symbol:
+            return []
+
+        state = self.strategy_assignment_state_for_symbol(normalized_symbol)
+        active_rows = list(state.get("active_rows", []) or [])
+        ranked_rows = list(state.get("ranked_rows", []) or [])
+        source_rows = list(active_rows) + list(ranked_rows)
+        if not source_rows:
+            source_rows = list(self.assigned_strategies_for_symbol(normalized_symbol) or [])
+
+        active_keys = {
+            (
+                str(row.get("strategy_name") or "").strip(),
+                str(row.get("timeframe") or "").strip(),
+            )
+            for row in active_rows
+            if isinstance(row, dict)
+        }
+        ranked_keys = {
+            (
+                str(row.get("strategy_name") or "").strip(),
+                str(row.get("timeframe") or "").strip(),
+            )
+            for row in ranked_rows
+            if isinstance(row, dict)
+        }
+
+        trading_system = getattr(self, "trading_system", None)
+        profile_resolver = getattr(trading_system, "adaptive_profile_for_strategy", None) if trading_system is not None else None
+        seen = set()
+        profiles = []
+        for row in list(source_rows or []):
+            if not isinstance(row, dict):
+                continue
+            strategy_name = str(row.get("strategy_name") or "").strip()
+            timeframe = str(row.get("timeframe") or getattr(self, "time_frame", "1h") or "1h").strip() or "1h"
+            if not strategy_name:
+                continue
+            fingerprint = (strategy_name, timeframe)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+
+            profile = dict(
+                profile_resolver(normalized_symbol, strategy_name, timeframe=timeframe) or {}
+            ) if callable(profile_resolver) else {}
+            mode = "candidate"
+            if fingerprint in active_keys and fingerprint in ranked_keys:
+                mode = "active + ranked"
+            elif fingerprint in active_keys:
+                mode = "active"
+            elif fingerprint in ranked_keys:
+                mode = "ranked"
+
+            profiles.append(
+                {
+                    "symbol": normalized_symbol,
+                    "strategy_name": strategy_name,
+                    "timeframe": timeframe,
+                    "mode": mode,
+                    "adaptive_weight": float(profile.get("adaptive_weight", 1.0) or 1.0),
+                    "sample_size": int(profile.get("sample_size", 0) or 0),
+                    "win_rate": profile.get("win_rate"),
+                    "average_pnl": profile.get("average_pnl"),
+                    "scope": str(profile.get("scope") or "none").strip() or "none",
+                    "assignment_score": float(row.get("score", 0.0) or 0.0),
+                    "assignment_weight": float(row.get("weight", 0.0) or 0.0),
+                }
+            )
+
+        profiles.sort(
+            key=lambda row: (
+                float(row.get("adaptive_weight", 1.0) or 1.0),
+                int(row.get("sample_size", 0) or 0),
+                float(row.get("assignment_score", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        return profiles
+
+    def adaptive_strategy_detail_for_symbol(self, symbol, strategy_name, timeframe=None, limit=8):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        normalized_strategy = str(strategy_name or "").strip()
+        timeframe_value = str(timeframe or getattr(self, "time_frame", "1h") or "1h").strip() or "1h"
+        if not normalized_symbol or not normalized_strategy:
+            return {}
+
+        trading_system = getattr(self, "trading_system", None)
+        resolver = getattr(trading_system, "adaptive_trade_samples_for_strategy", None) if trading_system is not None else None
+        if not callable(resolver):
+            return {}
+
+        try:
+            return dict(
+                resolver(
+                    normalized_symbol,
+                    normalized_strategy,
+                    timeframe=timeframe_value,
+                    limit=limit,
+                )
+                or {}
+            )
+        except Exception:
+            self.logger.debug(
+                "Unable to load adaptive strategy detail for %s / %s",
+                normalized_symbol,
+                normalized_strategy,
+                exc_info=True,
+            )
+            return {}
+
+    def adaptive_strategy_timeline_for_symbol(self, symbol, strategy_name, timeframe=None, limit=16):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        normalized_strategy = str(strategy_name or "").strip()
+        timeframe_value = str(timeframe or getattr(self, "time_frame", "1h") or "1h").strip() or "1h"
+        if not normalized_symbol or not normalized_strategy:
+            return {}
+
+        trading_system = getattr(self, "trading_system", None)
+        resolver = getattr(trading_system, "adaptive_weight_timeline_for_strategy", None) if trading_system is not None else None
+        if not callable(resolver):
+            return {}
+
+        try:
+            return dict(
+                resolver(
+                    normalized_symbol,
+                    normalized_strategy,
+                    timeframe=timeframe_value,
+                    limit=limit,
+                )
+                or {}
+            )
+        except Exception:
+            self.logger.debug(
+                "Unable to load adaptive strategy timeline for %s / %s",
+                normalized_symbol,
+                normalized_strategy,
+                exc_info=True,
+            )
+            return {}
 
     def clear_symbol_strategy_assignment(self, symbol):
         normalized_symbol = self._normalize_strategy_symbol_key(symbol)

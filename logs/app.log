@@ -223,3 +223,50 @@ Not enough data for NZD_SGD (1h): received 4999 of 10000 requested candles. Indi
 Initializing broker oanda
 Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
 Using polling market data for Oanda
+Not enough data for AUD_CHF (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Terminal initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1497, in initialize_trading
+    self.terminal = Terminal(self)
+                    ~~~~~~~~^^^^^^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\terminal.py", line 222, in __init__
+    self.system_console=controller.system_console
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AppController' object has no attribute 'system_console'
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Terminal initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1499, in initialize_trading
+    self.terminal = Terminal(self)
+                    ~~~~~~~~^^^^^^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\terminal.py", line 222, in __init__
+    self.system_console=controller.system_console
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AppController' object has no attribute 'system_console'
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Portfolio exposure error: 'list' object has no attribute 'get'
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Portfolio exposure error: 'Position' object has no attribute 'get'
+Portfolio exposure error: 'Position' object has no attribute 'get'
+Not enough data for GBP_USD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.

@@ -134,7 +134,7 @@ def _install_qt_message_filter() -> None:
         if _is_qt_windows_noise(message):
             return
         if previous_handler is not None:
-            previous_handler(mode, context, message)
+            previous_handler(mode, context, message) # type: ignore
         else:
             sys.stderr.write(f"{message}\n")
 

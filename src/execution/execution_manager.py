@@ -334,6 +334,11 @@ class ExecutionManager:
             ),
             "execution_strategy": execution_strategy,
             "execution_quality": execution_quality if isinstance(execution_quality, dict) else {},
+            "timeframe": execution.get("timeframe") or submitted_order.get("timeframe"),
+            "signal_source_agent": execution.get("signal_source_agent") or submitted_order.get("signal_source_agent"),
+            "consensus_status": execution.get("consensus_status") or submitted_order.get("consensus_status"),
+            "adaptive_weight": execution.get("adaptive_weight", submitted_order.get("adaptive_weight")),
+            "adaptive_score": execution.get("adaptive_score", submitted_order.get("adaptive_score")),
         }
 
     def _payload_fingerprint(self, payload):
@@ -376,6 +381,11 @@ class ExecutionManager:
                     payload.get("setup"),
                     payload.get("outcome"),
                     payload.get("lessons"),
+                    payload.get("timeframe"),
+                    payload.get("signal_source_agent"),
+                    payload.get("consensus_status"),
+                    payload.get("adaptive_weight"),
+                    payload.get("adaptive_score"),
                 )
             except Exception as exc:
                 self.logger.debug("Trade persistence failed for %s: %s", payload.get("symbol"), exc)
@@ -649,6 +659,11 @@ class ExecutionManager:
             "spread_bps",
             "pnl",
             "execution_strategy",
+            "timeframe",
+            "signal_source_agent",
+            "consensus_status",
+            "adaptive_weight",
+            "adaptive_score",
         ):
             if order.get(extra_key) is not None:
                 normalized_order[extra_key] = order.get(extra_key)

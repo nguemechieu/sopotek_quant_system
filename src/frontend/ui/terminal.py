@@ -5057,7 +5057,7 @@ class Terminal(QMainWindow):
             except Exception:
                 continue
 
-        for row, pos in enumerate(positions):
+        for row, pos in enumerate((positions)):
             symbol = pos.get("symbol", "-")
             size = pos.get("size", pos.get("amount", "-"))
             value = float(pos.get("value", 0) or 0)

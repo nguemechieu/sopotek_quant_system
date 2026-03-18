@@ -1,13 +1,28 @@
 import asyncio
 from uuid import uuid4
 
+from agents.signal_fanout import run_signal_agents_parallel
 from event_bus.event_types import EventType
 
 
 class EventDrivenAgentRuntime:
-    def __init__(self, bus, signal_agent, regime_agent, portfolio_agent, risk_agent, execution_agent):
+    def __init__(
+        self,
+        bus,
+        signal_agent=None,
+        signal_agents=None,
+        signal_consensus_agent=None,
+        signal_aggregation_agent=None,
+        regime_agent=None,
+        portfolio_agent=None,
+        risk_agent=None,
+        execution_agent=None,
+    ):
         self.bus = bus
-        self.signal_agent = signal_agent
+        self.signal_agents = list(signal_agents or ([] if signal_agent is None else [signal_agent]))
+        self.signal_agent = self.signal_agents[0] if self.signal_agents else signal_agent
+        self.signal_consensus_agent = signal_consensus_agent
+        self.signal_aggregation_agent = signal_aggregation_agent
         self.regime_agent = regime_agent
         self.portfolio_agent = portfolio_agent
         self.risk_agent = risk_agent
@@ -60,7 +75,17 @@ class EventDrivenAgentRuntime:
         context = dict(getattr(event, "data", {}) or {})
         if not context.get("symbol"):
             return
-        context = await self.signal_agent.process(context)
+        if len(self.signal_agents) <= 1 and self.signal_aggregation_agent is None:
+            if self.signal_agent is None:
+                self._complete(context)
+                return
+            context = await self.signal_agent.process(context)
+        else:
+            context = await run_signal_agents_parallel(self.signal_agents, context)
+            if self.signal_consensus_agent is not None:
+                context = await self.signal_consensus_agent.process(context)
+            if self.signal_aggregation_agent is not None:
+                context = await self.signal_aggregation_agent.process(context)
         if not isinstance(context.get("signal"), dict):
             self._complete(context)
             return

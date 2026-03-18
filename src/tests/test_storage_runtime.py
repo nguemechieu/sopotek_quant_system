@@ -163,7 +163,18 @@ def test_execution_manager_persists_trade_history():
     )
 
     execution = asyncio.run(
-        manager.execute(symbol="BTC/USDT", side="buy", amount=0.25, price=100.0)
+        manager.execute(
+            symbol="BTC/USDT",
+            side="buy",
+            amount=0.25,
+            price=100.0,
+            timeframe="15m",
+            strategy_name="EMA Cross",
+            signal_source_agent="SignalAgent2",
+            consensus_status="unanimous",
+            adaptive_weight=1.18,
+            adaptive_score=0.46,
+        )
     )
     trades = repo.get_trades(limit=10)
 
@@ -172,9 +183,17 @@ def test_execution_manager_persists_trade_history():
     assert trades[0].symbol == "BTC/USDT"
     assert trades[0].order_id == "order-123"
     assert trades[0].source == "bot"
+    assert trades[0].timeframe == "15m"
+    assert trades[0].strategy_name == "EMA Cross"
+    assert trades[0].signal_source_agent == "SignalAgent2"
+    assert trades[0].consensus_status == "unanimous"
+    assert abs(float(trades[0].adaptive_weight) - 1.18) < 1e-9
+    assert abs(float(trades[0].adaptive_score) - 0.46) < 1e-9
     assert notifications[0]["symbol"] == "BTC/USDT"
     assert notifications[0]["size"] == 0.25
     assert notifications[0]["source"] == "bot"
+    assert notifications[0]["timeframe"] == "15m"
+    assert notifications[0]["signal_source_agent"] == "SignalAgent2"
 
 
 def test_execution_manager_updates_persisted_order_status_in_place():

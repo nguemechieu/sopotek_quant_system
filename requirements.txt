@@ -9,6 +9,7 @@ pytest
 # ==========================================
 # MACHINE LEARNING
 # ==========================================
+shiboken6>=6.5
 pydantic
 xgboost>=1.7
 hmmlearn>=0.3

@@ -1,9 +1,11 @@
 import asyncio
+from datetime import datetime, timezone
 import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pyqtgraph as pg
 from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTextBrowser
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -585,6 +587,167 @@ def test_refresh_strategy_assignment_window_populates_agent_chain_for_selected_s
     assert window._strategy_assignment_agent_table.rowCount() == 2
     assert window._strategy_assignment_agent_table.item(0, 0).text() == "SignalAgent"
     assert window._strategy_assignment_agent_table.item(1, 1).text() == "approved"
+
+
+def test_refresh_strategy_assignment_window_populates_adaptive_strategy_memory():
+    _app()
+    window = SimpleNamespace(
+        _strategy_assignment_status=QLabel(),
+        _strategy_assignment_summary=QLabel(),
+        _strategy_assignment_symbol_picker=QComboBox(),
+        _strategy_assignment_strategy_picker=QComboBox(),
+        _strategy_assignment_timeframe_picker=QComboBox(),
+        _strategy_assignment_top_n=QSpinBox(),
+        _strategy_assignment_table=QTableWidget(),
+        _strategy_assignment_adaptive_status=QLabel(),
+        _strategy_assignment_adaptive_table=QTableWidget(),
+        _strategy_assignment_adaptive_plot_status=QLabel(),
+        _strategy_assignment_adaptive_plot=pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")}),
+        _strategy_assignment_adaptive_details=QTextBrowser(),
+    )
+    controller = SimpleNamespace(
+        symbols=["EUR/USD"],
+        strategy_name="Trend Following",
+        max_symbol_strategies=3,
+        time_frame="1h",
+        symbol_strategy_assignments={},
+        symbol_strategy_rankings={
+            "EUR/USD": [{"strategy_name": "EMA Cross", "timeframe": "4h"}]
+        },
+        adaptive_strategy_profiles_for_symbol=lambda symbol: [
+            {
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "mode": "active",
+                "adaptive_weight": 1.23,
+                "sample_size": 4,
+                "win_rate": 0.75,
+                "average_pnl": 12.5,
+                "scope": "timeframe",
+            },
+            {
+                "strategy_name": "Trend Following",
+                "timeframe": "1h",
+                "mode": "ranked",
+                "adaptive_weight": 0.88,
+                "sample_size": 3,
+                "win_rate": 0.33,
+                "average_pnl": -4.0,
+                "scope": "strategy",
+            },
+        ],
+        adaptive_strategy_detail_for_symbol=lambda symbol, strategy_name, timeframe=None, limit=8: {
+            "scope": "timeframe",
+            "profile": {
+                "adaptive_weight": 1.23,
+                "sample_size": 4,
+                "win_rate": 0.75,
+                "average_pnl": 12.5,
+            },
+            "samples": [
+                {
+                    "timestamp": datetime(2026, 3, 18, 10, 0, tzinfo=timezone.utc),
+                    "side": "BUY",
+                    "pnl": 15.0,
+                    "score": 1.0,
+                    "reason": "Breakout follow-through",
+                },
+                {
+                    "timestamp": datetime(2026, 3, 17, 14, 0, tzinfo=timezone.utc),
+                    "side": "BUY",
+                    "pnl": 10.0,
+                    "score": 1.0,
+                    "reason": "Trend continuation",
+                },
+            ],
+        },
+        adaptive_strategy_timeline_for_symbol=lambda symbol, strategy_name, timeframe=None, limit=16: {
+            "scope": "timeframe",
+            "profile": {
+                "adaptive_weight": 1.23,
+                "sample_size": 4,
+                "win_rate": 0.75,
+                "average_pnl": 12.5,
+            },
+            "timeline": [
+                {
+                    "timestamp": datetime(2026, 3, 17, 14, 0, tzinfo=timezone.utc),
+                    "timestamp_value": datetime(2026, 3, 17, 14, 0, tzinfo=timezone.utc).timestamp(),
+                    "adaptive_weight": 1.08,
+                    "score": 1.0,
+                    "pnl": 10.0,
+                    "reason": "Trend continuation",
+                    "side": "BUY",
+                    "sample_index": 1,
+                },
+                {
+                    "timestamp": datetime(2026, 3, 18, 10, 0, tzinfo=timezone.utc),
+                    "timestamp_value": datetime(2026, 3, 18, 10, 0, tzinfo=timezone.utc).timestamp(),
+                    "adaptive_weight": 1.23,
+                    "score": 1.0,
+                    "pnl": 15.0,
+                    "reason": "Breakout follow-through",
+                    "side": "BUY",
+                    "sample_index": 2,
+                },
+            ],
+        },
+    )
+
+    def strategy_assignment_state_for_symbol(symbol):
+        normalized = str(symbol or "").strip().upper().replace("-", "/").replace("_", "/")
+        return {
+            "symbol": normalized,
+            "mode": "default",
+            "explicit_rows": [],
+            "active_rows": [
+                {
+                    "strategy_name": controller.strategy_name,
+                    "timeframe": controller.time_frame,
+                    "weight": 1.0,
+                }
+            ],
+            "ranked_rows": list(controller.symbol_strategy_rankings.get(normalized, []) or []),
+        }
+
+    controller.strategy_assignment_state_for_symbol = strategy_assignment_state_for_symbol
+    fake = SimpleNamespace(
+        controller=controller,
+        current_timeframe="1h",
+        detached_tool_windows={"strategy_assignments": window},
+        _current_chart_symbol=lambda: "",
+        _strategy_family_name=lambda name: Terminal._strategy_family_name(SimpleNamespace(), name),
+    )
+    fake._grouped_strategy_names = lambda selected_strategy=None: Terminal._grouped_strategy_names(
+        fake, selected_strategy=selected_strategy
+    )
+    fake._populate_strategy_picker = lambda picker, selected_strategy=None: Terminal._populate_strategy_picker(
+        fake, picker, selected_strategy=selected_strategy
+    )
+
+    Terminal._refresh_strategy_assignment_window(fake, window=window)
+
+    assert "Adaptive Leader: EMA Cross x1.23" in window._strategy_assignment_summary.text()
+    assert "Adaptive Memory: 2 strategy profiles" in window._strategy_assignment_adaptive_status.text()
+    assert window._strategy_assignment_adaptive_table.rowCount() == 2
+    assert window._strategy_assignment_adaptive_table.item(0, 0).text() == "EMA Cross"
+    assert window._strategy_assignment_adaptive_table.item(0, 3).text() == "1.23"
+    assert window._strategy_assignment_adaptive_table.item(0, 5).text() == "75%"
+    assert window._strategy_assignment_adaptive_table.item(1, 7).text() == "strategy"
+    assert "Adaptive history: 2 scored trades" in window._strategy_assignment_adaptive_plot_status.text()
+    assert len(window._strategy_assignment_adaptive_plot.listDataItems()) >= 1
+    Terminal._refresh_strategy_assignment_adaptive_details(
+        fake,
+        window=window,
+        selected_symbol="EUR/USD",
+        strategy_name="EMA Cross",
+        timeframe="4h",
+    )
+    detail_html = window._strategy_assignment_adaptive_details.toHtml()
+    assert "Adaptive detail" in detail_html
+    assert "EMA Cross" in detail_html
+    assert "Breakout follow-through" in detail_html
+    assert "Current 1.23" in window._strategy_assignment_adaptive_plot_status.text()
 
 
 def test_handle_agent_runtime_event_refreshes_selected_strategy_assignment_and_pushes_risk_notification():

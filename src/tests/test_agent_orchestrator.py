@@ -252,3 +252,260 @@ def test_process_symbol_uses_event_driven_runtime_when_no_custom_handler():
     assert captured["runtime_symbol"] == "BTC/USDT"
     assert captured["order"]["symbol"] == "BTC/USDT"
     assert trading.pipeline_status_snapshot()["BTC/USDT"]["stage"] == "execution_manager"
+
+
+def test_event_runtime_aggregates_multiple_signal_agents_and_selects_best_candidate():
+    controller = _controller()
+    controller.max_signal_agents = 2
+    controller.assigned_strategies_for_symbol = lambda symbol: [
+        {"strategy_name": "Trend Following", "weight": 0.30, "score": 4.0, "rank": 1},
+        {"strategy_name": "EMA Cross", "weight": 0.70, "score": 9.0, "rank": 2},
+    ]
+    trading = SopotekTrading(controller=controller)
+    trading.risk_engine = RiskEngine(account_equity=10000, max_position_size_pct=0.10)
+    trading.portfolio_allocator = None
+    trading.portfolio_risk_engine = None
+    dataset = FakeDataset(_sample_frame())
+
+    async def fake_get_symbol_dataset(**kwargs):
+        return dataset
+
+    async def fake_execute(**kwargs):
+        return {"status": "filled", "reason": "submitted", "strategy_name": kwargs.get("strategy_name")}
+
+    calls = []
+
+    def fake_generate_signal(**kwargs):
+        strategy_name = kwargs["strategy_name"]
+        calls.append(strategy_name)
+        if strategy_name == "Trend Following":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.25,
+                "confidence": 0.90,
+                "reason": "primary candidate",
+                "strategy_name": strategy_name,
+            }
+        if strategy_name == "EMA Cross":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.40,
+                "confidence": 0.65,
+                "reason": "weighted candidate",
+                "strategy_name": strategy_name,
+            }
+        return None
+
+    trading.data_hub.get_symbol_dataset = fake_get_symbol_dataset
+    trading.execution_manager.execute = fake_execute
+    trading.signal_engine.generate_signal = fake_generate_signal
+
+    result = asyncio.run(trading.process_symbol("BTC/USDT", timeframe="15m", limit=50))
+
+    assert result["status"] == "filled"
+    assert calls == ["Trend Following", "EMA Cross"]
+    latest = trading.agent_memory.latest("SignalAggregationAgent")
+    assert latest is not None
+    assert latest["stage"] == "selected"
+    assert latest["payload"]["strategy_name"] == "EMA Cross"
+    assert latest["payload"]["candidate_count"] == 2
+    assert any(entry["agent"] == "SignalAgent2" and entry["stage"] == "candidate" for entry in trading.agent_memory_snapshot(limit=20))
+
+
+def test_signal_consensus_agent_filters_candidates_to_majority_side():
+    controller = _controller()
+    controller.max_signal_agents = 3
+    controller.minimum_signal_votes = 2
+    controller.assigned_strategies_for_symbol = lambda symbol: [
+        {"strategy_name": "Trend Following", "weight": 0.90, "score": 10.0, "rank": 1},
+        {"strategy_name": "EMA Cross", "weight": 0.60, "score": 7.0, "rank": 2},
+        {"strategy_name": "Mean Reversion", "weight": 0.50, "score": 6.0, "rank": 3},
+    ]
+    trading = SopotekTrading(controller=controller)
+    trading.risk_engine = RiskEngine(account_equity=10000, max_position_size_pct=0.10)
+    trading.portfolio_allocator = None
+    trading.portfolio_risk_engine = None
+    dataset = FakeDataset(_sample_frame())
+
+    async def fake_get_symbol_dataset(**kwargs):
+        return dataset
+
+    async def fake_execute(**kwargs):
+        return {"status": "filled", "reason": "submitted", "side": kwargs.get("side"), "strategy_name": kwargs.get("strategy_name")}
+
+    def fake_generate_signal(**kwargs):
+        strategy_name = kwargs["strategy_name"]
+        if strategy_name == "Trend Following":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.25,
+                "confidence": 0.95,
+                "reason": "strong solo buy",
+                "strategy_name": strategy_name,
+            }
+        if strategy_name == "EMA Cross":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "sell",
+                "amount": 0.30,
+                "confidence": 0.60,
+                "reason": "sell vote one",
+                "strategy_name": strategy_name,
+            }
+        if strategy_name == "Mean Reversion":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "sell",
+                "amount": 0.35,
+                "confidence": 0.62,
+                "reason": "sell vote two",
+                "strategy_name": strategy_name,
+            }
+        return None
+
+    trading.data_hub.get_symbol_dataset = fake_get_symbol_dataset
+    trading.execution_manager.execute = fake_execute
+    trading.signal_engine.generate_signal = fake_generate_signal
+
+    result = asyncio.run(trading.process_symbol("BTC/USDT", timeframe="15m", limit=50))
+
+    assert result["status"] == "filled"
+    consensus = trading.agent_memory.latest("SignalConsensusAgent")
+    assert consensus is not None
+    assert consensus["stage"] == "majority"
+    assert consensus["payload"]["side"] == "sell"
+    latest = trading.agent_memory.latest("SignalAggregationAgent")
+    assert latest is not None
+    assert latest["payload"]["strategy_name"] in {"EMA Cross", "Mean Reversion"}
+    assert latest["payload"]["consensus_side"] == "sell"
+    assert latest["payload"]["consensus_status"] == "majority"
+
+
+def test_signal_agents_run_in_parallel_during_market_processing():
+    controller = _controller()
+    controller.max_signal_agents = 2
+    controller.minimum_signal_votes = 1
+    controller.assigned_strategies_for_symbol = lambda symbol: [
+        {"strategy_name": "Trend Following", "weight": 0.40, "score": 6.0, "rank": 1},
+        {"strategy_name": "EMA Cross", "weight": 0.60, "score": 7.0, "rank": 2},
+    ]
+    concurrency = {"active": 0, "peak": 0}
+    gate = asyncio.Event()
+
+    async def apply_news_bias(symbol, signal):
+        concurrency["active"] += 1
+        concurrency["peak"] = max(concurrency["peak"], concurrency["active"])
+        if concurrency["active"] >= 2:
+            gate.set()
+        await asyncio.wait_for(gate.wait(), timeout=0.25)
+        concurrency["active"] -= 1
+        return signal
+
+    controller.apply_news_bias_to_signal = apply_news_bias
+    trading = SopotekTrading(controller=controller)
+    trading.risk_engine = RiskEngine(account_equity=10000, max_position_size_pct=0.10)
+    trading.portfolio_allocator = None
+    trading.portfolio_risk_engine = None
+    dataset = FakeDataset(_sample_frame())
+
+    async def fake_get_symbol_dataset(**kwargs):
+        return dataset
+
+    async def fake_execute(**kwargs):
+        return {"status": "filled", "reason": "submitted"}
+
+    def fake_generate_signal(**kwargs):
+        return {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "amount": 0.25,
+            "confidence": 0.70 if kwargs["strategy_name"] == "Trend Following" else 0.75,
+            "reason": kwargs["strategy_name"],
+            "strategy_name": kwargs["strategy_name"],
+        }
+
+    trading.data_hub.get_symbol_dataset = fake_get_symbol_dataset
+    trading.execution_manager.execute = fake_execute
+    trading.signal_engine.generate_signal = fake_generate_signal
+
+    result = asyncio.run(asyncio.wait_for(trading.process_symbol("BTC/USDT", timeframe="15m", limit=50), timeout=0.5))
+
+    assert result["status"] == "filled"
+    assert concurrency["peak"] >= 2
+
+
+def test_adaptive_trade_feedback_biases_candidate_selection_and_execution_metadata():
+    profitable_history = [
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=18.0),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=12.0),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=9.0),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=6.0),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=-8.0),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=-5.0),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=-4.0),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=-3.0),
+    ]
+
+    controller = _controller()
+    controller.max_signal_agents = 2
+    controller.trade_repository = SimpleNamespace(get_trades=lambda limit=200: profitable_history[:limit])
+    controller.assigned_strategies_for_symbol = lambda symbol: [
+        {"strategy_name": "Trend Following", "weight": 0.45, "score": 9.0, "rank": 1, "timeframe": "15m"},
+        {"strategy_name": "EMA Cross", "weight": 0.55, "score": 8.0, "rank": 2, "timeframe": "15m"},
+    ]
+    trading = SopotekTrading(controller=controller)
+    trading.risk_engine = RiskEngine(account_equity=10000, max_position_size_pct=0.10)
+    trading.portfolio_allocator = None
+    trading.portfolio_risk_engine = None
+    dataset = FakeDataset(_sample_frame())
+    captured = {}
+
+    async def fake_get_symbol_dataset(**kwargs):
+        return dataset
+
+    async def fake_execute(**kwargs):
+        captured.update(kwargs)
+        return {"status": "filled", "reason": "submitted", "strategy_name": kwargs.get("strategy_name")}
+
+    def fake_generate_signal(**kwargs):
+        strategy_name = kwargs["strategy_name"]
+        if strategy_name == "Trend Following":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.25,
+                "confidence": 0.90,
+                "reason": "strong raw confidence",
+                "strategy_name": strategy_name,
+            }
+        if strategy_name == "EMA Cross":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.25,
+                "confidence": 0.72,
+                "reason": "adaptive winner",
+                "strategy_name": strategy_name,
+            }
+        return None
+
+    trading.data_hub.get_symbol_dataset = fake_get_symbol_dataset
+    trading.execution_manager.execute = fake_execute
+    trading.signal_engine.generate_signal = fake_generate_signal
+
+    result = asyncio.run(trading.process_symbol("BTC/USDT", timeframe="15m", limit=50))
+
+    assert result["status"] == "filled"
+    assert captured["strategy_name"] == "EMA Cross"
+    assert captured["timeframe"] == "15m"
+    assert captured["signal_source_agent"] == "SignalAgent2"
+    assert captured["consensus_status"] == "unanimous"
+    assert float(captured["adaptive_weight"]) > 1.0
+    latest = trading.agent_memory.latest("SignalAggregationAgent")
+    assert latest is not None
+    assert latest["payload"]["strategy_name"] == "EMA Cross"
+    assert float(latest["payload"]["adaptive_weight"]) > 1.0
+    assert int(latest["payload"]["adaptive_sample_size"]) == 4

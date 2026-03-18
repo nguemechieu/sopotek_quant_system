@@ -31,11 +31,16 @@ class Trade(storage_db.Base):
     setup = Column(Text)
     outcome = Column(Text)
     lessons = Column(Text)
+    timeframe = Column(String)
+    signal_source_agent = Column(String)
+    consensus_status = Column(String)
+    adaptive_weight = Column(Float)
+    adaptive_score = Column(Float)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), index=True)
 
 
 class TradeRepository:
-    def save_trade(self, symbol, side, quantity, price, exchange=None, order_id=None, order_type=None, status=None, timestamp=None, source=None, pnl=None, strategy_name=None, reason=None, confidence=None, expected_price=None, spread_bps=None, slippage_bps=None, fee=None, stop_loss=None, take_profit=None, setup=None, outcome=None, lessons=None):
+    def save_trade(self, symbol, side, quantity, price, exchange=None, order_id=None, order_type=None, status=None, timestamp=None, source=None, pnl=None, strategy_name=None, reason=None, confidence=None, expected_price=None, spread_bps=None, slippage_bps=None, fee=None, stop_loss=None, take_profit=None, setup=None, outcome=None, lessons=None, timeframe=None, signal_source_agent=None, consensus_status=None, adaptive_weight=None, adaptive_score=None):
         trade = Trade(
             exchange=str(exchange or "").lower() or None,
             order_id=str(order_id) if order_id is not None else None,
@@ -59,6 +64,11 @@ class TradeRepository:
             setup=self._normalize_text(setup),
             outcome=self._normalize_text(outcome),
             lessons=self._normalize_text(lessons),
+            timeframe=self._normalize_text(timeframe),
+            signal_source_agent=self._normalize_text(signal_source_agent),
+            consensus_status=self._normalize_text(consensus_status),
+            adaptive_weight=self._normalize_float(adaptive_weight),
+            adaptive_score=self._normalize_float(adaptive_score),
             timestamp=self._normalize_timestamp(timestamp),
         )
 
@@ -68,7 +78,7 @@ class TradeRepository:
             session.refresh(trade)
             return trade
 
-    def save_or_update_trade(self, symbol, side, quantity, price, exchange=None, order_id=None, order_type=None, status=None, timestamp=None, source=None, pnl=None, strategy_name=None, reason=None, confidence=None, expected_price=None, spread_bps=None, slippage_bps=None, fee=None, stop_loss=None, take_profit=None, setup=None, outcome=None, lessons=None):
+    def save_or_update_trade(self, symbol, side, quantity, price, exchange=None, order_id=None, order_type=None, status=None, timestamp=None, source=None, pnl=None, strategy_name=None, reason=None, confidence=None, expected_price=None, spread_bps=None, slippage_bps=None, fee=None, stop_loss=None, take_profit=None, setup=None, outcome=None, lessons=None, timeframe=None, signal_source_agent=None, consensus_status=None, adaptive_weight=None, adaptive_score=None):
         normalized_exchange = str(exchange or "").lower() or None
         normalized_order_id = str(order_id) if order_id is not None else None
 
@@ -107,6 +117,11 @@ class TradeRepository:
             trade.setup = self._normalize_text(setup)
             trade.outcome = self._normalize_text(outcome)
             trade.lessons = self._normalize_text(lessons)
+            trade.timeframe = self._normalize_text(timeframe)
+            trade.signal_source_agent = self._normalize_text(signal_source_agent)
+            trade.consensus_status = self._normalize_text(consensus_status)
+            trade.adaptive_weight = self._normalize_float(adaptive_weight)
+            trade.adaptive_score = self._normalize_float(adaptive_score)
             trade.timestamp = self._normalize_timestamp(timestamp)
 
             session.commit()
