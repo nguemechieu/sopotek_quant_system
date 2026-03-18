@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.ui.terminal import Terminal
 from event_bus.event_types import EventType
+from portfolio.position import Position
 
 
 def _app():
@@ -67,6 +68,202 @@ def test_populate_positions_table_adds_close_action_widgets():
     assert table.cellWidget(0, 7) is not None
     assert isinstance(table.cellWidget(0, 7), QPushButton)
     assert close_all_button.isEnabled() is True
+
+
+def test_portfolio_exposure_table_accepts_position_objects():
+    _app()
+    table = QTableWidget()
+    position = Position("ETH/USD")
+    position.quantity = 2.0
+    position.avg_price = 2000.0
+
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            portfolio=SimpleNamespace(
+                positions={"ETH/USD": position},
+            )
+        ),
+        _normalize_position_entry=lambda raw: Terminal._normalize_position_entry(
+            SimpleNamespace(_lookup_symbol_mid_price=lambda _symbol: None),
+            raw,
+        ),
+    )
+    fake._portfolio_positions_snapshot = lambda: Terminal._portfolio_positions_snapshot(fake)
+    fake._active_positions_snapshot = lambda: Terminal._active_positions_snapshot(fake)
+
+    Terminal._populate_portfolio_exposure_table(fake, table)
+
+    assert table.rowCount() == 1
+    assert table.item(0, 0).text() == "ETH/USD"
+    assert table.item(0, 1).text() == "2"
+    assert table.item(0, 2).text() == "4000.00"
+    assert table.item(0, 3).text() == "100.00%"
+
+
+def test_portfolio_exposure_table_falls_back_to_latest_positions_snapshot():
+    _app()
+    table = QTableWidget()
+
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            portfolio=SimpleNamespace(positions={}),
+        ),
+        _latest_positions_snapshot=[
+            {
+                "symbol": "EUR/USD",
+                "side": "long",
+                "amount": 3.0,
+                "entry_price": 1.20,
+                "mark_price": 1.25,
+                "value": 3.75,
+            }
+        ],
+        _normalize_position_entry=lambda raw: Terminal._normalize_position_entry(
+            SimpleNamespace(_lookup_symbol_mid_price=lambda _symbol: None),
+            raw,
+        ),
+    )
+    fake._portfolio_positions_snapshot = lambda: Terminal._portfolio_positions_snapshot(fake)
+    fake._active_positions_snapshot = lambda: Terminal._active_positions_snapshot(fake)
+
+    Terminal._populate_portfolio_exposure_table(fake, table)
+
+    assert table.rowCount() == 1
+    assert table.item(0, 0).text() == "EUR/USD"
+    assert table.item(0, 1).text() == "3"
+    assert table.item(0, 2).text() == "3.75"
+    assert table.item(0, 3).text() == "100.00%"
+
+
+def test_update_portfolio_exposure_accepts_position_objects():
+    class _ExposureBars:
+        def __init__(self):
+            self.opts = None
+
+        def setOpts(self, **kwargs):
+            self.opts = kwargs
+
+    eth = Position("ETH/USD")
+    eth.quantity = 2.0
+    eth.avg_price = 2000.0
+    btc = Position("BTC/USD")
+    btc.quantity = 0.5
+    btc.avg_price = 30000.0
+
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            portfolio=SimpleNamespace(
+                positions={
+                    "ETH/USD": eth,
+                    "BTC/USD": btc,
+                }
+            )
+        ),
+        exposure_bars=_ExposureBars(),
+        _normalize_position_entry=lambda raw: Terminal._normalize_position_entry(
+            SimpleNamespace(_lookup_symbol_mid_price=lambda _symbol: None),
+            raw,
+        ),
+    )
+    fake._portfolio_positions_snapshot = lambda: Terminal._portfolio_positions_snapshot(fake)
+    fake._active_positions_snapshot = lambda: Terminal._active_positions_snapshot(fake)
+
+    Terminal._update_portfolio_exposure(fake)
+
+    assert fake.exposure_bars.opts is not None
+    assert fake.exposure_bars.opts["x"] == [0, 1]
+    assert fake.exposure_bars.opts["height"] == [4000.0, 15000.0]
+
+
+def test_position_analysis_payload_falls_back_to_portfolio_snapshot():
+    position = Position("ETH/USD")
+    position.quantity = 1.5
+    position.avg_price = 2000.0
+
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            broker=SimpleNamespace(exchange_name="oanda"),
+            balances={"raw": {"NAV": "12000", "balance": "11000"}},
+            portfolio=SimpleNamespace(positions={"ETH/USD": position}),
+        ),
+        _latest_positions_snapshot=[],
+        _normalize_position_entry=lambda raw: Terminal._normalize_position_entry(
+            SimpleNamespace(_lookup_symbol_mid_price=lambda _symbol: None),
+            raw,
+        ),
+        _safe_float=lambda value, default=None: default if value in (None, "") and default is not None else (float(value) if value not in (None, "") else None),
+    )
+    fake._portfolio_positions_snapshot = lambda: Terminal._portfolio_positions_snapshot(fake)
+    fake._active_positions_snapshot = lambda: Terminal._active_positions_snapshot(fake)
+    fake._resolve_position_analysis_metric = (
+        lambda account, balances, *keys: Terminal._resolve_position_analysis_metric(fake, account, balances, *keys)
+    )
+    fake._position_analysis_has_key = (
+        lambda account, balances, *keys: Terminal._position_analysis_has_key(fake, account, balances, *keys)
+    )
+    fake._position_analysis_metric_labels = lambda payload: Terminal._position_analysis_metric_labels(fake, payload)
+
+    payload = Terminal._position_analysis_window_payload(fake)
+
+    assert len(payload["positions"]) == 1
+    assert payload["positions"][0]["symbol"] == "ETH/USD"
+    assert payload["positions"][0]["amount"] == 1.5
+    assert payload["nav"] == 12000.0
+    assert payload["balance"] == 11000.0
+
+
+def test_position_analysis_tracks_financing_and_broker_fees():
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            broker=SimpleNamespace(exchange_name="oanda"),
+            balances={"raw": {"NAV": "12000", "balance": "11000"}},
+            portfolio=SimpleNamespace(positions={}),
+        ),
+        _latest_positions_snapshot=[
+            {
+                "symbol": "EUR/USD",
+                "side": "long",
+                "amount": 2.0,
+                "entry_price": 1.10,
+                "mark_price": 1.12,
+                "value": 2.24,
+                "pnl": 0.04,
+                "realized_pnl": 0.01,
+                "financing": "-1.75",
+                "margin_used": 250.0,
+            }
+        ],
+        _normalize_position_entry=lambda raw: Terminal._normalize_position_entry(
+            SimpleNamespace(_lookup_symbol_mid_price=lambda _symbol: None),
+            raw,
+        ),
+        _safe_float=lambda value, default=None: default if value in (None, "") and default is not None else (float(value) if value not in (None, "") else None),
+        _performance_trade_records=lambda: [
+            {"symbol": "EUR/USD", "fee": "0.25"},
+            {"symbol": "EUR/USD", "fee": 0.40},
+            {"symbol": "EUR/USD", "fee": ""},
+        ],
+        _format_currency=lambda value: f"${float(value or 0.0):,.2f}",
+    )
+    fake._portfolio_positions_snapshot = lambda: Terminal._portfolio_positions_snapshot(fake)
+    fake._active_positions_snapshot = lambda: Terminal._active_positions_snapshot(fake)
+    fake._resolve_position_analysis_metric = (
+        lambda account, balances, *keys: Terminal._resolve_position_analysis_metric(fake, account, balances, *keys)
+    )
+    fake._position_analysis_has_key = (
+        lambda account, balances, *keys: Terminal._position_analysis_has_key(fake, account, balances, *keys)
+    )
+    fake._position_analysis_metric_labels = lambda payload: Terminal._position_analysis_metric_labels(fake, payload)
+
+    payload = Terminal._position_analysis_window_payload(fake)
+    details_html = Terminal._build_position_analysis_html(fake, payload)
+
+    assert payload["financing_total"] == -1.75
+    assert payload["fee_total"] == 0.65
+    assert payload["fee_count"] == 2
+    assert "Open-position financing totals" in details_html
+    assert "$-1.75" in details_html
+    assert "$0.65" in details_html
 
 
 def test_close_position_async_calls_controller_and_refreshes_views():

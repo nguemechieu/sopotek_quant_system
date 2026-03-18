@@ -270,3 +270,20 @@ Using polling market data for Oanda
 Portfolio exposure error: 'Position' object has no attribute 'get'
 Portfolio exposure error: 'Position' object has no attribute 'get'
 Not enough data for GBP_USD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Not enough data for USD_CNH (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Not enough data for USD_SEK (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.

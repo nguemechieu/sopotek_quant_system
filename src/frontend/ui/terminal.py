@@ -1,20 +1,22 @@
+# mypy: disable-error-code="attr-defined, method-assign"
 import asyncio
 from datetime import datetime, timedelta, timezone
 import html
 import json
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import threading
 import time
+from typing import Any
 
 import traceback
-import tomllib
 import numpy as np
-import pandas as pd
-import pyqtgraph as pg
-from PySide6.QtCore import Qt, QDate, QSettings, QDateTime, Signal, QTimer, QUrl
+import pandas as pd  # type: ignore[import-untyped]
+import pyqtgraph as pg  # type: ignore[import-untyped]
+from PySide6.QtCore import Qt, QDate, QSettings, QDateTime, Signal, QTimer, QUrl, QRect
 from PySide6.QtGui import QAction, QColor, QTextCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QDockWidget, QSpinBox,
@@ -25,14 +27,14 @@ from PySide6.QtWidgets import (
     QFrame, QHeaderView, QMenu, QMenuBar,
     QHBoxLayout, QSizePolicy, QTextEdit, QTextBrowser, QApplication, QLineEdit, QSlider, QCheckBox, QScrollArea
 )
-from shiboken6 import isValid
+import shiboken6
 
 if __name__ == "__main__" and (__package__ is None or __package__ == ""):
-    src_root = Path(__file__).resolve().parents[2]
-    src_value = str(src_root)
-    if src_value not in sys.path:
-        sys.path.insert(0, src_value)
-    from main import main as app_main
+    repo_root = Path(__file__).resolve().parents[3]
+    repo_value = str(repo_root)
+    if repo_value not in sys.path:
+        sys.path.insert(0, repo_value)
+    from src.main import main as app_main
 
     raise SystemExit(app_main())
 
@@ -201,6 +203,48 @@ def global_exception_hook(exctype, value, tb):
     traceback.print_exception(exctype, value, tb)
 
 
+def _json_text(value: object, fallback: str) -> str:
+    if isinstance(value, str):
+        return value or fallback
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            decoded = bytes(value).decode("utf-8")
+        except Exception:
+            return fallback
+        return decoded or fallback
+    return fallback
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _read_pyproject_version(pyproject_path: Path) -> str | None:
+    try:
+        content = pyproject_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    in_project_section = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "[project]":
+            in_project_section = True
+            continue
+        if in_project_section and line.startswith("["):
+            break
+        if in_project_section:
+            match = re.match(r'version\s*=\s*["\']([^"\']+)["\']', line)
+            if match:
+                return match.group(1).strip() or None
+    return None
+
+
 
 
 class Terminal(QMainWindow):
@@ -219,6 +263,7 @@ class Terminal(QMainWindow):
         self.settings = QSettings("Sopotek", "TradingPlatform")
 
         self.symbols_table = QTableWidget()
+        self.system_console: Any = None
 
         self.risk_map = None
         self.auto_button = QPushButton()
@@ -255,8 +300,8 @@ class Terminal(QMainWindow):
         self._recommendation_records = {}
         self._closed_journal_refresh_task = None
 
-        self.candle_up_color = self.settings.value("chart/candle_up_color", "#26a69a")
-        self.candle_down_color = self.settings.value("chart/candle_down_color", "#ef5350")
+        self.candle_up_color = str(self.settings.value("chart/candle_up_color", "#26a69a") or "#26a69a")
+        self.candle_down_color = str(self.settings.value("chart/candle_down_color", "#ef5350") or "#ef5350")
 
         self.heartbeat = QLabel("●")
         self.heartbeat.setStyleSheet("color: green")
@@ -331,7 +376,7 @@ class Terminal(QMainWindow):
         self.license_badge = None
         self.kill_switch_button = None
         self.symbol_picker = None
-        self.detached_tool_windows = {}
+        self.detached_tool_windows: dict[str, Any] = {}
         self._last_chart_request_key = None
         self.current_connection_status = "connecting"
         self.language_actions = {}
@@ -638,7 +683,7 @@ class Terminal(QMainWindow):
             return ask
         return None
 
-    def _lookup_symbol_mid_price(self, symbol):
+    def _lookup_symbol_mid_price_from_stream(self, symbol):
         ticker_stream = getattr(self.controller, "ticker_stream", None)
         if ticker_stream is None:
             return None
@@ -710,7 +755,10 @@ class Terminal(QMainWindow):
 
     def _is_qt_object_alive(self, obj):
         try:
-            return obj is not None and isValid(obj)
+            validator = getattr(shiboken6, "isValid", lambda *_: False)
+            if obj is None:
+                return False
+            return bool(validator(obj))
         except Exception:
             return False
 
@@ -807,7 +855,7 @@ class Terminal(QMainWindow):
                 windows.append(window)
         return windows
 
-    def _find_detached_chart_window(self, symbol=None, timeframe=None):
+    def _find_detached_chart_window(self, symbol=None, timeframe=None) -> Any | None:
         target_symbol = str(symbol or "").upper().strip() if symbol else None
         target_timeframe = str(timeframe or "").strip() if timeframe else None
         for window in self._detached_chart_windows():
@@ -879,7 +927,7 @@ class Terminal(QMainWindow):
     def _restore_detached_chart_layouts(self):
         raw_value = self.settings.value("charts/detached_layouts", "[]")
         try:
-            layouts = json.loads(raw_value or "[]")
+            layouts = json.loads(_json_text(raw_value, "[]"))
         except Exception:
             layouts = []
 
@@ -900,7 +948,7 @@ class Terminal(QMainWindow):
                 height = max(260, int(entry.get("height", 780)))
             except Exception:
                 x, y, width, height = 0, 0, 1200, 780
-            self._open_or_focus_detached_chart(symbol, timeframe, geometry=QtCore.QRect(x, y, width, height))
+            self._open_or_focus_detached_chart(symbol, timeframe, geometry=QRect(x, y, width, height))
 
     def _reattach_chart_window(self, window):
         if window is None or not self._is_qt_object_alive(window):
@@ -1633,7 +1681,7 @@ class Terminal(QMainWindow):
         toolbar.setFloatable(False)
         toolbar.setStyleSheet("QToolBar { spacing: 8px; padding: 6px; }")
         self.toolbar = toolbar
-        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
         controls_toolbar = QToolBar("Trading Controls")
         controls_toolbar.setObjectName("terminal_controls_toolbar")
@@ -1641,8 +1689,8 @@ class Terminal(QMainWindow):
         controls_toolbar.setFloatable(False)
         controls_toolbar.setStyleSheet("QToolBar { spacing: 8px; padding: 4px 6px 8px 6px; }")
         self.secondary_toolbar = controls_toolbar
-        self.addToolBarBreak(Qt.TopToolBarArea)
-        self.addToolBar(Qt.TopToolBarArea, controls_toolbar)
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, controls_toolbar)
 
         symbol_box = QFrame()
         symbol_box.setStyleSheet(
@@ -2187,6 +2235,8 @@ class Terminal(QMainWindow):
             existing_window.raise_()
             existing_window.activateWindow()
             page = existing_window.centralWidget()
+            if page is None:
+                return existing_window
             for chart in self._chart_widgets_in_page(page):
                 self._schedule_chart_data_refresh(chart)
             self._save_detached_chart_layouts()
@@ -2418,6 +2468,8 @@ class Terminal(QMainWindow):
             detached_window.raise_()
             detached_window.activateWindow()
             page = detached_window.centralWidget()
+            if page is None:
+                return
             for chart in self._chart_widgets_in_page(page):
                 self._schedule_chart_data_refresh(chart)
             return
@@ -2439,6 +2491,8 @@ class Terminal(QMainWindow):
     def _set_chart_timeframe(self, chart, tf="1h"):
         normalized_tf = str(tf or self.current_timeframe or "1h").strip().lower() or "1h"
         page = self._chart_page_for_widget(chart)
+        if page is None:
+            return
         charts = self._chart_widgets_in_page(page)
 
         self.current_timeframe = normalized_tf
@@ -2603,23 +2657,18 @@ class Terminal(QMainWindow):
 
         candidates = []
         for key in ("price", "last", "close", "bid", "ask"):
-            value = ticker.get(key)
-            try:
-                numeric = float(value)
-            except Exception:
+            numeric = _coerce_float(ticker.get(key))
+            if numeric is None:
                 continue
             if numeric > 0:
                 candidates.append(numeric)
         if not candidates:
             return None
         if len(candidates) >= 2 and ticker.get("bid") is not None and ticker.get("ask") is not None:
-            try:
-                bid = float(ticker.get("bid"))
-                ask = float(ticker.get("ask"))
-                if bid > 0 and ask > 0:
-                    return (bid + ask) / 2.0
-            except Exception:
-                pass
+            bid = _coerce_float(ticker.get("bid"))
+            ask = _coerce_float(ticker.get("ask"))
+            if bid is not None and ask is not None and bid > 0 and ask > 0:
+                return (bid + ask) / 2.0
         return candidates[0]
 
     def _normalize_position_entry(self, raw):
@@ -2631,20 +2680,37 @@ class Terminal(QMainWindow):
         if portfolio is None:
             return positions
 
-        raw_positions = getattr(portfolio, "positions", {})
+        raw_positions: list[object] = []
+        get_positions = getattr(portfolio, "get_positions", None)
+        if callable(get_positions):
+            try:
+                raw_positions = get_positions() or []
+            except Exception:
+                raw_positions = []
         if isinstance(raw_positions, dict):
-            for symbol, pos in raw_positions.items():
-                normalized = self._normalize_position_entry(
-                    {
-                        "symbol": symbol,
-                        "amount": getattr(pos, "quantity", 0),
-                        "entry_price": getattr(pos, "avg_price", 0),
-                        "side": "long" if float(getattr(pos, "quantity", 0) or 0) >= 0 else "short",
-                    }
-                )
-                if normalized is not None and normalized["amount"] > 0:
-                    positions.append(normalized)
+            raw_positions = list(raw_positions.values())
+        if not raw_positions:
+            stored_positions = getattr(portfolio, "positions", {})
+            if isinstance(stored_positions, dict):
+                raw_positions = list(stored_positions.values())
+            elif isinstance(stored_positions, (list, tuple)):
+                raw_positions = list(stored_positions)
+
+        for pos in raw_positions:
+            normalized = self._normalize_position_entry(pos)
+            if normalized is not None and normalized["amount"] > 0:
+                positions.append(normalized)
         return positions
+
+    def _active_positions_snapshot(self):
+        normalized_positions = []
+        for raw in list(getattr(self, "_latest_positions_snapshot", []) or []):
+            normalized = self._normalize_position_entry(raw)
+            if normalized is not None and float(normalized.get("amount", 0.0) or 0.0) > 0:
+                normalized_positions.append(normalized)
+        if normalized_positions:
+            return normalized_positions
+        return list(self._portfolio_positions_snapshot() or [])
 
     def _populate_positions_table(self, positions):
         populate_positions_table(self, positions)
@@ -2849,14 +2915,30 @@ class Terminal(QMainWindow):
         exchange = str(getattr(broker, "exchange_name", "") or "").lower()
         balances = dict(getattr(self.controller, "balances", {}) or {})
         account = dict((balances or {}).get("raw", {}) or {})
-        positions = [self._normalize_position_entry(item) for item in (getattr(self, "_latest_positions_snapshot", []) or [])]
-        positions = [item for item in positions if item is not None]
+        positions = list(self._active_positions_snapshot() or [])
+        financing_total = sum(
+            self._safe_float(item.get("financing"), 0.0) or 0.0
+            for item in positions
+            if isinstance(item, dict)
+        )
+        trade_records_getter = getattr(self, "_performance_trade_records", None)
+        trade_records = trade_records_getter() if callable(trade_records_getter) else []
+        fee_values = []
+        for trade in trade_records:
+            if not isinstance(trade, dict):
+                continue
+            fee = self._safe_float(trade.get("fee"))
+            if fee is not None:
+                fee_values.append(fee)
         payload = {
             "available": broker is not None,
             "exchange": exchange or "-",
             "account": account,
             "balances": balances,
             "positions": positions,
+            "financing_total": financing_total,
+            "fee_total": sum(fee_values) if fee_values else 0.0,
+            "fee_count": len(fee_values),
         }
 
         nav = self._resolve_position_analysis_metric(account, balances, "nav", "equity", "net_liquidation", "account_value", "total_account_value")
@@ -2908,6 +2990,10 @@ class Terminal(QMainWindow):
         available_label = html.escape(str(labels.get("available") or "Available Margin"))
         used_label = html.escape(str(labels.get("used") or "Margin Used"))
         ratio_label = html.escape(str(labels.get("ratio") or "Margin Ratio"))
+        financing_total = self._safe_float(payload.get("financing_total"), 0.0) or 0.0
+        fee_total = self._safe_float(payload.get("fee_total"), 0.0) or 0.0
+        fee_count = int(payload.get("fee_count") or 0)
+        fee_suffix = f" across <b>{fee_count}</b> recorded fills" if fee_count else ""
         if not payload.get("available"):
             return (
                 "<h3 style='margin-top:0;'>Position Analysis</h3>"
@@ -2922,6 +3008,8 @@ class Terminal(QMainWindow):
                 "<h3 style='margin-top:0;'>Position Analysis</h3>"
                 f"<p>Broker <b>{broker_name}</b> is connected. No open positions were found.</p>"
                 f"<p>{equity_label}: <b>{equity_text}</b> | {balance_label}: <b>{balance_text}</b></p>"
+                f"<p>Open-position financing: <b>{self._format_currency(financing_total)}</b> | "
+                f"Tracked broker fees: <b>{self._format_currency(fee_total)}</b>{fee_suffix}</p>"
             )
 
         total_unrealized = sum(float(item.get("pnl", 0.0) or 0.0) for item in positions)
@@ -2942,6 +3030,7 @@ class Terminal(QMainWindow):
             f"Open positions: <b>{len(positions)}</b> total, with <b>{long_count}</b> long and <b>{short_count}</b> short exposures.",
             f"Combined unrealized P/L is <b>{self._format_currency(total_unrealized)}</b>; realized P/L contribution in open positions is <b>{self._format_currency(total_realized)}</b>.",
             f"Aggregate position {used_label.lower()} is <b>{self._format_currency(total_margin)}</b>.",
+            f"Open-position financing totals <b>{self._format_currency(financing_total)}</b>; tracked broker transaction fees total <b>{self._format_currency(fee_total)}</b>{fee_suffix}.",
             f"Biggest winner: <b>{html.escape(biggest_winner.get('symbol', '-'))}</b> at <b>{self._format_currency(biggest_winner.get('pnl'))}</b>.",
             f"Biggest loser: <b>{html.escape(biggest_loser.get('symbol', '-'))}</b> at <b>{self._format_currency(biggest_loser.get('pnl'))}</b>.",
             f"Largest exposure by value is <b>{html.escape(concentrated.get('symbol', '-'))}</b> at <b>{self._format_currency(concentrated.get('value'))}</b>.",
@@ -3000,7 +3089,8 @@ class Terminal(QMainWindow):
         summary.setText(
             f"Broker {exchange_label} | {equity_label} {self._format_currency(payload.get('nav'))} | {balance_label} {self._format_currency(payload.get('balance'))} | "
             f"Unrealized P/L {self._format_currency(payload.get('unrealized_pl'))} | {used_label} {self._format_currency(payload.get('margin_used'))} | "
-            f"{available_label} {self._format_currency(payload.get('margin_available'))}"
+            f"{available_label} {self._format_currency(payload.get('margin_available'))} | Financing {self._format_currency(payload.get('financing_total'))} | "
+            f"Fees {self._format_currency(payload.get('fee_total'))}"
         )
 
         columns = [
@@ -3760,7 +3850,7 @@ class Terminal(QMainWindow):
         self._configure_market_watch_table()
         self.symbols_table.itemChanged.connect(self._handle_market_watch_item_changed)
         dock.setWidget(self.symbols_table)
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
         self.tick_chart = pg.PlotWidget()
         self.tick_chart_curve = self.tick_chart.plot(pen="y")
@@ -3770,7 +3860,7 @@ class Terminal(QMainWindow):
         tick_dock.setObjectName("tick_chart_dock")
         self.tick_chart_dock = tick_dock
         tick_dock.setWidget(self.tick_chart)
-        self.addDockWidget(Qt.LeftDockWidgetArea, tick_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, tick_dock)
 
     def _create_positions_panel(self):
         create_positions_panel(self)
@@ -3805,7 +3895,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(container)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
     def _show_system_status_panel(self):
         dock = getattr(self, "system_status_dock", None)
@@ -3873,7 +3963,7 @@ class Terminal(QMainWindow):
 
         container.setLayout(layout)
         dock.setWidget(container)
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
     def _build_performance_metric_grid(self, metric_names, columns=2):
         grid = QGridLayout()
@@ -4028,51 +4118,7 @@ class Terminal(QMainWindow):
     # ==========================================================
 
     async def run_backtest_clicked(self):
-
-     try:
-      if self.controller.orchestrator:
-        # Initialize backtest engine
-        self.backtest_engine = BacktestEngine(
-            strategy=self.controller.orchestrator,
-            data=self.historical_data,
-            initial_capital=self.controller.initial_capital,
-            slippage=self.controller.slippage,
-            commission=self.controller.commission
-        )
-
-        # Buttons
-        start_btn = QPushButton("Start Backtest")
-        stop_btn = QPushButton("Stop Backtest")
-
-        start_btn.clicked.connect(self.start_backtest)
-        stop_btn.clicked.connect(self.stop_backtest)
-
-        # Layout
-        layout = QVBoxLayout()
-        layout.addWidget(start_btn)
-        layout.addWidget(stop_btn)
-
-        # Backtest widget
-        backtest_widget = QWidget()
-        backtest_widget.setLayout(layout)
-
-        # Dock widget
-        self.backtest_dock = QDockWidget("Backtest Results", self)
-        self.backtest_dock.setWidget(backtest_widget)
-
-        self.addDockWidget(Qt.RightDockWidgetArea, self.backtest_dock)
-      else:
-
-          raise RuntimeError(
-              "Please start trading first"
-          )
-
-     except Exception as e:
-
-        self.system_console.log(
-            f"Backtest initialization error: {e.__str__()}",
-            "ERROR"
-        )
+        await _hotfix_run_backtest_clicked(self)
 
 
 
@@ -4108,7 +4154,37 @@ class Terminal(QMainWindow):
     # Start BackTesting
     #######################################################
     def start_backtest(self):
-      self.results= engine.run()
+        start_backtest(self)
+
+    def stop_backtest(self):
+        stop_backtest(self)
+
+    def _refresh_active_chart_data(self):
+        _hotfix_refresh_active_chart_data(self)
+
+    def _refresh_active_orderbook(self):
+        _hotfix_refresh_active_orderbook(self)
+
+    def _reload_balance(self):
+        _hotfix_reload_balance(self)
+
+    def _open_settings(self):
+        _hotfix_open_settings(self)
+
+    def _open_ml_research_window(self):
+        _hotfix_show_ml_research_window(self)
+
+    def _open_strategy_assignment_window(self):
+        _hotfix_show_strategy_assignment_window(self)
+
+    def _refresh_strategy_assignment_window(self, window=None, message=None):
+        return _hotfix_refresh_strategy_assignment_window(self, window=window, message=message)
+
+    def _refresh_agent_timeline_window(self, window=None):
+        return None
+
+    def _push_notification(self, *args, **kwargs):
+        return None
 
 
 
@@ -4720,8 +4796,8 @@ class Terminal(QMainWindow):
             height=420,
         )
 
-    def _get_or_create_tool_window(self, key, title, width=900, height=560):
-        window = self.detached_tool_windows.get(key)
+    def _get_or_create_tool_window(self, key, title, width=900, height=560) -> Any:
+        window: Any = self.detached_tool_windows.get(key)
 
         if window is not None:
             window.showNormal()
@@ -5034,37 +5110,23 @@ class Terminal(QMainWindow):
             self.logger.error(f"Risk settings error: {exc}")
 
     def _populate_portfolio_exposure_table(self, table):
-        positions = []
-        portfolio = getattr(self.controller, "portfolio", None)
-        if portfolio is None:
-            return
-
-        if hasattr(portfolio, "get_positions"):
-            try:
-                positions = portfolio.get_positions() or []
-            except Exception:
-                positions = []
-        elif hasattr(portfolio, "positions"):
-            raw_positions = getattr(portfolio, "positions", {})
-            if isinstance(raw_positions, dict):
-                positions = list(raw_positions.values())
-
+        positions = self._active_positions_snapshot()
+        if table.columnCount() < 4:
+            table.setColumnCount(4)
+            table.setHorizontalHeaderLabels(
+                ["Symbol", "Size", "Value (USD)", "Portfolio %"]
+            )
         table.setRowCount(len(positions))
-        total_value = 0.0
-        for pos in positions:
-            try:
-                total_value += float(pos.get("value", 0))
-            except Exception:
-                continue
+        total_value = sum(float(pos.get("value", 0) or 0) for pos in positions)
 
         for row, pos in enumerate((positions)):
             symbol = pos.get("symbol", "-")
-            size = pos.get("size", pos.get("amount", "-"))
+            size = pos.get("amount", pos.get("size", "-"))
             value = float(pos.get("value", 0) or 0)
             pct = (value / total_value * 100) if total_value else 0
 
             table.setItem(row, 0, QTableWidgetItem(str(symbol)))
-            table.setItem(row, 1, QTableWidgetItem(str(size)))
+            table.setItem(row, 1, QTableWidgetItem(f"{float(size or 0):.6f}".rstrip("0").rstrip(".")))
             table.setItem(row, 2, QTableWidgetItem(f"{value:.2f}"))
             table.setItem(row, 3, QTableWidgetItem(f"{pct:.2f}%"))
 
@@ -5152,12 +5214,9 @@ class Terminal(QMainWindow):
             return None
 
         try:
-            with pyproject_path.open("rb") as handle:
-                data = tomllib.load(handle)
-            project = data.get("project", {})
-            version = project.get("version")
+            version = _read_pyproject_version(pyproject_path)
             if version:
-                return str(version)
+                return version
         except Exception:
             return None
         return None
@@ -6116,7 +6175,7 @@ class Terminal(QMainWindow):
 
         raw_snapshot = self.settings.value("trade_checklist/latest", "")
         try:
-            snapshot = json.loads(raw_snapshot or "{}") if raw_snapshot else {}
+            snapshot = json.loads(_json_text(raw_snapshot, "{}")) if raw_snapshot else {}
         except Exception:
             snapshot = {}
         if not snapshot:
@@ -8722,7 +8781,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(container)
 
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
     def _update_regime(self, regime):
 
@@ -8756,7 +8815,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(self.exposure_chart)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
     def _create_model_confidence(self):
 
@@ -8772,7 +8831,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(self.confidence_plot)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
     def _update_confidence(self, confidence):
 
@@ -8784,19 +8843,16 @@ class Terminal(QMainWindow):
         self.confidence_curve.setData(self.confidence_data)
 
     def _update_portfolio_exposure(self):
-
-        positions = self.controller.portfolio.positions
-
+        positions = self._active_positions_snapshot()
         if not positions:
             return
 
         symbols = []
         values = []
 
-        for pos in positions.values():
-
-            symbols.append(pos["symbol"])
-            values.append(pos["value"])
+        for pos in positions:
+            symbols.append(pos.get("symbol", "-"))
+            values.append(float(pos.get("value", 0) or 0))
 
         x = list(range(len(symbols)))
 
@@ -10509,9 +10565,30 @@ def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
     if agent_best_strategy:
         label = f"{agent_best_strategy} ({agent_best_timeframe or '-'})"
         agent_suffix = f"{agent_suffix} | Agent Best: {label}"
+    adaptive_profiles = []
+    adaptive_profiles_resolver = getattr(controller, "adaptive_strategy_profiles_for_symbol", None)
+    if callable(adaptive_profiles_resolver) and selected_symbol:
+        try:
+            adaptive_profiles = [
+                dict(item)
+                for item in (adaptive_profiles_resolver(selected_symbol) or [])
+                if isinstance(item, dict)
+            ]
+        except Exception:
+            adaptive_profiles = []
+    adaptive_profiles.sort(
+        key=lambda item: _coerce_float(item.get("adaptive_weight")) or 0.0,
+        reverse=True,
+    )
+    adaptive_suffix = ""
+    adaptive_leader = adaptive_profiles[0] if adaptive_profiles else {}
+    adaptive_leader_name = str(adaptive_leader.get("strategy_name") or "").strip()
+    adaptive_leader_weight = _coerce_float(adaptive_leader.get("adaptive_weight"))
+    if adaptive_leader_name and adaptive_leader_weight is not None:
+        adaptive_suffix = f" | Adaptive Leader: {adaptive_leader_name} x{adaptive_leader_weight:.2f}"
     summary.setText(
         f"Selected Symbol: {selected_symbol or '-'} | Mode: {mode_label} | "
-        f"Trading With: {active_text} | Ranked Candidates: {len(ranked_rows)}{auto_suffix}{agent_suffix}"
+        f"Trading With: {active_text} | Ranked Candidates: {len(ranked_rows)}{auto_suffix}{agent_suffix}{adaptive_suffix}"
     )
 
     use_default_btn = getattr(window, "_strategy_assignment_use_default_btn", None)
@@ -10582,6 +10659,209 @@ def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
                 agent_table.setItem(row_index, col_index, QTableWidgetItem(str(value)))
         agent_table.resizeColumnsToContents()
         agent_table.horizontalHeader().setStretchLastSection(True)
+
+    adaptive_status = getattr(window, "_strategy_assignment_adaptive_status", None)
+    adaptive_table = getattr(window, "_strategy_assignment_adaptive_table", None)
+    if adaptive_status is not None:
+        if adaptive_profiles:
+            leader_timeframe = str(adaptive_leader.get("timeframe") or "-").strip() or "-"
+            leader_weight_text = (
+                f"{adaptive_leader_weight:.2f}" if adaptive_leader_weight is not None else "-"
+            )
+            adaptive_status.setText(
+                f"Adaptive Memory: {len(adaptive_profiles)} strategy profiles | "
+                f"Leader: {adaptive_leader_name} ({leader_timeframe}) x{leader_weight_text}"
+            )
+        else:
+            adaptive_status.setText("Adaptive Memory: no stored strategy profiles for the selected symbol.")
+    if adaptive_table is not None:
+        adaptive_table.setColumnCount(8)
+        adaptive_table.setHorizontalHeaderLabels(
+            ["Strategy", "Timeframe", "Mode", "Weight", "Samples", "Win Rate", "Avg P/L", "Scope"]
+        )
+        adaptive_table.setRowCount(len(adaptive_profiles))
+        for row_index, profile in enumerate(adaptive_profiles):
+            values = [
+                str(profile.get("strategy_name") or ""),
+                str(profile.get("timeframe") or ""),
+                str(profile.get("mode") or ""),
+                f"{(_coerce_float(profile.get('adaptive_weight')) or 0.0):.2f}",
+                str(int(_coerce_float(profile.get("sample_size")) or 0)),
+                f"{(_coerce_float(profile.get('win_rate')) or 0.0):.0%}",
+                f"{(_coerce_float(profile.get('average_pnl')) or 0.0):.2f}",
+                str(profile.get("scope") or ""),
+            ]
+            for col_index, value in enumerate(values):
+                adaptive_table.setItem(row_index, col_index, QTableWidgetItem(value))
+        adaptive_table.resizeColumnsToContents()
+        adaptive_table.horizontalHeader().setStretchLastSection(True)
+    if adaptive_profiles:
+        _hotfix_refresh_strategy_assignment_adaptive_details(
+            self,
+            window=window,
+            selected_symbol=selected_symbol,
+            strategy_name=adaptive_leader_name,
+            timeframe=str(adaptive_leader.get("timeframe") or "").strip() or None,
+        )
+    else:
+        adaptive_plot_status = getattr(window, "_strategy_assignment_adaptive_plot_status", None)
+        adaptive_plot = getattr(window, "_strategy_assignment_adaptive_plot", None)
+        adaptive_details = getattr(window, "_strategy_assignment_adaptive_details", None)
+        if adaptive_plot_status is not None:
+            adaptive_plot_status.setText("Adaptive history: no scored trades for the selected symbol.")
+        if adaptive_plot is not None and hasattr(adaptive_plot, "clear"):
+            adaptive_plot.clear()
+        if adaptive_details is not None:
+            adaptive_details.setHtml("<h3>Adaptive detail</h3><p>No adaptive-memory samples are available yet.</p>")
+
+
+def _hotfix_refresh_strategy_assignment_adaptive_details(
+    self,
+    window=None,
+    selected_symbol=None,
+    strategy_name=None,
+    timeframe=None,
+):
+    window = window or getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None:
+        return
+
+    details = getattr(window, "_strategy_assignment_adaptive_details", None)
+    plot_status = getattr(window, "_strategy_assignment_adaptive_plot_status", None)
+    plot = getattr(window, "_strategy_assignment_adaptive_plot", None)
+    if details is None and plot_status is None and plot is None:
+        return
+
+    controller = getattr(self, "controller", None)
+    if controller is None:
+        return
+
+    normalized_symbol = str(
+        selected_symbol
+        or getattr(window, "_strategy_assignment_selected_symbol", "")
+        or getattr(getattr(window, "_strategy_assignment_symbol_picker", None), "currentText", lambda: "")()
+    ).strip()
+    normalized_strategy = str(strategy_name or "").strip()
+    normalized_timeframe = str(timeframe or "").strip() or None
+    if not normalized_symbol or not normalized_strategy:
+        if plot_status is not None:
+            plot_status.setText("Adaptive history: select a strategy profile to inspect scored trades.")
+        if plot is not None and hasattr(plot, "clear"):
+            plot.clear()
+        if details is not None:
+            details.setHtml("<h3>Adaptive detail</h3><p>Select a strategy profile to inspect its scored trades.</p>")
+        return
+
+    detail_payload = {}
+    detail_resolver = getattr(controller, "adaptive_strategy_detail_for_symbol", None)
+    if callable(detail_resolver):
+        try:
+            detail_payload = dict(
+                detail_resolver(
+                    normalized_symbol,
+                    normalized_strategy,
+                    timeframe=normalized_timeframe,
+                    limit=8,
+                )
+                or {}
+            )
+        except Exception:
+            detail_payload = {}
+
+    timeline_payload = {}
+    timeline_resolver = getattr(controller, "adaptive_strategy_timeline_for_symbol", None)
+    if callable(timeline_resolver):
+        try:
+            timeline_payload = dict(
+                timeline_resolver(
+                    normalized_symbol,
+                    normalized_strategy,
+                    timeframe=normalized_timeframe,
+                    limit=16,
+                )
+                or {}
+            )
+        except Exception:
+            timeline_payload = {}
+
+    profile = dict(detail_payload.get("profile") or timeline_payload.get("profile") or {})
+    samples = [
+        dict(item)
+        for item in (detail_payload.get("samples") or [])
+        if isinstance(item, dict)
+    ]
+    timeline = [
+        dict(item)
+        for item in (timeline_payload.get("timeline") or [])
+        if isinstance(item, dict)
+    ]
+
+    if plot is not None and hasattr(plot, "clear"):
+        plot.clear()
+        if timeline:
+            x_values = []
+            y_values = []
+            for index, entry in enumerate(timeline):
+                x_values.append(_coerce_float(entry.get("timestamp_value")) or float(index))
+                y_values.append(_coerce_float(entry.get("adaptive_weight")) or 0.0)
+            plot.plot(
+                x_values,
+                y_values,
+                pen=pg.mkPen("#2a7fff", width=2),
+                symbol="o",
+                symbolSize=7,
+                symbolBrush=pg.mkBrush("#4fd1c5"),
+            )
+
+    current_weight = _coerce_float(profile.get("adaptive_weight"))
+    if current_weight is None and timeline:
+        current_weight = _coerce_float(timeline[-1].get("adaptive_weight"))
+    sample_count = len(samples) if samples else len(timeline)
+    if plot_status is not None:
+        status_text = f"Adaptive history: {sample_count} scored trades"
+        if current_weight is not None:
+            status_text = f"{status_text} | Current {current_weight:.2f}"
+        plot_status.setText(status_text)
+
+    if details is not None:
+        scope = html.escape(str(detail_payload.get("scope") or timeline_payload.get("scope") or "strategy"))
+        header = (
+            f"<h3>Adaptive detail</h3>"
+            f"<p><b>{html.escape(normalized_strategy)}</b> | Symbol {html.escape(normalized_symbol)}"
+            f" | Timeframe {html.escape(normalized_timeframe or '-')} | Scope {scope}</p>"
+        )
+        summary_bits = []
+        if current_weight is not None:
+            summary_bits.append(f"Current weight <b>{current_weight:.2f}</b>")
+        sample_size = int(_coerce_float(profile.get("sample_size")) or 0)
+        if sample_size:
+            summary_bits.append(f"Sample size <b>{sample_size}</b>")
+        win_rate = _coerce_float(profile.get("win_rate"))
+        if win_rate is not None:
+            summary_bits.append(f"Win rate <b>{win_rate:.0%}</b>")
+        average_pnl = _coerce_float(profile.get("average_pnl"))
+        if average_pnl is not None:
+            summary_bits.append(f"Average P/L <b>{average_pnl:.2f}</b>")
+        summary_html = f"<p>{' | '.join(summary_bits)}</p>" if summary_bits else ""
+        history_items = []
+        for sample in samples:
+            timestamp = html.escape(str(sample.get("timestamp") or "-"))
+            side = html.escape(str(sample.get("side") or "-"))
+            pnl = _coerce_float(sample.get("pnl"))
+            score = _coerce_float(sample.get("score"))
+            reason = html.escape(str(sample.get("reason") or "").strip() or "-")
+            pnl_text = f"{pnl:.2f}" if pnl is not None else "-"
+            score_text = f"{score:.2f}" if score is not None else "-"
+            history_items.append(
+                "<li>"
+                f"<b>{timestamp}</b> | {side} | "
+                f"P/L {pnl_text} | Score {score_text} | {reason}"
+                "</li>"
+            )
+        if history_items:
+            details.setHtml(header + summary_html + "<ul>" + "".join(history_items) + "</ul>")
+        else:
+            details.setHtml(header + summary_html + "<p>No scored trades are stored for this profile yet.</p>")
 
 
 def _hotfix_strategy_assignment_selection_changed(self):
@@ -12811,6 +13091,7 @@ Terminal._optimize_strategy = _hotfix_optimize_strategy
 Terminal._open_strategy_assignment_window = _hotfix_show_strategy_assignment_window
 Terminal._show_strategy_assignment_window = _hotfix_show_strategy_assignment_window
 Terminal._refresh_strategy_assignment_window = _hotfix_refresh_strategy_assignment_window
+Terminal._refresh_strategy_assignment_adaptive_details = _hotfix_refresh_strategy_assignment_adaptive_details
 Terminal._apply_default_strategy_assignment = _hotfix_apply_default_strategy_assignment
 Terminal._apply_single_strategy_assignment = _hotfix_apply_single_strategy_assignment
 Terminal._apply_ranked_strategy_assignment = _hotfix_apply_ranked_strategy_assignment_from_window
