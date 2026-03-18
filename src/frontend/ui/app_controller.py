@@ -51,6 +51,7 @@ from market_data.websocket.binanceus_web_socket import BinanceUsWebSocket
 from market_data.websocket.coinbase_web_socket import CoinbaseWebSocket
 from market_data.websocket.paper_web_socket import PaperWebSocket
 from licensing.license_manager import LicenseManager
+from storage.agent_decision_repository import AgentDecisionRepository
 from storage.database import configure_database, get_database_url, init_database
 from storage.equity_repository import EquitySnapshotRepository
 from storage.market_data_repository import MarketDataRepository
@@ -111,6 +112,7 @@ class AppController(QMainWindow):
     ai_signal_monitor = Signal(dict)
 
     strategy_debug_signal = Signal(dict)
+    agent_runtime_signal = Signal(dict)
     autotrade_toggle = Signal(bool)
     license_changed = Signal(dict)
 
@@ -173,6 +175,8 @@ class AppController(QMainWindow):
         self.quant_risk_snapshot = {}
         self.health_check_report = []
         self.health_check_summary = "Not run"
+        self._live_agent_decision_events = {}
+        self._live_agent_runtime_feed = []
 
         self.risk_profile_name = str(self.settings.value("risk/profile_name", "Balanced") or "Balanced").strip() or "Balanced"
         self.max_portfolio_risk = float(self.settings.value("risk/max_portfolio_risk", 0.10) or 0.10)
@@ -304,6 +308,7 @@ class AppController(QMainWindow):
         self._news_inflight = {}
 
         self.limit = self.MAX_HISTORY_LIMIT
+        self.runtime_history_limit = int(getattr(SopotekTrading, "MAX_RUNTIME_ANALYSIS_BARS", 500) or 500)
         self.initial_capital = 10000
 
         self.candle_buffer = CandleBuffer(max_length=self.limit)
@@ -697,6 +702,357 @@ class AppController(QMainWindow):
         else:
             perf.trades = list(trades)
 
+    def _agent_decision_record_to_payload(self, item):
+        payload = {}
+        raw_payload = getattr(item, "payload_json", None)
+        if raw_payload:
+            try:
+                payload = json.loads(raw_payload)
+            except Exception:
+                payload = {"raw": str(raw_payload)}
+
+        timestamp = getattr(item, "timestamp", None)
+        timestamp_value = None
+        timestamp_label = ""
+        if isinstance(timestamp, datetime):
+            normalized = timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp.astimezone(timezone.utc)
+            timestamp_value = normalized.timestamp()
+            timestamp_label = normalized.strftime("%Y-%m-%d %H:%M:%S UTC")
+        elif timestamp not in (None, ""):
+            timestamp_label = str(timestamp)
+
+        return {
+            "id": getattr(item, "id", None),
+            "decision_id": str(getattr(item, "decision_id", "") or "").strip(),
+            "exchange": getattr(item, "exchange", None),
+            "account_label": getattr(item, "account_label", None),
+            "symbol": str(getattr(item, "symbol", "") or "").strip().upper(),
+            "agent_name": str(getattr(item, "agent_name", "") or "").strip(),
+            "stage": str(getattr(item, "stage", "") or "").strip(),
+            "strategy_name": str(getattr(item, "strategy_name", "") or payload.get("strategy_name") or "").strip(),
+            "timeframe": str(getattr(item, "timeframe", "") or payload.get("timeframe") or "").strip(),
+            "side": str(getattr(item, "side", "") or payload.get("side") or "").strip().lower(),
+            "confidence": getattr(item, "confidence", None),
+            "approved": getattr(item, "approved", None),
+            "reason": str(getattr(item, "reason", "") or payload.get("reason") or "").strip(),
+            "timestamp": timestamp_value,
+            "timestamp_label": timestamp_label,
+            "payload": payload,
+        }
+
+
+    def _normalize_live_agent_timestamp(self, timestamp):
+        if isinstance(timestamp, datetime):
+            normalized = timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp.astimezone(timezone.utc)
+            return normalized.timestamp(), normalized.strftime("%Y-%m-%d %H:%M:%S UTC")
+        text = str(timestamp or "").strip()
+        if not text:
+            return None, ""
+        try:
+            normalized = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            normalized = normalized.replace(tzinfo=timezone.utc) if normalized.tzinfo is None else normalized.astimezone(timezone.utc)
+            return normalized.timestamp(), normalized.strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            return None, text
+
+    def _live_agent_memory_event_to_payload(self, event):
+        if not isinstance(event, dict):
+            return {}
+        symbol = self._normalize_strategy_symbol_key(event.get("symbol"))
+        if not symbol:
+            return {}
+        payload = dict(event.get("payload") or {})
+        timestamp_value, timestamp_label = self._normalize_live_agent_timestamp(event.get("timestamp"))
+        return {
+            "decision_id": str(event.get("decision_id") or "").strip(),
+            "symbol": symbol,
+            "agent_name": str(event.get("agent") or "").strip(),
+            "stage": str(event.get("stage") or "").strip(),
+            "strategy_name": str(payload.get("strategy_name") or "").strip(),
+            "timeframe": str(payload.get("timeframe") or "").strip(),
+            "side": str(payload.get("side") or "").strip().lower(),
+            "confidence": payload.get("confidence"),
+            "approved": payload.get("approved"),
+            "reason": str(payload.get("reason") or "").strip(),
+            "timestamp": timestamp_value,
+            "timestamp_label": timestamp_label,
+            "payload": payload,
+            "source": "live",
+        }
+
+    def _append_live_agent_decision_event(self, payload):
+        if not isinstance(payload, dict):
+            return []
+        symbol = self._normalize_strategy_symbol_key(payload.get("symbol"))
+        if not symbol:
+            return []
+        events = self._live_agent_decision_events.setdefault(symbol, [])
+        events.append(dict(payload, symbol=symbol))
+        if len(events) > 250:
+            del events[:-250]
+        return list(events)
+
+    def _append_live_agent_runtime_feed(self, payload):
+        if not isinstance(payload, dict):
+            return {}
+
+        row = dict(payload)
+        symbol = self._normalize_strategy_symbol_key(row.get("symbol"))
+        if symbol:
+            row["symbol"] = symbol
+
+        row["kind"] = str(row.get("kind") or "runtime").strip().lower() or "runtime"
+        row["message"] = str(row.get("message") or row.get("reason") or "").strip()
+        row["stage"] = str(row.get("stage") or "").strip()
+        row["agent_name"] = str(row.get("agent_name") or "").strip()
+        row["event_type"] = str(row.get("event_type") or "").strip()
+        row["strategy_name"] = str(row.get("strategy_name") or "").strip()
+        row["timeframe"] = str(row.get("timeframe") or "").strip()
+        row["decision_id"] = str(row.get("decision_id") or "").strip()
+
+        timestamp_value, timestamp_label = self._normalize_live_agent_timestamp(
+            row.get("timestamp") if row.get("timestamp") not in (None, "") else datetime.now(timezone.utc)
+        )
+        row["timestamp"] = timestamp_value
+        row["timestamp_label"] = str(row.get("timestamp_label") or timestamp_label or "").strip()
+        if not row["timestamp_label"] and timestamp_value is not None:
+            row["timestamp_label"] = datetime.fromtimestamp(timestamp_value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        feed = getattr(self, "_live_agent_runtime_feed", None)
+        if not isinstance(feed, list):
+            feed = []
+            self._live_agent_runtime_feed = feed
+        feed.append(row)
+        if len(feed) > 500:
+            del feed[:-500]
+        return dict(row)
+
+    def _latest_live_agent_decision_chain_for_symbol(self, symbol, limit=12):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        if not normalized_symbol:
+            return []
+        rows = list((getattr(self, "_live_agent_decision_events", {}) or {}).get(normalized_symbol, []) or [])
+        if not rows:
+            return []
+        latest_decision_id = str(rows[-1].get("decision_id") or "").strip()
+        if latest_decision_id:
+            rows = [row for row in rows if str(row.get("decision_id") or "").strip() == latest_decision_id]
+        return [dict(row) for row in rows[-max(1, int(limit or 12)):]]
+
+    def live_agent_runtime_feed(self, limit=200, symbol=None, kinds=None):
+        rows = list(getattr(self, "_live_agent_runtime_feed", []) or [])
+
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        if normalized_symbol:
+            rows = [
+                dict(row)
+                for row in rows
+                if self._normalize_strategy_symbol_key((row or {}).get("symbol")) == normalized_symbol
+            ]
+        else:
+            rows = [dict(row) for row in rows]
+
+        if kinds:
+            allowed_kinds = {
+                str(kind or "").strip().lower()
+                for kind in (kinds if isinstance(kinds, (list, tuple, set)) else [kinds])
+                if str(kind or "").strip()
+            }
+            if allowed_kinds:
+                rows = [row for row in rows if str(row.get("kind") or "").strip().lower() in allowed_kinds]
+
+        try:
+            limit_value = max(1, int(limit or 200))
+        except Exception:
+            limit_value = 200
+        return list(reversed(rows[-limit_value:]))
+
+    def _emit_agent_runtime_signal(self, payload):
+        normalized_payload = self._append_live_agent_runtime_feed(payload)
+        signal = getattr(self, "agent_runtime_signal", None)
+        if signal is not None:
+            try:
+                signal.emit(dict(normalized_payload or payload or {}))
+            except Exception:
+                self.logger.debug("Unable to emit agent runtime signal", exc_info=True)
+
+    def _handle_live_agent_memory_event(self, event):
+        payload = self._live_agent_memory_event_to_payload(event)
+        if not payload:
+            return {}
+        self._append_live_agent_decision_event(payload)
+        runtime_payload = dict(payload)
+        runtime_payload["kind"] = "memory"
+        runtime_payload["message"] = (
+            f"{payload.get('agent_name') or 'Agent'} {payload.get('stage') or 'updated'}"
+            f" for {payload.get('symbol') or 'symbol'}"
+        )
+        if payload.get("reason"):
+            runtime_payload["message"] = f"{runtime_payload['message']} | {payload.get('reason')}"
+        self._emit_agent_runtime_signal(runtime_payload)
+        return payload
+
+    def _agent_runtime_bus_message(self, event_type, data):
+        payload = dict(data or {})
+        signal_payload = dict(payload.get("signal") or {}) if isinstance(payload.get("signal"), dict) else {}
+        review_payload = dict(payload.get("trade_review") or {}) if isinstance(payload.get("trade_review"), dict) else {}
+        symbol = self._normalize_strategy_symbol_key(payload.get("symbol"))
+        strategy_name = str(signal_payload.get("strategy_name") or review_payload.get("strategy_name") or payload.get("strategy_name") or "").strip()
+        timeframe = str(payload.get("timeframe") or review_payload.get("timeframe") or payload.get("timeframe") or "").strip()
+        side = str(signal_payload.get("side") or review_payload.get("side") or payload.get("side") or "").strip().upper()
+        reason = str(review_payload.get("reason") or signal_payload.get("reason") or payload.get("reason") or "").strip()
+        if event_type == EventType.SIGNAL:
+            detail = f"{side or 'HOLD'} via {strategy_name or 'strategy'}"
+            if timeframe:
+                detail = f"{detail} ({timeframe})"
+            return f"Signal selected for {symbol}: {detail}."
+        if event_type == EventType.RISK_APPROVED:
+            return f"Risk approved {side or 'trade'} for {symbol}."
+        if event_type == EventType.EXECUTION_PLAN:
+            execution_strategy = str(payload.get("execution_strategy") or "").strip() or "default routing"
+            return f"Execution plan ready for {symbol}: {execution_strategy}."
+        if event_type == EventType.ORDER_FILLED:
+            status = str((payload.get("execution_result") or {}).get("status") or payload.get("status") or "filled").strip().lower()
+            return f"Execution {status} for {symbol}."
+        if event_type == EventType.RISK_ALERT:
+            return reason or f"Risk blocked the trade for {symbol}."
+        return reason or f"{event_type} for {symbol}."
+
+    async def _handle_trading_agent_bus_event(self, event):
+        data = dict(getattr(event, "data", {}) or {})
+        symbol = self._normalize_strategy_symbol_key(data.get("symbol"))
+        if not symbol:
+            return
+        event_type = str(getattr(event, "type", "") or "").strip()
+        signal_payload = dict(data.get("signal") or {}) if isinstance(data.get("signal"), dict) else {}
+        review_payload = dict(data.get("trade_review") or {}) if isinstance(data.get("trade_review"), dict) else {}
+        payload = {
+            "kind": "bus",
+            "event_type": event_type,
+            "symbol": symbol,
+            "decision_id": str(data.get("decision_id") or review_payload.get("decision_id") or "").strip(),
+            "strategy_name": str(signal_payload.get("strategy_name") or review_payload.get("strategy_name") or data.get("strategy_name") or "").strip(),
+            "timeframe": str(data.get("timeframe") or review_payload.get("timeframe") or "").strip(),
+            "side": str(signal_payload.get("side") or review_payload.get("side") or data.get("side") or "").strip().lower(),
+            "reason": str(review_payload.get("reason") or signal_payload.get("reason") or data.get("reason") or "").strip(),
+            "message": self._agent_runtime_bus_message(event_type, data),
+            "payload": data,
+        }
+        self._emit_agent_runtime_signal(payload)
+
+    def _bind_trading_runtime_streams(self):
+        trading_system = getattr(self, "trading_system", None)
+        if trading_system is None:
+            return
+        memory = getattr(trading_system, "agent_memory", None)
+        if memory is not None and hasattr(memory, "add_sink"):
+            memory.add_sink(self._handle_live_agent_memory_event)
+        event_bus = getattr(trading_system, "event_bus", None)
+        if event_bus is not None and hasattr(event_bus, "subscribe"):
+            for event_type in (
+                EventType.SIGNAL,
+                EventType.RISK_APPROVED,
+                EventType.RISK_ALERT,
+                EventType.EXECUTION_PLAN,
+                EventType.ORDER_FILLED,
+            ):
+                event_bus.subscribe(event_type, self._handle_trading_agent_bus_event)
+
+    def latest_agent_decision_chain_for_symbol(self, symbol, limit=12):
+        normalized_symbol = self._normalize_strategy_symbol_key(symbol)
+        if not normalized_symbol:
+            return []
+
+        live_rows = self._latest_live_agent_decision_chain_for_symbol(normalized_symbol, limit=limit)
+        if live_rows:
+            return live_rows
+
+        repository = getattr(self, "agent_decision_repository", None)
+        exchange = self._active_exchange_code() if hasattr(self, "_active_exchange_code") else None
+        account_label = self.current_account_label() if hasattr(self, "current_account_label") else None
+        if str(account_label or "").strip().lower() == "not set":
+            account_label = None
+
+        if repository is not None and hasattr(repository, "latest_chain_for_symbol"):
+            try:
+                rows = repository.latest_chain_for_symbol(
+                    normalized_symbol,
+                    limit=limit,
+                    exchange=exchange,
+                    account_label=account_label,
+                )
+                payloads = [self._agent_decision_record_to_payload(item) for item in list(rows or [])]
+                if payloads:
+                    return payloads
+            except Exception:
+                self.logger.debug("Unable to restore agent decision chain from repository", exc_info=True)
+
+        trading_system = getattr(self, "trading_system", None)
+        if trading_system is None or not hasattr(trading_system, "agent_memory_snapshot"):
+            return []
+
+        try:
+            events = list(trading_system.agent_memory_snapshot(limit=200) or [])
+        except Exception:
+            return []
+        filtered = [
+            dict(item)
+            for item in events
+            if str((item or {}).get("symbol") or "").strip().upper() == normalized_symbol
+        ]
+        if not filtered:
+            return []
+        latest_decision_id = str(filtered[-1].get("decision_id") or "").strip()
+        if latest_decision_id:
+            filtered = [item for item in filtered if str(item.get("decision_id") or "").strip() == latest_decision_id]
+        filtered = filtered[-max(1, int(limit)):]
+        return [
+            {
+                "decision_id": str(item.get("decision_id") or "").strip(),
+                "symbol": str(item.get("symbol") or "").strip().upper(),
+                "agent_name": str(item.get("agent") or "").strip(),
+                "stage": str(item.get("stage") or "").strip(),
+                "strategy_name": str((item.get("payload") or {}).get("strategy_name") or "").strip(),
+                "timeframe": str((item.get("payload") or {}).get("timeframe") or "").strip(),
+                "side": str((item.get("payload") or {}).get("side") or "").strip().lower(),
+                "confidence": (item.get("payload") or {}).get("confidence"),
+                "approved": (item.get("payload") or {}).get("approved"),
+                "reason": str((item.get("payload") or {}).get("reason") or "").strip(),
+                "timestamp": item.get("timestamp"),
+                "timestamp_label": str(item.get("timestamp") or "").strip(),
+                "payload": dict(item.get("payload") or {}),
+            }
+            for item in filtered
+        ]
+
+    def latest_agent_decision_overview_for_symbol(self, symbol):
+        chain = list(self.latest_agent_decision_chain_for_symbol(symbol, limit=20) or [])
+        if not chain:
+            return {}
+
+        signal_row = next((row for row in chain if row.get("agent_name") == "SignalAgent"), {})
+        risk_row = next((row for row in reversed(chain) if row.get("agent_name") == "RiskAgent"), {})
+        execution_row = next((row for row in reversed(chain) if row.get("agent_name") == "ExecutionAgent"), {})
+        latest = dict(chain[-1])
+        strategy_name = str(signal_row.get("strategy_name") or risk_row.get("strategy_name") or execution_row.get("strategy_name") or "").strip()
+        timeframe = str(signal_row.get("timeframe") or risk_row.get("timeframe") or execution_row.get("timeframe") or "").strip()
+        approved = execution_row.get("approved")
+        if approved is None:
+            approved = risk_row.get("approved")
+        return {
+            "decision_id": latest.get("decision_id"),
+            "symbol": latest.get("symbol"),
+            "strategy_name": strategy_name,
+            "timeframe": timeframe,
+            "side": str(signal_row.get("side") or execution_row.get("side") or "").strip().lower(),
+            "approved": approved,
+            "final_stage": latest.get("stage"),
+            "final_agent": latest.get("agent_name"),
+            "reason": str(latest.get("reason") or risk_row.get("reason") or signal_row.get("reason") or "").strip(),
+            "steps": len(chain),
+            "timestamp_label": latest.get("timestamp_label"),
+        }
+
     def _rebind_storage_dependencies(self):
         trading_system = getattr(self, "trading_system", None)
         if trading_system is None:
@@ -709,6 +1065,13 @@ class AppController(QMainWindow):
         execution_manager = getattr(trading_system, "execution_manager", None)
         if execution_manager is not None:
             execution_manager.trade_repository = self.trade_repository
+
+        binder = getattr(trading_system, "bind_agent_decision_repository", None)
+        if callable(binder):
+            try:
+                binder(getattr(self, "agent_decision_repository", None))
+            except Exception:
+                self.logger.debug("Unable to rebind agent decision repository", exc_info=True)
 
     @staticmethod
     def _masked_database_url(database_url):
@@ -753,6 +1116,7 @@ class AppController(QMainWindow):
         self.market_data_repository = MarketDataRepository()
         self.trade_repository = TradeRepository()
         self.equity_repository = EquitySnapshotRepository()
+        self.agent_decision_repository = AgentDecisionRepository()
         self._rebind_storage_dependencies()
 
         if persist:
@@ -888,6 +1252,9 @@ class AppController(QMainWindow):
                 )
 
                 self.trading_system = SopotekTrading(self)
+                self._live_agent_decision_events = {}
+                self._live_agent_runtime_feed = []
+                self._bind_trading_runtime_streams()
                 portfolio_manager = getattr(self.trading_system, "portfolio", None)
                 self.portfolio = getattr(portfolio_manager, "portfolio", None)
                 self._performance_recorded_orders.clear()
@@ -1703,6 +2070,53 @@ class AppController(QMainWindow):
             return None
         return normalized.reset_index(drop=True)
 
+    def _strategy_auto_assignment_timeframes(self, timeframe=None):
+        preferred = str(timeframe or getattr(self, "time_frame", "1h") or "1h").strip().lower() or "1h"
+        configured = getattr(self, "strategy_assignment_scan_timeframes", None)
+        if isinstance(configured, str):
+            raw_timeframes = [configured]
+        elif isinstance(configured, (list, tuple, set)) and configured:
+            raw_timeframes = list(configured)
+        else:
+            raw_timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+
+        normalized = []
+        for item in [preferred, *raw_timeframes]:
+            value = str(item or "").strip().lower()
+            if value and value not in normalized:
+                normalized.append(value)
+        return normalized
+
+    def _best_strategy_rankings_across_timeframes(self, rankings):
+        best_by_strategy = {}
+        for row in list(rankings or []):
+            if not isinstance(row, dict):
+                continue
+            strategy_name = Strategy.normalize_strategy_name(row.get("strategy_name"))
+            if not strategy_name:
+                continue
+            candidate = dict(row)
+            candidate["strategy_name"] = strategy_name
+            candidate["timeframe"] = str(candidate.get("timeframe") or getattr(self, "time_frame", "1h") or "1h").strip() or "1h"
+            candidate_score = float(candidate.get("score", 0.0) or 0.0)
+            existing = best_by_strategy.get(strategy_name)
+            existing_score = float(existing.get("score", 0.0) or 0.0) if isinstance(existing, dict) else float("-inf")
+            if existing is None or candidate_score > existing_score:
+                best_by_strategy[strategy_name] = candidate
+
+        ordered = sorted(
+            best_by_strategy.values(),
+            key=lambda item: (
+                -float(item.get("score", 0.0) or 0.0),
+                -float(item.get("total_profit", 0.0) or 0.0),
+                -float(item.get("sharpe_ratio", 0.0) or 0.0),
+                str(item.get("timeframe") or ""),
+            ),
+        )
+        for index, item in enumerate(ordered, start=1):
+            item["rank"] = index
+        return ordered
+
     def save_ranked_strategies_for_symbol(self, symbol, rankings, timeframe=None, assignment_source="manual", persist=True):
         normalized_symbol = self._normalize_strategy_symbol_key(symbol)
         assignment_source = str(assignment_source or "manual").strip().lower()
@@ -1798,13 +2212,14 @@ class AppController(QMainWindow):
 
         self.strategy_auto_assignment_in_progress = True
         self.strategy_auto_assignment_ready = False
-        scan_message = f"Scanning {len(symbol_candidates)} symbols and ranking {len(strategy_names)} strategies."
+        timeframe_candidates = self._strategy_auto_assignment_timeframes(timeframe=timeframe_value)
+        scan_message = f"Scanning {len(symbol_candidates)} symbols across {len(timeframe_candidates)} timeframes and ranking {len(strategy_names)} strategies."
         if restored_symbols:
             scan_message = (
                 f"Loaded saved strategy assignments for {len(restored_symbols)} "
                 f"symbol{'s' if len(restored_symbols) != 1 else ''}. "
                 f"Scanning {len(symbol_candidates)} new symbol{'s' if len(symbol_candidates) != 1 else ''} "
-                f"and ranking {len(strategy_names)} strategies."
+                f"across {len(timeframe_candidates)} timeframes and ranking {len(strategy_names)} strategies."
             )
         self._update_strategy_auto_assignment_progress(
             completed=0,
@@ -1819,7 +2234,7 @@ class AppController(QMainWindow):
         system_console = getattr(terminal, "system_console", None) if terminal is not None else None
         if system_console is not None:
             system_console.log(
-                f"Scanning {len(symbol_candidates)} symbols and ranking {len(strategy_names)} strategies before manual overrides unlock.",
+                f"Scanning {len(symbol_candidates)} symbols across {len(timeframe_candidates)} timeframes and ranking {len(strategy_names)} strategies before manual overrides unlock.",
                 "INFO",
             )
 
@@ -1840,39 +2255,57 @@ class AppController(QMainWindow):
                     failed_symbols=failed_symbols,
                 )
 
-                symbol_cache = getattr(self, "candle_buffers", {}).get(symbol, {})
-                frame = self._normalize_strategy_ranking_frame(symbol_cache.get(timeframe_value) if isinstance(symbol_cache, dict) else None)
-                if frame is None or len(frame) < max(20, int(min_candles or 20)):
-                    try:
-                        fetched = await self.request_candle_data(symbol, timeframe=timeframe_value, limit=max(int(history_limit or 240), int(min_candles or 120)))
-                    except Exception as exc:
-                        fetched = None
-                        failed_symbols.append({"symbol": symbol, "reason": str(exc)})
-                    frame = self._normalize_strategy_ranking_frame(fetched)
-                    if frame is None:
-                        symbol_cache = getattr(self, "candle_buffers", {}).get(symbol, {})
-                        frame = self._normalize_strategy_ranking_frame(symbol_cache.get(timeframe_value) if isinstance(symbol_cache, dict) else None)
+                combined_records = []
+                resolved_timeframes = []
+                for candidate_timeframe in timeframe_candidates:
+                    symbol_cache = getattr(self, "candle_buffers", {}).get(symbol, {})
+                    frame = self._normalize_strategy_ranking_frame(symbol_cache.get(candidate_timeframe) if isinstance(symbol_cache, dict) else None)
+                    if frame is None or len(frame) < max(20, int(min_candles or 20)):
+                        try:
+                            fetched = await self.request_candle_data(
+                                symbol,
+                                timeframe=candidate_timeframe,
+                                limit=max(int(history_limit or 240), int(min_candles or 120)),
+                            )
+                        except Exception as exc:
+                            fetched = None
+                            if not any(
+                                item.get("symbol") == symbol and str(item.get("timeframe") or "") == candidate_timeframe
+                                for item in failed_symbols
+                            ):
+                                failed_symbols.append({"symbol": symbol, "timeframe": candidate_timeframe, "reason": str(exc)})
+                        frame = self._normalize_strategy_ranking_frame(fetched)
+                        if frame is None:
+                            symbol_cache = getattr(self, "candle_buffers", {}).get(symbol, {})
+                            frame = self._normalize_strategy_ranking_frame(symbol_cache.get(candidate_timeframe) if isinstance(symbol_cache, dict) else None)
 
-                if frame is None or len(frame) < max(20, int(min_candles or 20)):
+                    if frame is None or len(frame) < max(20, int(min_candles or 20)):
+                        continue
+
+                    results = await asyncio.to_thread(
+                        ranker.rank,
+                        frame.copy(),
+                        symbol,
+                        candidate_timeframe,
+                        strategy_names,
+                    )
+                    records = results.to_dict("records") if results is not None and not getattr(results, "empty", True) else []
+                    for record in records:
+                        if isinstance(record, dict):
+                            record["timeframe"] = str(record.get("timeframe") or candidate_timeframe).strip() or candidate_timeframe
+                    if records:
+                        combined_records.extend(records)
+                        resolved_timeframes.append(candidate_timeframe)
+
+                records = self._best_strategy_rankings_across_timeframes(combined_records)
+                if not records:
                     if not any(item.get("symbol") == symbol for item in failed_symbols):
                         failed_symbols.append(
                             {
                                 "symbol": symbol,
-                                "reason": f"Not enough candle history for {symbol} ({timeframe_value}).",
+                                "reason": f"No ranked strategies were produced for {symbol} across the scanned timeframes.",
                             }
                         )
-                    continue
-
-                results = await asyncio.to_thread(
-                    ranker.rank,
-                    frame.copy(),
-                    symbol,
-                    timeframe_value,
-                    strategy_names,
-                )
-                records = results.to_dict("records") if results is not None and not getattr(results, "empty", True) else []
-                if not records:
-                    failed_symbols.append({"symbol": symbol, "reason": f"No ranked strategies were produced for {symbol}."})
                     continue
 
                 locked = self.symbol_strategy_assignment_locked(symbol)
@@ -1880,7 +2313,7 @@ class AppController(QMainWindow):
                     assigned = self.assign_ranked_strategies_to_symbol(
                         symbol,
                         records,
-                        top_n=int(getattr(self, "max_symbol_strategies", 3) or 3),
+                        top_n=1,
                         timeframe=timeframe_value,
                         assignment_source="auto",
                         lock_symbol=False,
@@ -1899,13 +2332,19 @@ class AppController(QMainWindow):
                     )
                     skipped_symbols.append(symbol)
 
+                best_label = "no ranked strategy"
+                if records:
+                    best_row = records[0]
+                    best_label = f"{best_row.get('strategy_name', 'Strategy')} @ {best_row.get('timeframe', timeframe_value)}"
                 self._update_strategy_auto_assignment_progress(
                     completed=index,
                     total=len(symbol_candidates),
                     current_symbol=symbol,
-                    timeframe=timeframe_value,
-                    message=f"Scanned {index}/{len(symbol_candidates)} symbols.",
+                    timeframe=str(records[0].get("timeframe") or timeframe_value) if records else timeframe_value,
+                    message=f"Scanned {index}/{len(symbol_candidates)} symbols. Best fit for {symbol}: {best_label}.",
                     failed_symbols=failed_symbols,
+                    scan_timeframes=list(timeframe_candidates),
+                    resolved_timeframes=list(resolved_timeframes),
                 )
 
             if refreshed_preferences:
@@ -1930,6 +2369,7 @@ class AppController(QMainWindow):
                 timeframe=timeframe_value,
                 message=summary_message,
                 failed_symbols=failed_symbols,
+                scan_timeframes=list(timeframe_candidates),
             )
             if system_console is not None:
                 system_console.log(summary_message, "INFO")
@@ -1939,6 +2379,7 @@ class AppController(QMainWindow):
                 "skipped_symbols": list(skipped_symbols),
                 "failed_symbols": list(failed_symbols),
                 "timeframe": timeframe_value,
+                "scan_timeframes": list(timeframe_candidates),
             }
         except asyncio.CancelledError:
             self.strategy_auto_assignment_in_progress = False
@@ -6173,6 +6614,8 @@ class AppController(QMainWindow):
                 await self.trading_system.stop()
                 self.trading_system = None
                 self.behavior_guard = None
+                self._live_agent_decision_events = {}
+                self._live_agent_runtime_feed = []
 
             if self.terminal:
                 try:

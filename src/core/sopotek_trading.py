@@ -1,7 +1,16 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
+from agents.memory import AgentMemory
+from agents.orchestrator import AgentOrchestrator
+from agents.portfolio_agent import PortfolioAgent
+from agents.regime_agent import RegimeAgent
+from agents.risk_agent import RiskAgent as TradingRiskAgent
+from agents.signal_agent import SignalAgent
+from agents.execution_agent import ExecutionAgent as TradingExecutionAgent
+from agents.event_driven_runtime import EventDrivenAgentRuntime
 from manager.portfolio_manager import PortfolioManager
 from execution.execution_manager import ExecutionManager
 from strategy.strategy_registry import StrategyRegistry
@@ -85,6 +94,49 @@ class SopotekTrading:
         self.portfolio_allocator = None
         self.portfolio_risk_engine = None
         self.orchestrator = None
+        self.agent_decision_repository = None
+        self.agent_memory = AgentMemory(max_events=2000)
+        self.agent_memory.add_sink(self._persist_agent_memory_event)
+        self.signal_agent = SignalAgent(
+            selector=self._select_strategy_signal,
+            display_builder=self._build_display_signal,
+            publisher=self._publish_signal_context,
+            news_bias_applier=self._apply_news_bias,
+            memory=self.agent_memory,
+            event_bus=self.event_bus,
+        )
+        self.agent_orchestrator = AgentOrchestrator(
+            agents=[
+                RegimeAgent(
+                    snapshot_builder=self._build_regime_snapshot,
+                    memory=self.agent_memory,
+                    event_bus=self.event_bus,
+                ),
+                PortfolioAgent(
+                    snapshot_builder=self._build_portfolio_snapshot,
+                    memory=self.agent_memory,
+                    event_bus=self.event_bus,
+                ),
+                TradingRiskAgent(
+                    reviewer=self.review_signal,
+                    memory=self.agent_memory,
+                    event_bus=self.event_bus,
+                ),
+                TradingExecutionAgent(
+                    executor=self.execute_review,
+                    memory=self.agent_memory,
+                    event_bus=self.event_bus,
+                ),
+            ]
+        )
+        self.event_driven_runtime = EventDrivenAgentRuntime(
+            bus=self.event_bus,
+            signal_agent=self.signal_agent,
+            regime_agent=self.agent_orchestrator.agents[0],
+            portfolio_agent=self.agent_orchestrator.agents[1],
+            risk_agent=self.agent_orchestrator.agents[2],
+            execution_agent=self.agent_orchestrator.agents[3],
+        )
 
         # =========================
         # SYSTEM SETTINGS
@@ -96,6 +148,13 @@ class SopotekTrading:
         self._pipeline_status = {}
         self._rejection_log_cache = {}
 
+        if self.controller is not None:
+            self.controller.agent_memory = self.agent_memory
+            self.controller.agent_orchestrator = self.agent_orchestrator
+            self.controller.event_bus = self.event_bus
+            self.controller.agent_event_runtime = self.event_driven_runtime
+
+        self.bind_agent_decision_repository(getattr(self.controller, "agent_decision_repository", None))
         self.logger.info("Sopotek Trading System initialized")
 
     def _apply_strategy_preferences(self):
@@ -174,6 +233,14 @@ class SopotekTrading:
         fallback_name = str(getattr(self.controller, "strategy_name", None) or "Trend Following").strip() or "Trend Following"
         return [{"strategy_name": fallback_name, "score": 1.0, "weight": 1.0, "rank": 1}]
 
+    def _assigned_timeframe_for_symbol(self, symbol, fallback=None):
+        assigned = self._assigned_strategies_for_symbol(symbol)
+        for row in list(assigned or []):
+            timeframe = str(getattr(row, "get", lambda *_args, **_kwargs: None)("timeframe") if hasattr(row, "get") else "" or "").strip()
+            if timeframe:
+                return timeframe
+        return str(fallback or self.time_frame or "1h").strip() or "1h"
+
     def _select_strategy_signal(self, normalized_symbol, candles, dataset):
         assigned = self._assigned_strategies_for_symbol(normalized_symbol)
         candidates = []
@@ -247,6 +314,203 @@ class SopotekTrading:
             symbol: dict(payload)
             for symbol, payload in (self._pipeline_status or {}).items()
         }
+
+    def agent_memory_snapshot(self, limit=50):
+        return self.agent_memory.snapshot(limit=limit) if self.agent_memory is not None else []
+
+    def bind_agent_decision_repository(self, repository):
+        self.agent_decision_repository = repository
+        if self.controller is not None:
+            self.controller.agent_decision_repository = repository
+        return repository
+
+    def _active_exchange_code(self):
+        broker = getattr(self, "broker", None)
+        exchange_name = getattr(broker, "exchange_name", None) if broker is not None else None
+        if not exchange_name and self.controller is not None:
+            exchange_name = getattr(self.controller, "exchange", None)
+        return str(exchange_name or "").strip().lower() or None
+
+    def _current_account_label(self):
+        resolver = getattr(self.controller, "current_account_label", None) if self.controller is not None else None
+        if callable(resolver):
+            try:
+                label = resolver()
+            except Exception:
+                label = None
+        else:
+            label = None
+        if str(label or "").strip().lower() == "not set":
+            label = None
+        return str(label or "").strip() or None
+
+    def _persist_agent_memory_event(self, event):
+        repository = getattr(self, "agent_decision_repository", None)
+        if repository is None or not hasattr(repository, "save_decision") or not isinstance(event, dict):
+            return None
+        payload = dict(event.get("payload") or {})
+        try:
+            return repository.save_decision(
+                agent_name=event.get("agent"),
+                stage=event.get("stage"),
+                symbol=event.get("symbol"),
+                decision_id=event.get("decision_id"),
+                exchange=self._active_exchange_code(),
+                account_label=self._current_account_label(),
+                strategy_name=payload.get("strategy_name"),
+                timeframe=payload.get("timeframe"),
+                side=payload.get("side"),
+                confidence=payload.get("confidence"),
+                approved=payload.get("approved"),
+                reason=payload.get("reason"),
+                payload=payload,
+                timestamp=event.get("timestamp"),
+            )
+        except Exception:
+            self.logger.debug("Unable to persist agent decision ledger entry", exc_info=True)
+            return None
+
+    def _custom_process_signal_handler(self):
+        handler = self.__dict__.get("process_signal")
+        return handler if callable(handler) else None
+
+    def _build_display_signal(self, context, signal, assigned_strategies):
+        symbol = str((context or {}).get("symbol") or "").strip().upper()
+        default_strategy_name = str(getattr(self.controller, "strategy_name", None) or "Trend Following").strip() or "Trend Following"
+        display_strategy_name = signal.get("strategy_name") if isinstance(signal, dict) else None
+        if not display_strategy_name:
+            display_strategy_name = ", ".join(
+                str(item.get("strategy_name") or "").strip()
+                for item in list(assigned_strategies or [])[:3]
+                if str(item.get("strategy_name") or "").strip()
+            ) or default_strategy_name
+        if isinstance(signal, dict):
+            display_signal = dict(signal)
+            display_signal.setdefault("strategy_name", display_strategy_name)
+            return display_signal
+        if (context or {}).get("blocked_by_news_bias"):
+            reason = str((context or {}).get("news_bias_reason") or "Signal was neutralized by news bias controls.").strip()
+        else:
+            reason = "No entry signal on the latest scan."
+        return {
+            "symbol": symbol,
+            "side": "hold",
+            "amount": 0.0,
+            "confidence": 0.0,
+            "reason": reason,
+            "strategy_name": display_strategy_name,
+        }
+
+    def _publish_signal_context(self, context, display_signal):
+        if not (context or {}).get("publish_debug"):
+            return
+        features = (context or {}).get("features")
+        candles = list((context or {}).get("candles") or [])
+        symbol = str((context or {}).get("symbol") or "").strip().upper()
+        if self.controller and hasattr(self.controller, "publish_ai_signal"):
+            self.controller.publish_ai_signal(symbol, display_signal, candles=candles)
+        if self.controller and hasattr(self.controller, "publish_strategy_debug"):
+            self.controller.publish_strategy_debug(symbol, display_signal, candles=candles, features=features)
+
+    async def _apply_news_bias(self, symbol, signal):
+        if self.controller and hasattr(self.controller, "apply_news_bias_to_signal"):
+            return await self.controller.apply_news_bias_to_signal(symbol, signal)
+        return signal
+
+    def _feature_frame_for_context(self, candles, dataset=None, strategy_name=None):
+        strategy = self.strategy._resolve_strategy(strategy_name) if hasattr(self.strategy, "_resolve_strategy") else self.strategy
+        if strategy is None or not hasattr(strategy, "compute_features"):
+            return getattr(dataset, "frame", None)
+        candle_rows = candles or []
+        if not candle_rows and dataset is not None:
+            try:
+                candle_rows = dataset.to_candles()
+            except Exception:
+                candle_rows = []
+        try:
+            return strategy.compute_features(candle_rows)
+        except Exception:
+            return getattr(dataset, "frame", None)
+
+    def _build_regime_snapshot(self, symbol=None, signal=None, candles=None, dataset=None, timeframe=None):
+        feature_frame = self._feature_frame_for_context(candles or [], dataset=dataset, strategy_name=(signal or {}).get("strategy_name") if isinstance(signal, dict) else None)
+        regime_engine = getattr(self.signal_engine, "regime_engine", None)
+        regime = regime_engine.classify_frame(feature_frame) if regime_engine is not None else "unknown"
+        atr_pct = 0.0
+        trend_strength = 0.0
+        momentum = 0.0
+        band_position = 0.5
+        if feature_frame is not None and not getattr(feature_frame, "empty", True):
+            try:
+                row = feature_frame.iloc[-1]
+                atr_pct = self._safe_numeric_value(row.get("atr_pct"), 0.0)
+                trend_strength = self._safe_numeric_value(row.get("trend_strength"), 0.0)
+                momentum = self._safe_numeric_value(row.get("momentum"), 0.0)
+                band_position = self._safe_numeric_value(row.get("band_position"), 0.5)
+            except Exception:
+                pass
+        if atr_pct >= 0.03:
+            volatility_label = "high"
+        elif atr_pct >= 0.015:
+            volatility_label = "medium"
+        else:
+            volatility_label = "low"
+        return {
+            "symbol": str(symbol or "").strip().upper(),
+            "timeframe": str(timeframe or self.time_frame or "1h").strip() or "1h",
+            "regime": regime,
+            "volatility": volatility_label,
+            "atr_pct": atr_pct,
+            "trend_strength": trend_strength,
+            "momentum": momentum,
+            "band_position": band_position,
+        }
+
+    def _build_portfolio_snapshot(self, symbol=None):
+        portfolio = getattr(self.portfolio, "portfolio", None)
+        positions = getattr(portfolio, "positions", {}) or {}
+        market_prices = dict(getattr(self.portfolio, "market_prices", {}) or {})
+        rows = []
+        gross_exposure = 0.0
+        net_exposure = 0.0
+        for position_symbol, position in positions.items():
+            quantity = self._safe_numeric_value(getattr(position, "quantity", 0.0), 0.0)
+            if quantity == 0:
+                continue
+            price = self._safe_numeric_value(market_prices.get(position_symbol), getattr(position, "avg_price", 0.0))
+            exposure = quantity * price
+            gross_exposure += abs(exposure)
+            net_exposure += exposure
+            rows.append(
+                {
+                    "symbol": str(position_symbol).strip().upper(),
+                    "quantity": quantity,
+                    "avg_price": self._safe_numeric_value(getattr(position, "avg_price", 0.0), 0.0),
+                    "last_price": price,
+                    "signed_exposure": exposure,
+                    "absolute_exposure": abs(exposure),
+                }
+            )
+        try:
+            equity = self._safe_numeric_value(self.portfolio.equity(), getattr(self.risk_engine, "account_equity", 0.0) or 0.0)
+        except Exception:
+            equity = self._safe_numeric_value(getattr(self.risk_engine, "account_equity", 0.0), 0.0)
+        try:
+            cash = self._safe_numeric_value(getattr(portfolio, "cash", 0.0), 0.0)
+        except Exception:
+            cash = 0.0
+        snapshot = {
+            "symbol": str(symbol or "").strip().upper(),
+            "equity": equity,
+            "cash": cash,
+            "gross_exposure": gross_exposure,
+            "net_exposure": net_exposure,
+            "position_count": len(rows),
+            "positions": rows,
+        }
+        if self.controller is not None:
+            self.controller.agent_portfolio_snapshot = dict(snapshot)
+        return snapshot
 
     def _log_rejection_once(self, stage, symbol, reason, template):
         normalized_stage = str(stage or "").strip().lower() or "unknown"
@@ -475,55 +739,71 @@ class SopotekTrading:
             self._record_pipeline_status(normalized_symbol, "data_hub", "empty", "No candles returned for symbol")
             return None
 
-        signal, assigned_strategies = self._select_strategy_signal(normalized_symbol, candles, dataset)
-
-        features = getattr(dataset, "frame", None)
-        default_strategy_name = str(getattr(self.controller, "strategy_name", None) or "Trend Following").strip() or "Trend Following"
-        display_strategy_name = signal.get("strategy_name") if isinstance(signal, dict) else None
-        if not display_strategy_name:
-            display_strategy_name = ", ".join(
-                str(item.get("strategy_name") or "").strip()
-                for item in assigned_strategies[:3]
-                if str(item.get("strategy_name") or "").strip()
-            ) or default_strategy_name
-        display_signal = signal or {
+        context = {
+            "decision_id": uuid4().hex,
             "symbol": normalized_symbol,
-            "side": "hold",
-            "amount": 0.0,
-            "confidence": 0.0,
-            "reason": "No entry signal on the latest scan.",
-            "strategy_name": display_strategy_name,
+            "timeframe": target_timeframe,
+            "limit": target_limit,
+            "dataset": dataset,
+            "candles": candles,
+            "features": getattr(dataset, "frame", None),
+            "publish_debug": bool(publish_debug),
         }
 
-        if publish_debug and self.controller and hasattr(self.controller, "publish_ai_signal"):
-            self.controller.publish_ai_signal(normalized_symbol, display_signal, candles=candles)
-        if publish_debug and self.controller and hasattr(self.controller, "publish_strategy_debug"):
-            self.controller.publish_strategy_debug(
-                normalized_symbol,
-                display_signal,
-                candles=candles,
-                features=features,
-            )
-
-        if signal:
-            self._record_pipeline_status(normalized_symbol, "signal_engine", "signal", signal.get("reason"), signal=signal)
-        else:
-            self._record_pipeline_status(normalized_symbol, "signal_engine", "hold", display_signal.get("reason"), signal=display_signal)
-            return None
-
-        if self.controller and hasattr(self.controller, "apply_news_bias_to_signal"):
-            signal = await self.controller.apply_news_bias_to_signal(normalized_symbol, signal)
-            if not signal:
-                self._record_pipeline_status(
-                    normalized_symbol,
-                    "news_bias",
-                    "blocked",
-                    "Signal was neutralized by news bias controls.",
-                    signal=display_signal,
-                )
+        custom_handler = self._custom_process_signal_handler()
+        if custom_handler is not None:
+            context = await self.signal_agent.process(context)
+            signal = context.get("signal")
+            display_signal = context.get("display_signal") or self._build_display_signal(context, signal, context.get("assigned_strategies") or [])
+            if signal:
+                self._record_pipeline_status(normalized_symbol, "signal_engine", "signal", signal.get("reason"), signal=signal)
+            else:
+                if context.get("blocked_by_news_bias"):
+                    self._record_pipeline_status(
+                        normalized_symbol,
+                        "news_bias",
+                        "blocked",
+                        context.get("news_bias_reason"),
+                        signal=display_signal,
+                    )
+                else:
+                    self._record_pipeline_status(
+                        normalized_symbol,
+                        "signal_engine",
+                        "hold",
+                        display_signal.get("reason") if isinstance(display_signal, dict) else "No entry signal on the latest scan.",
+                        signal=display_signal if isinstance(display_signal, dict) else None,
+                    )
                 return None
+            result = await custom_handler(normalized_symbol, signal, dataset=dataset)
+        else:
+            context = await self.event_driven_runtime.process_market_data(context)
+            signal = context.get("signal")
+            display_signal = context.get("display_signal") or self._build_display_signal(context, signal, context.get("assigned_strategies") or [])
+            latest_stage = str((self._pipeline_status.get(normalized_symbol) or {}).get("stage") or "").strip()
+            if signal:
+                if latest_stage in {"", "signal_engine"}:
+                    self._record_pipeline_status(normalized_symbol, "signal_engine", "signal", signal.get("reason"), signal=signal)
+            else:
+                if context.get("blocked_by_news_bias"):
+                    self._record_pipeline_status(
+                        normalized_symbol,
+                        "news_bias",
+                        "blocked",
+                        context.get("news_bias_reason"),
+                        signal=display_signal,
+                    )
+                else:
+                    self._record_pipeline_status(
+                        normalized_symbol,
+                        "signal_engine",
+                        "hold",
+                        display_signal.get("reason") if isinstance(display_signal, dict) else "No entry signal on the latest scan.",
+                        signal=display_signal if isinstance(display_signal, dict) else None,
+                    )
+                return None
+            result = context.get("execution_result")
 
-        result = await self.process_signal(normalized_symbol, signal, dataset=dataset)
         if result is None:
             latest = self._pipeline_status.get(normalized_symbol, {})
             if latest.get("status") in {"rejected", "blocked"}:
@@ -613,6 +893,7 @@ class SopotekTrading:
         self.running = True
         self.logger.info(f"Loaded {len(self.symbols)} symbols")
         await self.execution_manager.start()
+        await self.event_driven_runtime.start()
         await self.orchestrator.start(symbols=self.symbols)
 
     # ==========================================
@@ -638,7 +919,7 @@ class SopotekTrading:
                 for symbol in active_symbols:
                     await self.process_symbol(
                         symbol,
-                        timeframe=self.time_frame,
+                        timeframe=self._assigned_timeframe_for_symbol(symbol, fallback=self.time_frame),
                         limit=self.limit,
                         publish_debug=True,
                     )
@@ -652,25 +933,52 @@ class SopotekTrading:
     # PROCESS SIGNAL
     # ==========================================
 
-    async def process_signal(self, symbol, signal, dataset=None):
+    async def review_signal(self, symbol, signal, dataset=None, timeframe=None, regime_snapshot=None, portfolio_snapshot=None):
+        normalized_symbol = str(symbol or "").strip().upper()
+        normalized_signal = dict(signal or {})
+        review_timeframe = str(timeframe or self.time_frame or "1h").strip() or "1h"
+        side = normalized_signal.get("side")
+        price = normalized_signal.get("price")
+        amount = normalized_signal.get("amount")
+        strategy_name = normalized_signal.get("strategy_name") or getattr(self.controller, "strategy_name", "Bot")
+        review = {
+            "approved": False,
+            "symbol": normalized_symbol,
+            "signal": normalized_signal,
+            "timeframe": review_timeframe,
+            "dataset": dataset,
+            "strategy_name": strategy_name,
+            "stage": "review",
+            "reason": "",
+            "portfolio_snapshot": dict(portfolio_snapshot or self._build_portfolio_snapshot(normalized_symbol)),
+            "regime_snapshot": dict(regime_snapshot or self._build_regime_snapshot(normalized_symbol, signal=normalized_signal, candles=(dataset.to_candles() if dataset is not None and hasattr(dataset, "to_candles") else []), dataset=dataset, timeframe=review_timeframe)),
+        }
 
-        side = signal["side"]
-        price = signal.get("price")
-        amount = signal["amount"]
-        strategy_name = signal.get("strategy_name") or getattr(self.controller, "strategy_name", "Bot")
+        if self.risk_engine is None:
+            review["stage"] = "risk_engine"
+            review["reason"] = "Risk engine is not initialized."
+            self._record_pipeline_status(normalized_symbol, "risk_engine", "rejected", review["reason"], signal=normalized_signal)
+            return review
+
         if (price is None or float(price or 0) <= 0) and dataset is not None and not getattr(dataset, "empty", True):
             try:
                 price = float(dataset.frame.iloc[-1]["close"])
             except Exception:
                 price = None
         if price is None or float(price or 0) <= 0:
-            self.logger.warning("Trade rejected because no executable reference price was available for %s", symbol)
-            return
+            reason = f"Trade rejected because no executable reference price was available for {normalized_symbol}"
+            self.logger.warning(reason)
+            review["stage"] = "price_validation"
+            review["reason"] = reason
+            self._record_pipeline_status(normalized_symbol, "price_validation", "rejected", reason, signal=normalized_signal)
+            return review
 
-        canceled_orders, cleanup_reason = await self._cancel_stale_exit_orders(symbol, side, signal)
+        canceled_orders, cleanup_reason = await self._cancel_stale_exit_orders(normalized_symbol, side, normalized_signal)
         if canceled_orders:
             self.logger.info("%s", cleanup_reason)
-            self._record_pipeline_status(symbol, "order_cleanup", "approved", cleanup_reason, signal=signal)
+            self._record_pipeline_status(normalized_symbol, "order_cleanup", "approved", cleanup_reason, signal=normalized_signal)
+            review["cleanup_reason"] = cleanup_reason
+            review["canceled_orders"] = canceled_orders
 
         basic_reason = "Approved"
         if hasattr(self.risk_engine, "adjust_trade"):
@@ -680,19 +988,21 @@ class SopotekTrading:
             adjusted_amount = float(amount)
 
         if not allowed:
-            self._log_rejection_once("risk_engine", symbol, basic_reason, "Trade rejected by risk engine: %s")
-            self._record_pipeline_status(symbol, "risk_engine", "rejected", basic_reason, signal=signal)
-            return
+            self._log_rejection_once("risk_engine", normalized_symbol, basic_reason, "Trade rejected by risk engine: %s")
+            self._record_pipeline_status(normalized_symbol, "risk_engine", "rejected", basic_reason, signal=normalized_signal)
+            review["stage"] = "risk_engine"
+            review["reason"] = basic_reason
+            return review
         if adjusted_amount + 1e-12 < float(amount):
             self.logger.info(
                 "Risk engine reduced %s order size from %.8f to %.8f: %s",
-                symbol,
+                normalized_symbol,
                 float(amount),
                 adjusted_amount,
                 basic_reason,
             )
         amount = adjusted_amount
-        self._record_pipeline_status(symbol, "risk_engine", "approved", basic_reason, signal=signal)
+        self._record_pipeline_status(normalized_symbol, "risk_engine", "approved", basic_reason, signal=normalized_signal)
 
         if self.portfolio_allocator is not None:
             try:
@@ -702,7 +1012,7 @@ class SopotekTrading:
             if portfolio_equity:
                 self.portfolio_allocator.sync_equity(portfolio_equity)
             allocation = await self.portfolio_allocator.allocate_trade(
-                symbol=symbol,
+                symbol=normalized_symbol,
                 strategy_name=strategy_name,
                 side=side,
                 amount=amount,
@@ -710,7 +1020,7 @@ class SopotekTrading:
                 portfolio=getattr(self.portfolio, "portfolio", None),
                 market_prices=getattr(self.portfolio, "market_prices", {}),
                 dataset=dataset,
-                confidence=signal.get("confidence"),
+                confidence=normalized_signal.get("confidence"),
                 active_strategies=[strategy_name],
             )
             if self.controller is not None:
@@ -718,14 +1028,18 @@ class SopotekTrading:
             if not allocation.approved:
                 self._log_rejection_once(
                     "portfolio_allocator",
-                    symbol,
+                    normalized_symbol,
                     allocation.reason,
                     "Trade rejected by portfolio allocator: %s",
                 )
-                self._record_pipeline_status(symbol, "portfolio_allocator", "rejected", allocation.reason, signal=signal)
-                return
+                self._record_pipeline_status(normalized_symbol, "portfolio_allocator", "rejected", allocation.reason, signal=normalized_signal)
+                review["stage"] = "portfolio_allocator"
+                review["reason"] = allocation.reason
+                review["allocation"] = dict(allocation.metrics or {})
+                return review
             amount = allocation.adjusted_amount
-            self._record_pipeline_status(symbol, "portfolio_allocator", "approved", allocation.reason, signal=signal)
+            self._record_pipeline_status(normalized_symbol, "portfolio_allocator", "approved", allocation.reason, signal=normalized_signal)
+            review["allocation"] = dict(allocation.metrics or {})
 
         if self.portfolio_risk_engine is not None:
             try:
@@ -735,7 +1049,7 @@ class SopotekTrading:
             if portfolio_equity:
                 self.portfolio_risk_engine.sync_equity(portfolio_equity)
             approval = await self.portfolio_risk_engine.approve_trade(
-                symbol=symbol,
+                symbol=normalized_symbol,
                 side=side,
                 amount=amount,
                 price=price,
@@ -743,25 +1057,29 @@ class SopotekTrading:
                 market_prices=getattr(self.portfolio, "market_prices", {}),
                 data_hub=self.data_hub,
                 dataset=dataset,
-                timeframe=self.time_frame,
-                strategy_name=signal.get("strategy_name") or getattr(self.controller, "strategy_name", None),
+                timeframe=review_timeframe,
+                strategy_name=normalized_signal.get("strategy_name") or getattr(self.controller, "strategy_name", None),
             )
             if self.controller is not None:
                 self.controller.quant_risk_snapshot = dict(approval.metrics or {})
             if not approval.approved:
                 self._log_rejection_once(
                     "portfolio_risk_engine",
-                    symbol,
+                    normalized_symbol,
                     approval.reason,
                     "Trade rejected by institutional risk engine: %s",
                 )
-                self._record_pipeline_status(symbol, "portfolio_risk_engine", "rejected", approval.reason, signal=signal)
-                return
+                self._record_pipeline_status(normalized_symbol, "portfolio_risk_engine", "rejected", approval.reason, signal=normalized_signal)
+                review["stage"] = "portfolio_risk_engine"
+                review["reason"] = approval.reason
+                review["portfolio_risk"] = dict(approval.metrics or {})
+                return review
             amount = approval.adjusted_amount
-            self._record_pipeline_status(symbol, "portfolio_risk_engine", "approved", approval.reason, signal=signal)
+            self._record_pipeline_status(normalized_symbol, "portfolio_risk_engine", "approved", approval.reason, signal=normalized_signal)
+            review["portfolio_risk"] = dict(approval.metrics or {})
 
         if self.portfolio_allocator is not None:
-            self.portfolio_allocator.register_strategy_symbol(symbol, strategy_name)
+            self.portfolio_allocator.register_strategy_symbol(normalized_symbol, strategy_name)
 
         margin_closeout_snapshot = {}
         margin_guard = getattr(self.controller, "margin_closeout_snapshot", None) if self.controller is not None else None
@@ -781,33 +1099,74 @@ class SopotekTrading:
             ).strip()
             self._log_rejection_once(
                 "margin_closeout_guard",
-                symbol,
+                normalized_symbol,
                 reason,
                 "Trade rejected by margin closeout guard: %s",
             )
-            self._record_pipeline_status(symbol, "margin_closeout_guard", "rejected", reason, signal=signal)
-            return
+            self._record_pipeline_status(normalized_symbol, "margin_closeout_guard", "rejected", reason, signal=normalized_signal)
+            review["stage"] = "margin_closeout_guard"
+            review["reason"] = reason
+            review["margin_closeout_guard"] = margin_closeout_snapshot
+            return review
 
-        execution_strategy = self._resolve_execution_strategy(symbol, side, amount, price, signal)
-        execution_params = self._execution_params_for_signal(signal)
+        execution_strategy = self._resolve_execution_strategy(normalized_symbol, side, amount, price, normalized_signal)
+        execution_params = self._execution_params_for_signal(normalized_signal)
 
+        review.update(
+            {
+                "approved": True,
+                "stage": "execution_ready",
+                "reason": str(normalized_signal.get("reason") or "Approved for execution.").strip() or "Approved for execution.",
+                "side": side,
+                "price": float(price),
+                "amount": float(amount),
+                "type": normalized_signal.get("type", "market"),
+                "stop_price": normalized_signal.get("stop_price"),
+                "stop_loss": normalized_signal.get("stop_loss"),
+                "take_profit": normalized_signal.get("take_profit"),
+                "execution_strategy": execution_strategy,
+                "execution_params": execution_params,
+            }
+        )
+        return review
+
+    async def execute_review(self, review):
+        if not isinstance(review, dict) or not review.get("approved"):
+            return None
+
+        signal = dict(review.get("signal") or {})
         order = await self.execution_manager.execute(
-            symbol=symbol,
-            side=side,
-            amount=amount,
-            price=price,
+            symbol=review.get("symbol"),
+            side=review.get("side"),
+            amount=review.get("amount"),
+            price=review.get("price"),
             source="bot",
-            strategy_name=strategy_name,
+            strategy_name=review.get("strategy_name"),
             reason=signal.get("reason"),
             confidence=signal.get("confidence"),
             expected_price=signal.get("price"),
             pnl=signal.get("pnl"),
-            execution_strategy=execution_strategy,
-            type=signal.get("type", "market"),
-            params=execution_params,
+            execution_strategy=review.get("execution_strategy"),
+            type=review.get("type", "market"),
+            stop_price=review.get("stop_price"),
+            stop_loss=review.get("stop_loss"),
+            take_profit=review.get("take_profit"),
+            params=review.get("execution_params"),
         )
-
         return order
+
+    async def process_signal(self, symbol, signal, dataset=None, timeframe=None, regime_snapshot=None, portfolio_snapshot=None):
+        review = await self.review_signal(
+            symbol=symbol,
+            signal=signal,
+            dataset=dataset,
+            timeframe=timeframe,
+            regime_snapshot=regime_snapshot,
+            portfolio_snapshot=portfolio_snapshot,
+        )
+        if not review.get("approved"):
+            return None
+        return await self.execute_review(review)
 
     # ==========================================
     # STOP SYSTEM
@@ -832,6 +1191,13 @@ class SopotekTrading:
                     await shutdown()
                 except Exception:
                     self.logger.exception("Orchestrator shutdown failed")
+
+        event_runtime = getattr(self, "event_driven_runtime", None)
+        if event_runtime is not None:
+            try:
+                await event_runtime.stop()
+            except Exception:
+                self.logger.exception("Event-driven runtime stop failed")
 
         execution_manager = getattr(self, "execution_manager", None)
         if execution_manager is not None:

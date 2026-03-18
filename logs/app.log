@@ -151,3 +151,75 @@ Not enough data for AUD_USD (1h): received 4999 of 50000 requested candles. Indi
 Not enough data for AUD_USD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
 Not enough data for CHF_HKD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
 Not enough data for GBP_CAD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Not enough data for USD_CHF (5m): received 4999 of 26272 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Not enough data for NZD_SGD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for CAD_SGD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZAR_JPY (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for GBP_USD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for GBP_ZAR (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for GBP_JPY (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AUD_USD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for NZD_CAD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Close-position request failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\oanda_broker.py", line 78, in _request
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\aiohttp\client_reqrep.py", line 636, in raise_for_status
+    raise ClientResponseError(
+    ...<5 lines>...
+    )
+aiohttp.client_exceptions.ClientResponseError: 400, message='Bad Request', url='https://api-fxtrade.oanda.com/v3/accounts/001-001-2783446-006/positions/USD_HUF/close'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\terminal.py", line 2707, in _close_position_async
+    result = await controller.close_market_chat_position(symbol, amount=amount, position=position)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 3344, in close_market_chat_position
+    result = await broker.close_position(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\oanda_broker.py", line 574, in close_position
+    response = await self._request(
+               ^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\oanda_broker.py", line 112, in _request
+    raise RuntimeError(message) from exc
+RuntimeError: 400 Bad Request: A partial Position closeout request specifies a units that exceeds the current Position
+Not enough data for NZD_SGD (1h): received 4999 of 10000 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda

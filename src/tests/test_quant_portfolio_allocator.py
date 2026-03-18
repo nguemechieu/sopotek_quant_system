@@ -135,3 +135,34 @@ def test_portfolio_allocator_scales_down_large_trade_in_high_volatility():
     assert decision.approved is True
     assert decision.adjusted_amount < 20
     assert "reduced" in decision.reason.lower()
+
+
+def test_portfolio_allocator_uses_small_remaining_budget_instead_of_rejecting():
+    allocator = PortfolioAllocator(
+        account_equity=10000,
+        strategy_weights={"Trend Following": 0.20, "Mean Reversion": 0.80},
+        max_strategy_allocation_pct=0.80,
+    )
+    allocator.register_strategy_symbol("BTC/USDT", "Trend Following")
+    portfolio = SimpleNamespace(
+        positions={"BTC/USDT": SimpleNamespace(quantity=19.7, avg_price=100)},
+    )
+    decision = asyncio.run(
+        allocator.allocate_trade(
+            symbol="SOL/USDT",
+            strategy_name="Trend Following",
+            side="buy",
+            amount=2,
+            price=100,
+            portfolio=portfolio,
+            market_prices={"BTC/USDT": 100, "SOL/USDT": 100},
+            dataset=FakeDataset(_frame_from_closes([100, 100.5, 101, 101.5, 102, 102.5])),
+            confidence=0.7,
+            active_strategies=["Trend Following", "Mean Reversion"],
+        )
+    )
+
+    assert decision.approved is True
+    assert 0 < decision.adjusted_amount < 2
+    assert "remaining available allocation" in decision.reason.lower()
+    assert decision.metrics["below_minimum_useful_allocation"] is True

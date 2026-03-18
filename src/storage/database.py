@@ -101,9 +101,25 @@ def _migrate_sqlite_schema():
     _ensure_sqlite_column("equity_snapshots", "payload_json", "payload_json TEXT")
     _ensure_sqlite_column("equity_snapshots", "timestamp", "timestamp DATETIME")
 
+    _ensure_sqlite_column("agent_decisions", "decision_id", "decision_id VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "exchange", "exchange VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "account_label", "account_label VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "symbol", "symbol VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "agent_name", "agent_name VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "stage", "stage VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "strategy_name", "strategy_name VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "timeframe", "timeframe VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "side", "side VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "confidence", "confidence FLOAT")
+    _ensure_sqlite_column("agent_decisions", "approved", "approved INTEGER")
+    _ensure_sqlite_column("agent_decisions", "reason", "reason VARCHAR")
+    _ensure_sqlite_column("agent_decisions", "payload_json", "payload_json TEXT")
+    _ensure_sqlite_column("agent_decisions", "timestamp", "timestamp DATETIME")
+
 
 def init_database():
     # Import models before create_all so SQLAlchemy sees the mapped tables.
+    from storage import agent_decision_repository  # noqa: F401
     from storage import equity_repository  # noqa: F401
     from storage import market_data_repository  # noqa: F401
     from storage import trade_repository  # noqa: F401

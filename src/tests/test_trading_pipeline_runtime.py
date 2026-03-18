@@ -669,3 +669,23 @@ def test_sopotek_trading_process_symbol_caps_runtime_history_limit_for_live_pipe
     assert captured["symbol"] == "USD/JPY"
     assert captured["timeframe"] == "1h"
     assert captured["limit"] == SopotekTrading.MAX_RUNTIME_ANALYSIS_BARS
+
+
+def test_sopotek_trading_uses_assigned_symbol_timeframe_when_available():
+    controller = SimpleNamespace(
+        broker=DummyBroker(),
+        symbols=["EUR/USD"],
+        historical_data={},
+        time_frame="1h",
+        strategy_name="Trend Following",
+        strategy_params={},
+        balances={"total": {"USD": 10000}},
+        initial_capital=10000,
+        handle_trade_execution=lambda trade: None,
+        assigned_strategies_for_symbol=lambda symbol: [{"strategy_name": "EMA Cross", "timeframe": "4h", "weight": 1.0}],
+    )
+
+    trading = SopotekTrading(controller=controller)
+
+    assert trading._assigned_timeframe_for_symbol("EUR/USD", fallback="1h") == "4h"
+    assert trading._assigned_timeframe_for_symbol("GBP/USD", fallback="1h") == "4h"

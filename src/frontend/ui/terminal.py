@@ -40,6 +40,7 @@ from backtesting.backtest_engine import BacktestEngine
 from backtesting.report_generator import ReportGenerator
 from backtesting.simulator import Simulator
 from broker.market_venues import MARKET_VENUE_CHOICES
+from event_bus.event_types import EventType
 from frontend.ui.chart.chart_widget import ChartWidget
 from frontend.ui.actions.trading_actions import (
     cancel_all_orders,
@@ -338,9 +339,27 @@ class Terminal(QMainWindow):
     def _history_request_limit(self, fallback=None):
         value = fallback if fallback is not None else getattr(self.controller, "limit", 50000)
         try:
-            return max(100, int(value))
+            resolved = max(100, int(value))
         except Exception:
-            return 50000
+            resolved = 50000
+
+        runtime_cap = getattr(self.controller, "runtime_history_limit", None)
+        if runtime_cap is None:
+            runtime_cap = 1000
+        try:
+            resolved = min(resolved, max(100, int(runtime_cap)))
+        except Exception:
+            pass
+
+        broker = getattr(self.controller, "broker", None)
+        broker_cap = getattr(broker, "MAX_OHLCV_COUNT", None)
+        try:
+            if broker_cap is not None:
+                resolved = min(resolved, max(100, int(broker_cap)))
+        except Exception:
+            pass
+
+        return resolved
 
     def _tr(self, key, **kwargs):
         if hasattr(self.controller, "tr"):
@@ -970,6 +989,7 @@ class Terminal(QMainWindow):
             ("strategy_debug_signal", self._handle_strategy_debug),
             ("training_status_signal", self._update_training_status),
             ("symbols_signal", self._update_symbols),
+            ("agent_runtime_signal", self._handle_agent_runtime_event),
         ):
             signal = getattr(controller, signal_name, None)
             if signal is not None:
@@ -3633,6 +3653,53 @@ class Terminal(QMainWindow):
     def _update_trade_log(self, trade):
         update_trade_log(self, trade)
 
+    def _handle_agent_runtime_event(self, payload):
+        if getattr(self, "_ui_shutting_down", False) or not isinstance(payload, dict):
+            return
+
+        symbol = str(payload.get("symbol") or "").strip().upper().replace("-", "/").replace("_", "/")
+        timeline_window = getattr(self, "detached_tool_windows", {}).get("agent_timeline")
+        if timeline_window is not None and self._is_qt_object_alive(timeline_window) and hasattr(self, "_refresh_agent_timeline_window"):
+            self._refresh_agent_timeline_window(window=timeline_window)
+        window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+        selected_symbol = ""
+        if window is not None:
+            selected_symbol = str(getattr(window, "_strategy_assignment_selected_symbol", "") or "").strip().upper().replace("-", "/").replace("_", "/")
+            if not selected_symbol:
+                picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+                if picker is not None:
+                    selected_symbol = str(picker.currentText() or "").strip().upper().replace("-", "/").replace("_", "/")
+
+        kind = str(payload.get("kind") or "").strip().lower()
+        event_type = str(payload.get("event_type") or "").strip()
+        reason = str(payload.get("reason") or payload.get("message") or "").strip()
+
+        if window is not None and symbol and symbol == selected_symbol:
+            message = str(payload.get("message") or "").strip()
+            if not message and kind == "memory":
+                agent_name = str(payload.get("agent_name") or "Agent").strip() or "Agent"
+                stage = str(payload.get("stage") or "updated").strip() or "updated"
+                message = f"Live agent update: {agent_name} {stage} for {symbol}."
+                if reason:
+                    message = f"{message} {reason}"
+            self._refresh_strategy_assignment_window(window=window, message=message or None)
+
+        if kind == "bus" and event_type == EventType.RISK_ALERT:
+            detail = reason or f"Risk blocked the trade for {symbol or 'the selected symbol'}."
+            if hasattr(self, "_push_notification"):
+                self._push_notification(
+                    "Agent risk blocked",
+                    detail,
+                    level="WARN",
+                    source="risk",
+                    dedupe_seconds=10.0,
+                )
+            if hasattr(self, "system_console"):
+                self.system_console.log(
+                    f"Agent risk blocked for {symbol or 'symbol'}: {detail}",
+                    "WARN",
+                )
+
     async def load_persisted_runtime_data(self):
         await load_persisted_runtime_data(self)
 
@@ -4414,6 +4481,8 @@ class Terminal(QMainWindow):
             self.controller.ai_signal_monitor.connect(self._update_ai_signal)
 
         self.controller.strategy_debug_signal.connect(self._handle_strategy_debug)
+        if hasattr(self.controller, "agent_runtime_signal"):
+            self.controller.agent_runtime_signal.connect(self._handle_agent_runtime_event)
 
         self.controller.training_status_signal.connect(
             self._update_training_status
@@ -10334,6 +10403,8 @@ def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
     timeframe_picker = getattr(window, "_strategy_assignment_timeframe_picker", None)
     top_n = getattr(window, "_strategy_assignment_top_n", None)
     table = getattr(window, "_strategy_assignment_table", None)
+    agent_status = getattr(window, "_strategy_assignment_agent_status", None)
+    agent_table = getattr(window, "_strategy_assignment_agent_table", None)
     if any(part is None for part in (status, summary, symbol_picker, strategy_picker, timeframe_picker, top_n, table)):
         return
 
@@ -10409,6 +10480,21 @@ def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
     ) or default_strategy
     if len(active_rows) > 3:
         active_text = f"{active_text}, +{len(active_rows) - 3} more"
+    decision_chain_resolver = getattr(controller, "latest_agent_decision_chain_for_symbol", None)
+    decision_overview_resolver = getattr(controller, "latest_agent_decision_overview_for_symbol", None)
+    decision_chain = []
+    if callable(decision_chain_resolver) and selected_symbol:
+        try:
+            decision_chain = list(decision_chain_resolver(selected_symbol, limit=12) or [])
+        except Exception:
+            decision_chain = []
+    decision_overview = {}
+    if callable(decision_overview_resolver) and selected_symbol:
+        try:
+            decision_overview = dict(decision_overview_resolver(selected_symbol) or {})
+        except Exception:
+            decision_overview = {}
+
     auto_suffix = ""
     if bool(auto_status.get("enabled", False)):
         if edits_locked:
@@ -10417,9 +10503,15 @@ def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
             auto_suffix = f" | Auto Scan: {completed}/{total}"
         else:
             auto_suffix = " | Auto Scan: Ready"
+    agent_suffix = f" | Agent Steps: {len(decision_chain)}"
+    agent_best_strategy = str(decision_overview.get("strategy_name") or "").strip()
+    agent_best_timeframe = str(decision_overview.get("timeframe") or "").strip()
+    if agent_best_strategy:
+        label = f"{agent_best_strategy} ({agent_best_timeframe or '-'})"
+        agent_suffix = f"{agent_suffix} | Agent Best: {label}"
     summary.setText(
         f"Selected Symbol: {selected_symbol or '-'} | Mode: {mode_label} | "
-        f"Trading With: {active_text} | Ranked Candidates: {len(ranked_rows)}{auto_suffix}"
+        f"Trading With: {active_text} | Ranked Candidates: {len(ranked_rows)}{auto_suffix}{agent_suffix}"
     )
 
     use_default_btn = getattr(window, "_strategy_assignment_use_default_btn", None)
@@ -10456,6 +10548,40 @@ def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
     table.horizontalHeader().setStretchLastSection(True)
     if selected_row >= 0:
         table.selectRow(selected_row)
+
+    if agent_status is not None:
+        if decision_chain:
+            final_agent = str(decision_overview.get("final_agent") or decision_chain[-1].get("agent_name") or "").strip()
+            final_stage = str(decision_overview.get("final_stage") or decision_chain[-1].get("stage") or "").strip()
+            timestamp_label = str(decision_overview.get("timestamp_label") or decision_chain[-1].get("timestamp_label") or "").strip()
+            detail = f"Latest Agent Chain: {len(decision_chain)} steps"
+            if final_agent or final_stage:
+                detail = f"{detail} | Final: {final_agent or '-'} / {final_stage or '-'}"
+            if timestamp_label:
+                detail = f"{detail} | {timestamp_label}"
+            agent_status.setText(detail)
+        else:
+            agent_status.setText("Latest Agent Chain: no stored decision yet for the selected symbol.")
+
+    if agent_table is not None:
+        agent_table.setColumnCount(6)
+        agent_table.setHorizontalHeaderLabels(["Agent", "Stage", "Strategy", "Timeframe", "Detail", "Time"])
+        agent_table.setRowCount(len(decision_chain))
+        for row_index, row in enumerate(decision_chain):
+            payload = dict(row.get("payload") or {})
+            detail = str(row.get("reason") or payload.get("regime") or payload.get("volatility") or payload.get("execution_strategy") or "").strip()
+            values = [
+                row.get("agent_name", ""),
+                row.get("stage", ""),
+                row.get("strategy_name", ""),
+                row.get("timeframe", ""),
+                detail,
+                row.get("timestamp_label", ""),
+            ]
+            for col_index, value in enumerate(values):
+                agent_table.setItem(row_index, col_index, QTableWidgetItem(str(value)))
+        agent_table.resizeColumnsToContents()
+        agent_table.horizontalHeader().setStretchLastSection(True)
 
 
 def _hotfix_strategy_assignment_selection_changed(self):
@@ -10659,6 +10785,17 @@ def _hotfix_show_strategy_assignment_window(self):
         table.itemSelectionChanged.connect(lambda: _hotfix_strategy_assignment_table_selected(self))
         layout.addWidget(table)
 
+        agent_status = QLabel("Latest agent chain will appear once the selected symbol has been processed.")
+        agent_status.setWordWrap(True)
+        agent_status.setStyleSheet("color: #9fb0c7; font-style: italic;")
+        layout.addWidget(agent_status)
+
+        agent_table = QTableWidget()
+        agent_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        agent_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        agent_table.setMinimumHeight(180)
+        layout.addWidget(agent_table)
+
         symbol_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
         strategy_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
         timeframe_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
@@ -10672,6 +10809,8 @@ def _hotfix_show_strategy_assignment_window(self):
         window._strategy_assignment_timeframe_picker = timeframe_picker
         window._strategy_assignment_top_n = top_n
         window._strategy_assignment_table = table
+        window._strategy_assignment_agent_status = agent_status
+        window._strategy_assignment_agent_table = agent_table
         window._strategy_assignment_use_default_btn = use_default_btn
         window._strategy_assignment_assign_single_btn = assign_single_btn
         window._strategy_assignment_assign_ranked_btn = assign_ranked_btn

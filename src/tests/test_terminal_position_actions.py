@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.ui.terminal import Terminal
+from event_bus.event_types import EventType
 
 
 def _app():
@@ -17,6 +18,19 @@ def _app():
     if app is None:
         app = QApplication([])
     return app
+
+
+def test_history_request_limit_caps_runtime_chart_requests():
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            limit=50000,
+            runtime_history_limit=500,
+            broker=SimpleNamespace(MAX_OHLCV_COUNT=5000),
+        )
+    )
+
+    assert Terminal._history_request_limit(fake) == 500
+    assert Terminal._history_request_limit(fake, fallback=240) == 240
 
 
 def test_populate_positions_table_adds_close_action_widgets():
@@ -479,3 +493,141 @@ def test_live_trading_bar_style_uses_valid_qt_selectors():
     assert "QProgressBar::chunk {" in style
     assert "{{" not in style
     assert "selection-background-color" not in style
+
+
+def test_refresh_strategy_assignment_window_populates_agent_chain_for_selected_symbol():
+    _app()
+    window = SimpleNamespace(
+        _strategy_assignment_status=QLabel(),
+        _strategy_assignment_summary=QLabel(),
+        _strategy_assignment_symbol_picker=QComboBox(),
+        _strategy_assignment_strategy_picker=QComboBox(),
+        _strategy_assignment_timeframe_picker=QComboBox(),
+        _strategy_assignment_top_n=QSpinBox(),
+        _strategy_assignment_table=QTableWidget(),
+        _strategy_assignment_agent_status=QLabel(),
+        _strategy_assignment_agent_table=QTableWidget(),
+    )
+    controller = SimpleNamespace(
+        symbols=["EUR/USD"],
+        strategy_name="Trend Following",
+        max_symbol_strategies=3,
+        time_frame="1h",
+        symbol_strategy_assignments={},
+        symbol_strategy_rankings={
+            "EUR/USD": [{"strategy_name": "EMA Cross"}]
+        },
+        latest_agent_decision_chain_for_symbol=lambda symbol, limit=12: [
+            {
+                "agent_name": "SignalAgent",
+                "stage": "selected",
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "reason": "breakout detected",
+                "timestamp_label": "2026-03-17 10:00:00 UTC",
+                "payload": {},
+            },
+            {
+                "agent_name": "RiskAgent",
+                "stage": "approved",
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "reason": "within limits",
+                "timestamp_label": "2026-03-17 10:00:02 UTC",
+                "payload": {},
+            },
+        ],
+        latest_agent_decision_overview_for_symbol=lambda symbol: {
+            "strategy_name": "EMA Cross",
+            "timeframe": "4h",
+            "final_agent": "RiskAgent",
+            "final_stage": "approved",
+            "timestamp_label": "2026-03-17 10:00:02 UTC",
+        },
+    )
+
+    def strategy_assignment_state_for_symbol(symbol):
+        normalized = str(symbol or "").strip().upper().replace("-", "/").replace("_", "/")
+        return {
+            "symbol": normalized,
+            "mode": "default",
+            "explicit_rows": [],
+            "active_rows": [
+                {
+                    "strategy_name": controller.strategy_name,
+                    "timeframe": controller.time_frame,
+                    "weight": 1.0,
+                }
+            ],
+            "ranked_rows": list(controller.symbol_strategy_rankings.get(normalized, []) or []),
+        }
+
+    controller.strategy_assignment_state_for_symbol = strategy_assignment_state_for_symbol
+    fake = SimpleNamespace(
+        controller=controller,
+        current_timeframe="1h",
+        detached_tool_windows={"strategy_assignments": window},
+        _current_chart_symbol=lambda: "",
+        _strategy_family_name=lambda name: Terminal._strategy_family_name(SimpleNamespace(), name),
+    )
+    fake._grouped_strategy_names = lambda selected_strategy=None: Terminal._grouped_strategy_names(
+        fake, selected_strategy=selected_strategy
+    )
+    fake._populate_strategy_picker = lambda picker, selected_strategy=None: Terminal._populate_strategy_picker(
+        fake, picker, selected_strategy=selected_strategy
+    )
+
+    Terminal._refresh_strategy_assignment_window(fake, window=window)
+
+    assert "Agent Steps: 2" in window._strategy_assignment_summary.text()
+    assert "Agent Best: EMA Cross (4h)" in window._strategy_assignment_summary.text()
+    assert "Latest Agent Chain: 2 steps" in window._strategy_assignment_agent_status.text()
+    assert window._strategy_assignment_agent_table.rowCount() == 2
+    assert window._strategy_assignment_agent_table.item(0, 0).text() == "SignalAgent"
+    assert window._strategy_assignment_agent_table.item(1, 1).text() == "approved"
+
+
+def test_handle_agent_runtime_event_refreshes_selected_strategy_assignment_and_pushes_risk_notification():
+    _app()
+    window = SimpleNamespace(_strategy_assignment_selected_symbol="EUR/USD")
+    timeline_window = object()
+    refreshed = []
+    timeline_refreshes = []
+    notifications = []
+    logs = []
+    fake = SimpleNamespace(
+        _ui_shutting_down=False,
+        detached_tool_windows={"strategy_assignments": window, "agent_timeline": timeline_window},
+        _is_qt_object_alive=lambda obj: obj is not None,
+        _refresh_agent_timeline_window=lambda window=None: timeline_refreshes.append(window),
+        _refresh_strategy_assignment_window=lambda window=None, message=None: refreshed.append((window, message)),
+        _push_notification=lambda *args, **kwargs: notifications.append((args, kwargs)),
+        system_console=SimpleNamespace(log=lambda message, level="INFO": logs.append((message, level))),
+    )
+
+    Terminal._handle_agent_runtime_event(
+        fake,
+        {
+            "kind": "memory",
+            "symbol": "EUR/USD",
+            "agent_name": "RiskAgent",
+            "stage": "approved",
+            "reason": "within limits",
+        },
+    )
+    Terminal._handle_agent_runtime_event(
+        fake,
+        {
+            "kind": "bus",
+            "event_type": EventType.RISK_ALERT,
+            "symbol": "EUR/USD",
+            "reason": "Risk blocked the trade.",
+            "message": "Risk blocked the trade.",
+        },
+    )
+
+    assert refreshed[0][0] is window
+    assert "Live agent update" in refreshed[0][1]
+    assert timeline_refreshes == [timeline_window, timeline_window]
+    assert notifications[0][0][0] == "Agent risk blocked"
+    assert logs[0][1] == "WARN"

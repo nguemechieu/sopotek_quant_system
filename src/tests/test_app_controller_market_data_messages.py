@@ -1,12 +1,14 @@
 import asyncio
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.ui.app_controller import AppController, _bounded_window_extent
+from event_bus.event_types import EventType
 
 
 class _SignalRecorder:
@@ -174,3 +176,124 @@ def test_request_candle_data_does_not_warn_when_only_one_bar_is_missing():
 
     assert df is not None
     assert logs == []
+
+
+def test_latest_agent_decision_chain_prefers_live_runtime_events():
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.app_controller.agent_runtime")
+    controller.agent_runtime_signal = _SignalRecorder()
+    controller._live_agent_decision_events = {}
+    controller.agent_decision_repository = SimpleNamespace(
+        latest_chain_for_symbol=lambda *args, **kwargs: [
+            SimpleNamespace(
+                id=7,
+                decision_id="repo-1",
+                exchange=None,
+                account_label=None,
+                symbol="EUR/USD",
+                agent_name="RiskAgent",
+                stage="approved",
+                strategy_name="Trend Following",
+                timeframe="1h",
+                side="buy",
+                confidence=None,
+                approved=True,
+                reason="repo",
+                timestamp=datetime(2026, 3, 17, 10, 0, tzinfo=timezone.utc),
+                payload_json="{}",
+            )
+        ]
+    )
+    controller._active_exchange_code = lambda: None
+    controller.current_account_label = lambda: None
+    controller.trading_system = None
+
+    controller._handle_live_agent_memory_event(
+        {
+            "agent": "SignalAgent",
+            "stage": "selected",
+            "symbol": "EUR/USD",
+            "decision_id": "live-1",
+            "timestamp": "2026-03-17T10:01:00+00:00",
+            "payload": {
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "side": "buy",
+                "reason": "live breakout",
+                "confidence": 0.82,
+            },
+        }
+    )
+
+    chain = controller.latest_agent_decision_chain_for_symbol("eur_usd")
+
+    assert len(chain) == 1
+    assert chain[0]["decision_id"] == "live-1"
+    assert chain[0]["strategy_name"] == "EMA Cross"
+    assert controller.agent_runtime_signal.calls[0][0]["kind"] == "memory"
+
+
+def test_handle_trading_agent_bus_event_emits_runtime_message():
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.app_controller.agent_bus")
+    controller.agent_runtime_signal = _SignalRecorder()
+
+    event = SimpleNamespace(
+        type=EventType.RISK_ALERT,
+        data={
+            "symbol": "EUR/USD",
+            "decision_id": "dec-1",
+            "strategy_name": "EMA Cross",
+            "timeframe": "4h",
+            "reason": "Risk blocked the trade.",
+            "side": "buy",
+        },
+    )
+
+    asyncio.run(controller._handle_trading_agent_bus_event(event))
+
+    payload = controller.agent_runtime_signal.calls[0][0]
+    assert payload["kind"] == "bus"
+    assert payload["event_type"] == EventType.RISK_ALERT
+    assert payload["symbol"] == "EUR/USD"
+    assert "Risk blocked the trade" in payload["message"]
+
+
+def test_live_agent_runtime_feed_keeps_latest_rows_and_supports_filters():
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.app_controller.runtime_feed")
+    controller.agent_runtime_signal = _SignalRecorder()
+    controller._live_agent_runtime_feed = []
+
+    controller._emit_agent_runtime_signal(
+        {
+            "kind": "memory",
+            "symbol": "EUR/USD",
+            "agent_name": "SignalAgent",
+            "stage": "selected",
+            "strategy_name": "EMA Cross",
+            "timeframe": "4h",
+            "timestamp": datetime(2026, 3, 17, 10, 5, tzinfo=timezone.utc),
+            "message": "Signal selected for EUR/USD.",
+        }
+    )
+    controller._emit_agent_runtime_signal(
+        {
+            "kind": "bus",
+            "event_type": EventType.RISK_APPROVED,
+            "symbol": "GBP/USD",
+            "timeframe": "1h",
+            "message": "Risk approved BUY for GBP/USD.",
+        }
+    )
+
+    all_rows = controller.live_agent_runtime_feed(limit=10)
+    eur_rows = controller.live_agent_runtime_feed(limit=10, symbol="eur_usd")
+    bus_rows = controller.live_agent_runtime_feed(limit=10, kinds="bus")
+
+    assert len(all_rows) == 2
+    assert all_rows[0]["symbol"] == "GBP/USD"
+    assert all_rows[1]["symbol"] == "EUR/USD"
+    assert eur_rows == [all_rows[1]]
+    assert bus_rows == [all_rows[0]]
+    assert all_rows[0]["timestamp_label"]

@@ -1,11 +1,13 @@
 import json
 import time
 from datetime import datetime
+from typing import Any, Callable, cast
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -15,6 +17,9 @@ from PySide6.QtWidgets import (
     QWidget,
     QHBoxLayout,
     QMessageBox,
+    QTextBrowser,
+    QTreeWidget,
+    QTreeWidgetItem,
 )
 
 
@@ -44,6 +49,7 @@ TOOL_WINDOWS = {
     "ml_monitor",
     "logs",
     "notification_center",
+    "agent_timeline",
 }
 WORKSPACE_PRESETS = {
     "trading": {
@@ -52,7 +58,7 @@ WORKSPACE_PRESETS = {
     },
     "research": {
         "docks": {"market_watch_dock", "orderbook_dock", "strategy_scorecard_dock", "strategy_debug_dock", "ai_signal_dock", "system_console_dock"},
-        "tools": ["trade_recommendations", "quant_pm"],
+        "tools": ["trade_recommendations", "quant_pm", "agent_timeline"],
     },
     "risk": {
         "docks": {"positions_dock", "orderbook_dock", "risk_heatmap_dock", "system_status_dock", "system_console_dock"},
@@ -82,6 +88,11 @@ def install_terminal_operator_features(Terminal):
     orig_handle_chart_trade_context_action = Terminal._handle_chart_trade_context_action
     orig_on_chart_tab_changed = Terminal._on_chart_tab_changed
 
+    def invoke_callable(value: object, *args: object, **kwargs: object) -> Any:
+        if not callable(value):
+            return None
+        return cast(Callable[..., Any], value)(*args, **kwargs)
+
     def workspace_context_key(self):
         controller = getattr(self, "controller", None)
         exchange = "default"
@@ -90,11 +101,11 @@ def install_terminal_operator_features(Terminal):
             exchange_getter = getattr(controller, "_active_exchange_code", None)
             account_getter = getattr(controller, "current_account_label", None)
             try:
-                exchange = str(exchange_getter() if callable(exchange_getter) else getattr(controller, "exchange_name", "default") or "default")
+                exchange = str(invoke_callable(exchange_getter) if callable(exchange_getter) else getattr(controller, "exchange_name", "default") or "default")
             except Exception:
                 exchange = str(getattr(controller, "exchange_name", "default") or "default")
             try:
-                account = str(account_getter() if callable(account_getter) else getattr(controller, "account_label", "default") or "default")
+                account = str(invoke_callable(account_getter) if callable(account_getter) else getattr(controller, "account_label", "default") or "default")
             except Exception:
                 account = str(getattr(controller, "account_label", "default") or "default")
         value = f"{exchange}__{account}".lower().strip()
@@ -240,6 +251,803 @@ def install_terminal_operator_features(Terminal):
         window.activateWindow()
         if getattr(window, "_notification_filter", None) is not None:
             window._notification_filter.setFocus()
+        return window
+
+    def refresh_agent_timeline_window(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return
+        tree = getattr(window, "_agent_timeline_tree", None)
+        filter_input = getattr(window, "_agent_timeline_filter", None)
+        status_filter = getattr(window, "_agent_timeline_status_filter", None)
+        timeframe_filter = getattr(window, "_agent_timeline_timeframe_filter", None)
+        strategy_filter = getattr(window, "_agent_timeline_strategy_filter", None)
+        pin_btn = getattr(window, "_agent_timeline_pin_btn", None)
+        summary = getattr(window, "_agent_timeline_summary", None)
+        if tree is None or filter_input is None or summary is None:
+            return
+
+        controller = getattr(self, "controller", None)
+        if controller is None or not hasattr(controller, "live_agent_runtime_feed"):
+            rows = []
+        else:
+            rows = list(controller.live_agent_runtime_feed(limit=300) or [])
+
+        pinned_symbol = str(getattr(window, "_agent_timeline_pinned_symbol", "") or "").strip().upper().replace("-", "/").replace("_", "/")
+        if pinned_symbol:
+            rows = [
+                dict(row)
+                for row in rows
+                if str((row or {}).get("symbol") or "").strip().upper().replace("-", "/").replace("_", "/") == pinned_symbol
+            ]
+        self._populate_agent_timeline_filters(window, rows)
+
+        selected_status = str(status_filter.currentText() or "").strip() if status_filter is not None else ""
+        if selected_status and selected_status != "All Statuses":
+            rows = [row for row in rows if self._agent_timeline_row_status_label(row) == selected_status]
+
+        selected_timeframe = str(timeframe_filter.currentText() or "").strip() if timeframe_filter is not None else ""
+        if selected_timeframe and selected_timeframe != "All Timeframes":
+            rows = [row for row in rows if str((row or {}).get("timeframe") or "").strip() == selected_timeframe]
+
+        selected_strategy = str(strategy_filter.currentText() or "").strip() if strategy_filter is not None else ""
+        if selected_strategy and selected_strategy != "All Strategies":
+            rows = [row for row in rows if str((row or {}).get("strategy_name") or "").strip() == selected_strategy]
+
+        query = str(filter_input.text() or "").strip().lower()
+        if query:
+            filtered = []
+            for row in rows:
+                haystack = " ".join(
+                    str(row.get(key) or "")
+                    for key in (
+                        "timestamp_label",
+                        "kind",
+                        "symbol",
+                        "agent_name",
+                        "event_type",
+                        "stage",
+                        "strategy_name",
+                        "timeframe",
+                        "message",
+                        "reason",
+                    )
+                ).lower()
+                if query in haystack:
+                    filtered.append(row)
+            rows = filtered
+
+        selected_symbol = self._selected_agent_timeline_symbol(window)
+        tree.clear()
+        kind_colors = {
+            "memory": QColor("#74c0fc"),
+            "bus": QColor("#ffd166"),
+        }
+        raw_anomaly_snapshot = self._agent_timeline_anomaly_snapshot(rows)
+        anomaly_snapshot = self._visible_agent_timeline_anomaly_snapshot(window, raw_anomaly_snapshot)
+        anomaly_map = {item["symbol"]: list(item["issues"]) for item in anomaly_snapshot.get("items", [])}
+        grouped_rows = {}
+        ordered_symbols = []
+        for row in rows:
+            symbol = str(row.get("symbol") or "Unscoped").strip() or "Unscoped"
+            if symbol not in grouped_rows:
+                grouped_rows[symbol] = []
+                ordered_symbols.append(symbol)
+            grouped_rows[symbol].append(dict(row))
+
+        top_level_to_select = None
+        for symbol in ordered_symbols:
+            symbol_rows = grouped_rows.get(symbol, [])
+            latest = symbol_rows[0] if symbol_rows else {}
+            latest_message = str(latest.get("message") or latest.get("reason") or "").strip()
+            group_item = QTreeWidgetItem(
+                [
+                    str(latest.get("timestamp_label") or "-"),
+                    "Symbol",
+                    symbol,
+                    f"{len(symbol_rows)} events",
+                    str(latest.get("stage") or "").strip(),
+                    str(latest.get("strategy_name") or "").strip(),
+                    str(latest.get("timeframe") or "").strip(),
+                    latest_message,
+                ]
+            )
+            group_item.setData(0, Qt.ItemDataRole.UserRole, symbol)
+            group_item.setData(0, Qt.ItemDataRole.UserRole + 1, json.dumps(latest, default=str))
+            tree.addTopLevelItem(group_item)
+            if symbol in anomaly_map:
+                anomaly_text = "; ".join(anomaly_map[symbol])
+                for column in range(8):
+                    group_item.setForeground(column, QColor("#ff7b72"))
+                    group_item.setToolTip(column, anomaly_text)
+            if selected_symbol and symbol == selected_symbol:
+                top_level_to_select = group_item
+
+            for row in symbol_rows:
+                actor = str(row.get("agent_name") or row.get("event_type") or "Agent").strip() or "Agent"
+                message = str(row.get("message") or row.get("reason") or "").strip()
+                child = QTreeWidgetItem(
+                    [
+                        str(row.get("timestamp_label") or "-"),
+                        str(row.get("kind") or "").strip().title() or "Runtime",
+                        symbol,
+                        actor,
+                        str(row.get("stage") or "").strip(),
+                        str(row.get("strategy_name") or "").strip(),
+                        str(row.get("timeframe") or "").strip(),
+                        message,
+                    ]
+                )
+                child.setData(0, Qt.ItemDataRole.UserRole, symbol)
+                child.setData(0, Qt.ItemDataRole.UserRole + 1, json.dumps(row, default=str))
+                child.setToolTip(7, message)
+                child.setForeground(1, kind_colors.get(str(row.get("kind") or "").strip().lower(), QColor("#d8e6ff")))
+                group_item.addChild(child)
+            group_item.setExpanded(True)
+
+        for column in range(7):
+            tree.resizeColumnToContents(column)
+        if top_level_to_select is not None:
+            tree.setCurrentItem(top_level_to_select)
+        elif tree.topLevelItemCount() > 0:
+            tree.setCurrentItem(tree.topLevelItem(0))
+        active_filters = []
+        if pinned_symbol:
+            active_filters.append(f"Pinned {pinned_symbol}")
+        if selected_status and selected_status != "All Statuses":
+            active_filters.append(selected_status)
+        if selected_timeframe and selected_timeframe != "All Timeframes":
+            active_filters.append(selected_timeframe)
+        if selected_strategy and selected_strategy != "All Strategies":
+            active_filters.append(selected_strategy)
+        suffix = f" | Filters: {', '.join(active_filters)}" if active_filters else ""
+        summary.setText(
+            f"{sum(len(grouped_rows[symbol]) for symbol in ordered_symbols)} live agent events across {len(ordered_symbols)} symbols.{suffix}"
+        )
+        if pin_btn is not None:
+            pin_btn.setText(f"Unpin {pinned_symbol}" if pinned_symbol else "Pin Selected Symbol")
+        window._agent_timeline_current_rows = [dict(row) for row in rows]
+        window._agent_timeline_anomaly_snapshot_all = raw_anomaly_snapshot
+        self._refresh_agent_timeline_health(window, rows)
+        self._refresh_agent_timeline_anomalies(window, rows)
+        self._refresh_agent_timeline_details(window)
+
+    def selected_agent_timeline_symbol(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return ""
+        tree = getattr(window, "_agent_timeline_tree", None)
+        if tree is None:
+            return ""
+        item = tree.currentItem()
+        if item is None:
+            return ""
+        current = item
+        while current.parent() is not None:
+            current = current.parent()
+        symbol = str(current.data(0, Qt.ItemDataRole.UserRole) or item.data(0, Qt.ItemDataRole.UserRole) or "").strip()
+        return symbol.upper().replace("-", "/").replace("_", "/")
+
+    def selected_agent_timeline_row(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return {}
+        tree = getattr(window, "_agent_timeline_tree", None)
+        if tree is None:
+            return {}
+        item = tree.currentItem()
+        if item is None:
+            return {}
+        raw = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if not raw and item.parent() is not None:
+            raw = item.parent().data(0, Qt.ItemDataRole.UserRole + 1)
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(str(raw))
+        except Exception:
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
+
+    def agent_timeline_row_status_label(self, row):
+        event_type = str((row or {}).get("event_type") or "").strip().lower()
+        approved = (row or {}).get("approved")
+        stage = str((row or {}).get("stage") or "").strip()
+
+        if event_type == "risk_alert" or approved is False:
+            return "Rejected"
+        if event_type == "risk_approved" or approved is True:
+            return "Approved"
+        if event_type == "order_filled":
+            return "Filled"
+        if event_type == "execution_plan":
+            return "Execution"
+        if stage:
+            return stage.replace("_", " ").title()
+        if event_type:
+            return event_type.replace("_", " ").title()
+        return "Live"
+
+    def populate_agent_timeline_filters(self, window, rows):
+        if not self._is_qt_object_alive(window):
+            return
+
+        status_combo = getattr(window, "_agent_timeline_status_filter", None)
+        timeframe_combo = getattr(window, "_agent_timeline_timeframe_filter", None)
+        strategy_combo = getattr(window, "_agent_timeline_strategy_filter", None)
+        if any(combo is None for combo in (status_combo, timeframe_combo, strategy_combo)):
+            return
+
+        def refill(combo, default_label, values):
+            current = str(combo.currentText() or "").strip()
+            blocked = combo.blockSignals(True)
+            combo.clear()
+            combo.addItem(default_label)
+            for value in values:
+                combo.addItem(value)
+            if current and combo.findText(current) >= 0:
+                combo.setCurrentText(current)
+            else:
+                combo.setCurrentIndex(0)
+            combo.blockSignals(blocked)
+
+        refill(
+            status_combo,
+            "All Statuses",
+            sorted(
+                {
+                    self._agent_timeline_row_status_label(row)
+                    for row in rows
+                    if self._agent_timeline_row_status_label(row)
+                }
+            ),
+        )
+        refill(
+            timeframe_combo,
+            "All Timeframes",
+            sorted({str((row or {}).get("timeframe") or "").strip() for row in rows if str((row or {}).get("timeframe") or "").strip()}),
+        )
+        refill(
+            strategy_combo,
+            "All Strategies",
+            sorted({str((row or {}).get("strategy_name") or "").strip() for row in rows if str((row or {}).get("strategy_name") or "").strip()}),
+        )
+
+    def toggle_agent_timeline_pin_symbol(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return ""
+
+        selected_symbol = self._selected_agent_timeline_symbol(window)
+        current_pinned = str(getattr(window, "_agent_timeline_pinned_symbol", "") or "").strip().upper().replace("-", "/").replace("_", "/")
+        if current_pinned and current_pinned == selected_symbol:
+            window._agent_timeline_pinned_symbol = ""
+        elif selected_symbol:
+            window._agent_timeline_pinned_symbol = selected_symbol
+        else:
+            self._show_async_message("Live Agent Timeline", "Select a symbol before pinning it in the timeline.", QMessageBox.Icon.Warning)
+            return current_pinned
+
+        self._refresh_agent_timeline_window(window)
+        return str(getattr(window, "_agent_timeline_pinned_symbol", "") or "").strip()
+
+    def agent_timeline_health_snapshot(self, rows, now_ts=None):
+        events = [dict(row) for row in list(rows or [])]
+        approved = 0
+        rejected = 0
+        execution = 0
+        visible_symbols = []
+        recent_symbols = []
+        recent_count = 0
+        now_value = float(now_ts if now_ts is not None else time.time())
+
+        for row in events:
+            status_label = self._agent_timeline_row_status_label(row)
+            if status_label == "Approved":
+                approved += 1
+            elif status_label == "Rejected":
+                rejected += 1
+            elif status_label in {"Execution", "Filled"}:
+                execution += 1
+
+            symbol = str((row or {}).get("symbol") or "").strip().upper().replace("-", "/").replace("_", "/")
+            if symbol and symbol not in visible_symbols:
+                visible_symbols.append(symbol)
+
+            timestamp_value = (row or {}).get("timestamp")
+            try:
+                timestamp_float = float(timestamp_value)
+            except Exception:
+                timestamp_float = None
+            if timestamp_float is not None and (now_value - timestamp_float) <= 60.0:
+                recent_count += 1
+                if symbol and symbol not in recent_symbols:
+                    recent_symbols.append(symbol)
+
+        latest_symbols = visible_symbols[:3]
+        return {
+            "approved": approved,
+            "rejected": rejected,
+            "execution": execution,
+            "visible_symbol_count": len(visible_symbols),
+            "latest_symbols": latest_symbols,
+            "recent_count": recent_count,
+            "recent_symbols": recent_symbols[:4],
+        }
+
+    def agent_timeline_anomaly_snapshot(self, rows, now_ts=None):
+        grouped = {}
+        now_value = float(now_ts if now_ts is not None else time.time())
+
+        for row in list(rows or []):
+            symbol = str((row or {}).get("symbol") or "").strip().upper().replace("-", "/").replace("_", "/")
+            if not symbol:
+                continue
+            grouped.setdefault(symbol, []).append(dict(row))
+
+        anomalies = []
+        for symbol, symbol_rows in grouped.items():
+            issues = []
+            rejected_rows = [row for row in symbol_rows if self._agent_timeline_row_status_label(row) == "Rejected"]
+            if len(rejected_rows) >= 2:
+                issues.append(f"Repeated risk rejections ({len(rejected_rows)})")
+
+            latest_timestamp = None
+            for row in symbol_rows:
+                try:
+                    timestamp_value = float((row or {}).get("timestamp"))
+                except Exception:
+                    continue
+                latest_timestamp = timestamp_value if latest_timestamp is None else max(latest_timestamp, timestamp_value)
+            if latest_timestamp is not None and (now_value - latest_timestamp) > 300.0:
+                issues.append("Stale decision flow")
+
+            filled_ids = {
+                str((row or {}).get("decision_id") or "").strip()
+                for row in symbol_rows
+                if str((row or {}).get("event_type") or "").strip().lower() == "order_filled"
+            }
+            execution_rows = [
+                row for row in symbol_rows
+                if str((row or {}).get("event_type") or "").strip().lower() == "execution_plan"
+            ]
+            if execution_rows:
+                unmatched = []
+                for row in execution_rows:
+                    decision_id = str((row or {}).get("decision_id") or "").strip()
+                    if decision_id:
+                        if decision_id not in filled_ids:
+                            unmatched.append(row)
+                    elif not filled_ids:
+                        unmatched.append(row)
+                if unmatched:
+                    issues.append("Execution plan without fill")
+
+            if issues:
+                anomalies.append({"symbol": symbol, "issues": issues})
+
+        return {
+            "count": len(anomalies),
+            "symbols": [item["symbol"] for item in anomalies],
+            "items": anomalies,
+        }
+
+    def agent_timeline_anomaly_fingerprint(self, item):
+        if not isinstance(item, dict):
+            return ""
+        issues = [str(issue or "").strip() for issue in list(item.get("issues", []) or [])]
+        issues = [issue for issue in issues if issue]
+        return " | ".join(issues)
+
+    def visible_agent_timeline_anomaly_snapshot(self, window, snapshot):
+        if not isinstance(snapshot, dict):
+            snapshot = {"count": 0, "symbols": [], "items": []}
+        items = list(snapshot.get("items", []) or [])
+        acknowledged = dict(getattr(window, "_agent_timeline_acknowledged", {}) or {}) if self._is_qt_object_alive(window) else {}
+        visible_items = []
+        for item in items:
+            symbol = str((item or {}).get("symbol") or "").strip().upper().replace("-", "/").replace("_", "/")
+            if not symbol:
+                continue
+            normalized_item = {"symbol": symbol, "issues": list((item or {}).get("issues", []) or [])}
+            fingerprint = self._agent_timeline_anomaly_fingerprint(normalized_item)
+            if acknowledged.get(symbol) == fingerprint:
+                continue
+            visible_items.append(normalized_item)
+        return {
+            "count": len(visible_items),
+            "symbols": [item["symbol"] for item in visible_items],
+            "items": visible_items,
+            "total_count": len(items),
+        }
+
+    def refresh_agent_timeline_health(self, window=None, rows=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return
+
+        counts_label = getattr(window, "_agent_timeline_health_counts", None)
+        symbols_label = getattr(window, "_agent_timeline_health_symbols", None)
+        recent_label = getattr(window, "_agent_timeline_health_recent", None)
+        if any(label is None for label in (counts_label, symbols_label, recent_label)):
+            return
+
+        snapshot = self._agent_timeline_health_snapshot(rows or [])
+        counts_label.setText(
+            "Agent Health\n"
+            f"Approved: {snapshot['approved']}  |  Rejected: {snapshot['rejected']}  |  Execution: {snapshot['execution']}"
+        )
+        latest_symbols = ", ".join(snapshot["latest_symbols"]) if snapshot["latest_symbols"] else "No active symbols"
+        symbols_label.setText(
+            "Visible Symbols\n"
+            f"Count: {snapshot['visible_symbol_count']}  |  Latest: {latest_symbols}"
+        )
+        recent_symbols = ", ".join(snapshot["recent_symbols"]) if snapshot["recent_symbols"] else "No symbols changed"
+        recent_label.setText(
+            "Last Minute\n"
+            f"Changes: {snapshot['recent_count']}  |  {recent_symbols}"
+        )
+
+    def refresh_agent_timeline_anomalies(self, window=None, rows=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return
+
+        anomaly_label = getattr(window, "_agent_timeline_anomaly_label", None)
+        if anomaly_label is None:
+            return
+
+        raw_snapshot = getattr(window, "_agent_timeline_anomaly_snapshot_all", None)
+        if not isinstance(raw_snapshot, dict):
+            raw_snapshot = self._agent_timeline_anomaly_snapshot(rows or [])
+        snapshot = self._visible_agent_timeline_anomaly_snapshot(window, raw_snapshot)
+        window._agent_timeline_anomaly_snapshot_all = raw_snapshot
+        window._agent_timeline_anomaly_snapshot = snapshot
+        if snapshot["count"] <= 0:
+            if int(raw_snapshot.get("count", 0) or 0) > 0:
+                anomaly_label.setText("Agent Anomalies\nAll current anomalies are acknowledged.")
+            else:
+                anomaly_label.setText("Agent Anomalies\nNo anomalies detected in the current timeline view.")
+            return
+
+        previews = []
+        for item in snapshot["items"][:3]:
+            previews.append(f"{item['symbol']}: {', '.join(item['issues'])}")
+        suffix = f" | +{snapshot['count'] - 3} more" if snapshot["count"] > 3 else ""
+        anomaly_label.setText(
+            "Agent Anomalies\n"
+            f"{snapshot['count']} symbols flagged | {' | '.join(previews)}{suffix}"
+        )
+
+    def open_selected_agent_timeline_symbol_in_strategy_assigner(self, window=None):
+        return self._replay_selected_agent_timeline_symbol(window)
+
+    def refresh_selected_agent_timeline_symbol(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        symbol = self._selected_agent_timeline_symbol(window)
+        if not symbol:
+            self._show_async_message("Live Agent Timeline", "Select a symbol or event before refreshing it.", QMessageBox.Icon.Warning)
+            return ""
+
+        row = self._selected_agent_timeline_row(window)
+        timeframe = str((row or {}).get("timeframe") or getattr(self, "current_timeframe", "1h") or "1h").strip() or "1h"
+        open_chart = getattr(self, "_open_symbol_chart", None)
+        refresh_chart = getattr(self, "_refresh_active_chart_data", None)
+        refresh_orderbook = getattr(self, "_refresh_active_orderbook", None)
+
+        invoke_callable(open_chart, symbol, timeframe)
+        invoke_callable(refresh_chart)
+        invoke_callable(refresh_orderbook)
+        return symbol
+
+    def acknowledge_selected_agent_timeline_anomaly(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return ""
+
+        symbol = self._selected_agent_timeline_symbol(window)
+        if not symbol:
+            self._show_async_message("Live Agent Timeline", "Select an anomalous symbol before acknowledging it.", QMessageBox.Icon.Warning)
+            return ""
+
+        raw_snapshot = getattr(window, "_agent_timeline_anomaly_snapshot_all", None)
+        if not isinstance(raw_snapshot, dict):
+            raw_snapshot = self._agent_timeline_anomaly_snapshot(getattr(window, "_agent_timeline_current_rows", []) or [])
+        matching_item = next((item for item in list(raw_snapshot.get("items", []) or []) if str(item.get("symbol") or "").strip().upper().replace("-", "/").replace("_", "/") == symbol), None)
+        if not isinstance(matching_item, dict):
+            self._show_async_message("Live Agent Timeline", f"{symbol} does not have an active anomaly in the current view.", QMessageBox.Icon.Information)
+            return ""
+
+        acknowledged = dict(getattr(window, "_agent_timeline_acknowledged", {}) or {})
+        acknowledged[symbol] = self._agent_timeline_anomaly_fingerprint(matching_item)
+        window._agent_timeline_acknowledged = acknowledged
+        self._refresh_agent_timeline_window(window)
+        return symbol
+
+    def agent_timeline_assignment_text(self, symbol):
+        normalized_symbol = str(symbol or "").strip().upper().replace("-", "/").replace("_", "/")
+        if not normalized_symbol:
+            return "Current Assignment\nSelect a symbol to inspect its active routing."
+
+        controller = getattr(self, "controller", None)
+        resolver = getattr(controller, "strategy_assignment_state_for_symbol", None) if controller is not None else None
+        state = invoke_callable(resolver, normalized_symbol) if callable(resolver) else {}
+        active_rows = list(state.get("active_rows", []) or [])
+        mode = str(state.get("mode") or "default").strip().lower() or "default"
+        locked = bool(state.get("locked", False))
+
+        if active_rows:
+            strategies = ", ".join(
+                str(row.get("strategy_name") or "").strip()
+                for row in active_rows
+                if str(row.get("strategy_name") or "").strip()
+            ) or str(getattr(controller, "strategy_name", "Trend Following") or "Trend Following").strip()
+            timeframe = str(active_rows[0].get("timeframe") or getattr(controller, "time_frame", "1h") or "1h").strip()
+        else:
+            strategies = str(getattr(controller, "strategy_name", "Trend Following") or "Trend Following").strip()
+            timeframe = str(getattr(controller, "time_frame", "1h") or "1h").strip()
+
+        mode_label = {
+            "single": "Single",
+            "ranked": "Ranked Mix",
+            "default": "Default",
+        }.get(mode, mode.title() or "Default")
+        return (
+            f"Current Assignment\n"
+            f"Symbol: {normalized_symbol}\n"
+            f"Mode: {mode_label}\n"
+            f"Strategy: {strategies}\n"
+            f"Timeframe: {timeframe}\n"
+            f"Locked: {'Yes' if locked else 'No'}"
+        )
+
+    def agent_timeline_recommendation_text(self, symbol):
+        normalized_symbol = str(symbol or "").strip().upper().replace("-", "/").replace("_", "/")
+        if not normalized_symbol:
+            return "Latest Agent Recommendation\nSelect a symbol to inspect the latest decision."
+
+        controller = getattr(self, "controller", None)
+        resolver = getattr(controller, "latest_agent_decision_overview_for_symbol", None) if controller is not None else None
+        overview = invoke_callable(resolver, normalized_symbol) if callable(resolver) else {}
+        if not isinstance(overview, dict) or not overview:
+            return (
+                f"Latest Agent Recommendation\n"
+                f"Symbol: {normalized_symbol}\n"
+                f"No recent agent decision has been recorded yet."
+            )
+
+        strategy_name = str(overview.get("strategy_name") or "Unknown").strip()
+        timeframe = str(overview.get("timeframe") or "-").strip()
+        final_agent = str(overview.get("final_agent") or "-").strip()
+        final_stage = str(overview.get("final_stage") or "-").strip()
+        side = str(overview.get("side") or "").strip().upper() or "-"
+        approved = overview.get("approved")
+        approval_text = "Approved" if approved is True else "Rejected" if approved is False else "Pending"
+        reason = str(overview.get("reason") or "").strip() or "No explanation recorded."
+        return (
+            f"Latest Agent Recommendation\n"
+            f"Symbol: {normalized_symbol}\n"
+            f"Strategy: {strategy_name}\n"
+            f"Timeframe: {timeframe}\n"
+            f"Side: {side}\n"
+            f"Status: {approval_text} via {final_agent} / {final_stage}\n"
+            f"Reason: {reason}"
+        )
+
+    def refresh_agent_timeline_details(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        if not self._is_qt_object_alive(window):
+            return
+        assigned_label = getattr(window, "_agent_timeline_assignment_label", None)
+        recommendation_label = getattr(window, "_agent_timeline_recommendation_label", None)
+        detail_browser = getattr(window, "_agent_timeline_detail_browser", None)
+        if assigned_label is None or recommendation_label is None or detail_browser is None:
+            return
+
+        symbol = self._selected_agent_timeline_symbol(window)
+        assigned_label.setText(self._agent_timeline_assignment_text(symbol))
+        recommendation_label.setText(self._agent_timeline_recommendation_text(symbol))
+        anomaly_snapshot = dict(getattr(window, "_agent_timeline_anomaly_snapshot", {}) or {})
+        anomaly_map = {item["symbol"]: list(item["issues"]) for item in anomaly_snapshot.get("items", [])}
+
+        row = self._selected_agent_timeline_row(window)
+        if not row:
+            detail_browser.setPlainText("Select a symbol or event to inspect the live agent payload.")
+            return
+
+        payload = row.get("payload")
+        pretty_payload = json.dumps(payload, indent=2, sort_keys=True, default=str) if isinstance(payload, dict) else str(payload or "")
+        detail_lines = [
+            f"Symbol: {str(row.get('symbol') or symbol or '').strip()}",
+            f"Kind: {str(row.get('kind') or '').strip()}",
+            f"Agent/Event: {str(row.get('agent_name') or row.get('event_type') or '').strip()}",
+            f"Stage: {str(row.get('stage') or '').strip()}",
+            f"Strategy: {str(row.get('strategy_name') or '').strip()}",
+            f"Timeframe: {str(row.get('timeframe') or '').strip()}",
+            f"Decision ID: {str(row.get('decision_id') or '').strip()}",
+            f"Timestamp: {str(row.get('timestamp_label') or '').strip()}",
+            f"Message: {str(row.get('message') or row.get('reason') or '').strip()}",
+        ]
+        if symbol and symbol in anomaly_map:
+            detail_lines.append(f"Anomalies: {', '.join(anomaly_map[symbol])}")
+        detail_lines.extend(
+            [
+                "",
+                "Payload:",
+                pretty_payload or "{}",
+            ]
+        )
+        detail_browser.setPlainText("\n".join(detail_lines).strip())
+
+    def replay_selected_agent_timeline_symbol(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("agent_timeline")
+        symbol = self._selected_agent_timeline_symbol(window)
+        if not symbol:
+            self._show_async_message("Live Agent Timeline", "Select a symbol or event before replaying its latest chain.", QMessageBox.Icon.Warning)
+            return None
+
+        opener = getattr(self, "_open_strategy_assignment_window", None)
+        refresher = getattr(self, "_refresh_strategy_assignment_window", None)
+        if not callable(opener):
+            return None
+        strategy_window = invoke_callable(opener)
+        if strategy_window is None:
+            return None
+
+        strategy_window._strategy_assignment_selected_symbol = symbol
+        picker = getattr(strategy_window, "_strategy_assignment_symbol_picker", None)
+        if picker is not None:
+            blocked = picker.blockSignals(True)
+            if picker.findText(symbol) < 0:
+                picker.addItem(symbol)
+            picker.setCurrentText(symbol)
+            picker.blockSignals(blocked)
+        invoke_callable(refresher, strategy_window, message=f"Replaying the latest agent chain for {symbol}.")
+        return strategy_window
+
+    def open_agent_timeline(self):
+        window = self._get_or_create_tool_window("agent_timeline", "Live Agent Timeline", width=1120, height=620)
+        if getattr(window, "_agent_timeline_container", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.setSpacing(10)
+            summary = QLabel("Watch the live multi-agent flow across symbols, from signal selection through risk and execution.")
+            summary.setWordWrap(True)
+            summary.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; border-radius: 12px; padding: 10px;")
+            layout.addWidget(summary)
+            controls = QHBoxLayout()
+            filter_input = QLineEdit()
+            filter_input.setPlaceholderText("Filter by symbol, agent, event, strategy, timeframe, or message")
+            filter_input.textChanged.connect(lambda *_: self._refresh_agent_timeline_window(window))
+            controls.addWidget(filter_input, 1)
+            status_filter = QComboBox()
+            status_filter.addItem("All Statuses")
+            status_filter.currentTextChanged.connect(lambda *_: self._refresh_agent_timeline_window(window))
+            controls.addWidget(status_filter)
+            timeframe_filter = QComboBox()
+            timeframe_filter.addItem("All Timeframes")
+            timeframe_filter.currentTextChanged.connect(lambda *_: self._refresh_agent_timeline_window(window))
+            controls.addWidget(timeframe_filter)
+            strategy_filter = QComboBox()
+            strategy_filter.addItem("All Strategies")
+            strategy_filter.currentTextChanged.connect(lambda *_: self._refresh_agent_timeline_window(window))
+            controls.addWidget(strategy_filter)
+            refresh_btn = QPushButton("Refresh")
+            refresh_btn.clicked.connect(lambda: self._refresh_agent_timeline_window(window))
+            controls.addWidget(refresh_btn)
+            clear_filters_btn = QPushButton("Clear Filters")
+            clear_filters_btn.clicked.connect(
+                lambda: (
+                    filter_input.clear(),
+                    status_filter.setCurrentIndex(0),
+                    timeframe_filter.setCurrentIndex(0),
+                    strategy_filter.setCurrentIndex(0),
+                    setattr(window, "_agent_timeline_pinned_symbol", ""),
+                    self._refresh_agent_timeline_window(window),
+                )
+            )
+            controls.addWidget(clear_filters_btn)
+            pin_btn = QPushButton("Pin Selected Symbol")
+            pin_btn.clicked.connect(lambda: self._toggle_agent_timeline_pin_symbol(window))
+            controls.addWidget(pin_btn)
+            expand_btn = QPushButton("Expand All")
+            expand_btn.clicked.connect(lambda: getattr(window, "_agent_timeline_tree", None).expandAll() if getattr(window, "_agent_timeline_tree", None) is not None else None)
+            controls.addWidget(expand_btn)
+            collapse_btn = QPushButton("Collapse All")
+            collapse_btn.clicked.connect(lambda: getattr(window, "_agent_timeline_tree", None).collapseAll() if getattr(window, "_agent_timeline_tree", None) is not None else None)
+            controls.addWidget(collapse_btn)
+            replay_btn = QPushButton("Replay Latest Chain")
+            replay_btn.clicked.connect(lambda: self._replay_selected_agent_timeline_symbol(window))
+            controls.addWidget(replay_btn)
+            layout.addLayout(controls)
+            health_row = QHBoxLayout()
+            health_counts = QLabel("Agent Health\nApproved: 0  |  Rejected: 0  |  Execution: 0")
+            health_counts.setWordWrap(True)
+            health_counts.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; border-radius: 10px; padding: 10px;")
+            health_row.addWidget(health_counts, 1)
+            health_symbols = QLabel("Visible Symbols\nCount: 0  |  Latest: No active symbols")
+            health_symbols.setWordWrap(True)
+            health_symbols.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; border-radius: 10px; padding: 10px;")
+            health_row.addWidget(health_symbols, 1)
+            health_recent = QLabel("Last Minute\nChanges: 0  |  No symbols changed")
+            health_recent.setWordWrap(True)
+            health_recent.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; border-radius: 10px; padding: 10px;")
+            health_row.addWidget(health_recent, 1)
+            layout.addLayout(health_row)
+            anomaly_label = QLabel("Agent Anomalies\nNo anomalies detected in the current timeline view.")
+            anomaly_label.setWordWrap(True)
+            anomaly_label.setStyleSheet("color: #ffd166; background-color: #101a2d; border: 1px solid #5a4316; border-radius: 10px; padding: 10px;")
+            layout.addWidget(anomaly_label)
+            anomaly_controls = QHBoxLayout()
+            open_assigner_btn = QPushButton("Open Strategy Assigner")
+            open_assigner_btn.clicked.connect(lambda: self._open_selected_agent_timeline_symbol_in_strategy_assigner(window))
+            anomaly_controls.addWidget(open_assigner_btn)
+            refresh_symbol_btn = QPushButton("Refresh Symbol")
+            refresh_symbol_btn.clicked.connect(lambda: self._refresh_selected_agent_timeline_symbol(window))
+            anomaly_controls.addWidget(refresh_symbol_btn)
+            acknowledge_btn = QPushButton("Acknowledge Anomaly")
+            acknowledge_btn.clicked.connect(lambda: self._acknowledge_selected_agent_timeline_anomaly(window))
+            anomaly_controls.addWidget(acknowledge_btn)
+            anomaly_controls.addStretch(1)
+            layout.addLayout(anomaly_controls)
+            tree = QTreeWidget()
+            tree.setColumnCount(8)
+            tree.setHeaderLabels(["Time", "Kind", "Symbol", "Agent / Event", "Stage", "Strategy", "Timeframe", "Details"])
+            tree.setRootIsDecorated(True)
+            tree.setUniformRowHeights(True)
+            tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            tree.itemSelectionChanged.connect(lambda: self._refresh_agent_timeline_details(window))
+            tree.itemDoubleClicked.connect(lambda *_: self._replay_selected_agent_timeline_symbol(window))
+            layout.addWidget(tree, 1)
+            comparison_row = QHBoxLayout()
+            assigned_label = QLabel("Current Assignment\nSelect a symbol to inspect its active routing.")
+            assigned_label.setWordWrap(True)
+            assigned_label.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; border-radius: 10px; padding: 10px;")
+            comparison_row.addWidget(assigned_label, 1)
+            recommendation_label = QLabel("Latest Agent Recommendation\nSelect a symbol to inspect the latest decision.")
+            recommendation_label.setWordWrap(True)
+            recommendation_label.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; border-radius: 10px; padding: 10px;")
+            comparison_row.addWidget(recommendation_label, 1)
+            layout.addLayout(comparison_row)
+            detail_browser = QTextBrowser()
+            detail_browser.setMinimumHeight(180)
+            detail_browser.setStyleSheet("background-color: #0f1726; color: #d9e6f7; border: 1px solid #20324d; border-radius: 10px;")
+            detail_browser.setPlainText("Select a symbol or event to inspect the live agent payload.")
+            layout.addWidget(detail_browser)
+            window.setCentralWidget(container)
+            window._agent_timeline_container = container
+            window._agent_timeline_summary = summary
+            window._agent_timeline_filter = filter_input
+            window._agent_timeline_status_filter = status_filter
+            window._agent_timeline_timeframe_filter = timeframe_filter
+            window._agent_timeline_strategy_filter = strategy_filter
+            window._agent_timeline_health_counts = health_counts
+            window._agent_timeline_health_symbols = health_symbols
+            window._agent_timeline_health_recent = health_recent
+            window._agent_timeline_anomaly_label = anomaly_label
+            window._agent_timeline_anomaly_snapshot = {}
+            window._agent_timeline_anomaly_snapshot_all = {}
+            window._agent_timeline_acknowledged = {}
+            window._agent_timeline_tree = tree
+            window._agent_timeline_pinned_symbol = ""
+            window._agent_timeline_clear_filters_btn = clear_filters_btn
+            window._agent_timeline_pin_btn = pin_btn
+            window._agent_timeline_open_assigner_btn = open_assigner_btn
+            window._agent_timeline_refresh_symbol_btn = refresh_symbol_btn
+            window._agent_timeline_acknowledge_btn = acknowledge_btn
+            window._agent_timeline_assignment_label = assigned_label
+            window._agent_timeline_recommendation_label = recommendation_label
+            window._agent_timeline_detail_browser = detail_browser
+            window._agent_timeline_expand_btn = expand_btn
+            window._agent_timeline_collapse_btn = collapse_btn
+            window._agent_timeline_replay_btn = replay_btn
+        self._refresh_agent_timeline_window(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        if getattr(window, "_agent_timeline_filter", None) is not None:
+            window._agent_timeline_filter.setFocus()
         return window
 
     def record_trade_notification(self, trade):
@@ -446,9 +1254,10 @@ def install_terminal_operator_features(Terminal):
             "ml_monitor": getattr(self, "_open_ml_monitor", None),
             "logs": getattr(self, "_open_logs", None),
             "notification_center": getattr(self, "_open_notification_center", None),
+            "agent_timeline": getattr(self, "_open_agent_timeline", None),
         }
         handler = actions.get(str(key or "").strip())
-        return handler() if callable(handler) else None
+        return invoke_callable(handler)
 
     def apply_workspace_preset(self, name):
         preset_name = str(name or "trading").strip().lower() or "trading"
@@ -526,7 +1335,7 @@ def install_terminal_operator_features(Terminal):
         current_chart = getattr(self, "_current_chart_symbol", None)
         if callable(current_chart):
             try:
-                symbol = str(current_chart() or "").strip()
+                symbol = str(invoke_callable(current_chart) or "").strip()
             except Exception:
                 symbol = ""
         if not symbol and getattr(self, "symbol_picker", None) is not None:
@@ -543,7 +1352,7 @@ def install_terminal_operator_features(Terminal):
         current_chart = getattr(self, "_current_chart_symbol", None)
         if callable(current_chart):
             try:
-                symbol = str(current_chart() or "").strip()
+                symbol = str(invoke_callable(current_chart) or "").strip()
             except Exception:
                 symbol = ""
         if not symbol and getattr(self, "symbol_picker", None) is not None:
@@ -577,15 +1386,15 @@ def install_terminal_operator_features(Terminal):
         if window is None:
             return {}
         payload = {
-            "symbol": str(getattr(getattr(window, "_manual_trade_symbol_picker", None), "currentText", lambda: "")() or "").strip(),
-            "side": str(getattr(getattr(window, "_manual_trade_side_picker", None), "currentText", lambda: "")() or "buy").strip().lower() or "buy",
-            "order_type": str(getattr(getattr(window, "_manual_trade_type_picker", None), "currentText", lambda: "")() or "market").strip().lower() or "market",
-            "quantity_mode": self._normalize_manual_trade_quantity_mode(str(getattr(getattr(window, "_manual_trade_quantity_picker", None), "currentText", lambda: "")() or "units")),
-            "amount": float(getattr(getattr(window, "_manual_trade_amount_input", None), "value", lambda: 0.0)() or 0.0),
-            "price": self._safe_float(getattr(getattr(window, "_manual_trade_price_input", None), "text", lambda: "")()),
-            "stop_price": self._safe_float(getattr(getattr(window, "_manual_trade_stop_price_input", None), "text", lambda: "")()),
-            "stop_loss": self._safe_float(getattr(getattr(window, "_manual_trade_stop_loss_input", None), "text", lambda: "")()),
-            "take_profit": self._safe_float(getattr(getattr(window, "_manual_trade_take_profit_input", None), "text", lambda: "")()),
+            "symbol": str(invoke_callable(getattr(getattr(window, "_manual_trade_symbol_picker", None), "currentText", None)) or "").strip(),
+            "side": str(invoke_callable(getattr(getattr(window, "_manual_trade_side_picker", None), "currentText", None)) or "buy").strip().lower() or "buy",
+            "order_type": str(invoke_callable(getattr(getattr(window, "_manual_trade_type_picker", None), "currentText", None)) or "market").strip().lower() or "market",
+            "quantity_mode": self._normalize_manual_trade_quantity_mode(str(invoke_callable(getattr(getattr(window, "_manual_trade_quantity_picker", None), "currentText", None)) or "units")),
+            "amount": float(invoke_callable(getattr(getattr(window, "_manual_trade_amount_input", None), "value", None)) or 0.0),
+            "price": self._safe_float(invoke_callable(getattr(getattr(window, "_manual_trade_price_input", None), "text", None))),
+            "stop_price": self._safe_float(invoke_callable(getattr(getattr(window, "_manual_trade_stop_price_input", None), "text", None))),
+            "stop_loss": self._safe_float(invoke_callable(getattr(getattr(window, "_manual_trade_stop_loss_input", None), "text", None))),
+            "take_profit": self._safe_float(invoke_callable(getattr(getattr(window, "_manual_trade_take_profit_input", None), "text", None))),
         }
         payload = {key: value for key, value in payload.items() if value not in (None, "", [])}
         settings = getattr(self, "settings", None)
@@ -598,6 +1407,7 @@ def install_terminal_operator_features(Terminal):
         entries = [
             {"title": "Manual Trade Ticket", "description": "Open the manual order ticket.", "keywords": "manual trade order ticket", "handler": lambda: self._open_manual_trade()},
             {"title": "Notification Center", "description": "Review fills, rejects, disconnects, and guard alerts.", "keywords": "notifications alerts fills rejects disconnect guard", "handler": self._open_notification_center},
+            {"title": "Live Agent Timeline", "description": "Watch the live decision flow across symbols and agents.", "keywords": "agent timeline live runtime signal risk execution", "handler": self._open_agent_timeline},
             {"title": "Performance Analytics", "description": "Open the performance analysis workspace.", "keywords": "performance analytics ledger equity pnl", "handler": self._open_performance},
             {"title": "Portfolio Exposure", "description": "Open the portfolio exposure view.", "keywords": "portfolio exposure risk", "handler": self._show_portfolio_exposure},
             {"title": "Position Analysis", "description": "Inspect open positions and account metrics.", "keywords": "position analysis risk", "handler": self._open_position_analysis_window},
@@ -682,7 +1492,7 @@ def install_terminal_operator_features(Terminal):
         try:
             if callable(handler):
                 window.hide()
-                return handler()
+                return invoke_callable(handler)
         except Exception as exc:
             self._show_async_message("Command Failed", str(exc), QMessageBox.Icon.Critical)
         return None
@@ -761,6 +1571,12 @@ def install_terminal_operator_features(Terminal):
             self.action_notifications.triggered.connect(self._open_notification_center)
             self.review_menu.addAction(self.action_notifications)
             self.tools_menu.addAction(self.action_notifications)
+            self.action_agent_timeline = QAction("Live Agent Timeline", self)
+            self.action_agent_timeline.setShortcut("Ctrl+Shift+L")
+            self.action_agent_timeline.triggered.connect(self._open_agent_timeline)
+            self.review_menu.addAction(self.action_agent_timeline)
+            self.research_menu.addAction(self.action_agent_timeline)
+            self.tools_menu.addAction(self.action_agent_timeline)
             self.action_command_palette = QAction("Command Palette", self)
             self.action_command_palette.setShortcut("Ctrl+K")
             self.action_command_palette.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
@@ -873,6 +1689,26 @@ def install_terminal_operator_features(Terminal):
     Terminal._push_notification = push_notification
     Terminal._refresh_notification_center_window = refresh_notification_center_window
     Terminal._open_notification_center = open_notification_center
+    Terminal._refresh_agent_timeline_window = refresh_agent_timeline_window
+    Terminal._selected_agent_timeline_symbol = selected_agent_timeline_symbol
+    Terminal._selected_agent_timeline_row = selected_agent_timeline_row
+    Terminal._agent_timeline_row_status_label = agent_timeline_row_status_label
+    Terminal._populate_agent_timeline_filters = populate_agent_timeline_filters
+    Terminal._toggle_agent_timeline_pin_symbol = toggle_agent_timeline_pin_symbol
+    Terminal._agent_timeline_health_snapshot = agent_timeline_health_snapshot
+    Terminal._refresh_agent_timeline_health = refresh_agent_timeline_health
+    Terminal._agent_timeline_anomaly_snapshot = agent_timeline_anomaly_snapshot
+    Terminal._agent_timeline_anomaly_fingerprint = agent_timeline_anomaly_fingerprint
+    Terminal._visible_agent_timeline_anomaly_snapshot = visible_agent_timeline_anomaly_snapshot
+    Terminal._refresh_agent_timeline_anomalies = refresh_agent_timeline_anomalies
+    Terminal._open_selected_agent_timeline_symbol_in_strategy_assigner = open_selected_agent_timeline_symbol_in_strategy_assigner
+    Terminal._refresh_selected_agent_timeline_symbol = refresh_selected_agent_timeline_symbol
+    Terminal._acknowledge_selected_agent_timeline_anomaly = acknowledge_selected_agent_timeline_anomaly
+    Terminal._agent_timeline_assignment_text = agent_timeline_assignment_text
+    Terminal._agent_timeline_recommendation_text = agent_timeline_recommendation_text
+    Terminal._refresh_agent_timeline_details = refresh_agent_timeline_details
+    Terminal._replay_selected_agent_timeline_symbol = replay_selected_agent_timeline_symbol
+    Terminal._open_agent_timeline = open_agent_timeline
     Terminal._record_trade_notification = record_trade_notification
     Terminal._runtime_notification_transition = runtime_notification_transition
     Terminal._refresh_runtime_notifications = refresh_runtime_notifications

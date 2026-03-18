@@ -191,7 +191,7 @@ class PortfolioAllocator:
             "reason": "",
         }
 
-        if available_budget_value < minimum_ticket_value:
+        if available_budget_value <= 0:
             metrics["reason"] = (
                 f"{strategy_name} has no meaningful capital headroom left "
                 f"({available_budget_value:.2f} available)."
@@ -199,11 +199,8 @@ class PortfolioAllocator:
             self._latest_snapshot = metrics
             return AllocationDecision(False, metrics["reason"], 0.0, metrics)
 
-        if adjusted_trade_value < minimum_ticket_value:
-            metrics["reason"] = (
-                f"Allocator reduced the ticket below the minimum useful allocation "
-                f"({adjusted_trade_value:.2f} < {minimum_ticket_value:.2f})."
-            )
+        if adjusted_trade_value <= 0 or adjusted_amount <= 0:
+            metrics["reason"] = "Allocator scaled the trade to zero."
             self._latest_snapshot = metrics
             return AllocationDecision(False, metrics["reason"], 0.0, metrics)
 
@@ -216,7 +213,14 @@ class PortfolioAllocator:
             return AllocationDecision(False, metrics["reason"], adjusted_amount, metrics)
 
         metrics["approved"] = True
-        if adjusted_amount < trade_amount:
+        metrics["below_minimum_useful_allocation"] = adjusted_trade_value < minimum_ticket_value
+        if metrics["below_minimum_useful_allocation"]:
+            metrics["reason"] = (
+                f"Approved with remaining available allocation: amount reduced from {trade_amount:.6g} "
+                f"to {adjusted_amount:.6g} for {strategy_name} "
+                f"({adjusted_trade_value:.2f} < {minimum_ticket_value:.2f})."
+            )
+        elif adjusted_amount < trade_amount:
             metrics["reason"] = (
                 f"Approved with allocation scaling: amount reduced from {trade_amount:.6g} "
                 f"to {adjusted_amount:.6g} for {strategy_name}."

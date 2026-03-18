@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -92,6 +93,9 @@ def test_create_menu_bar_adds_workspace_notifications_palette_and_favorite_actio
     assert terminal.action_restore_workspace_layout in workspace_actions
     assert terminal.action_notifications in terminal.review_menu.actions()
     assert terminal.action_notifications in terminal.tools_menu.actions()
+    assert terminal.action_agent_timeline in terminal.review_menu.actions()
+    assert terminal.action_agent_timeline in terminal.research_menu.actions()
+    assert terminal.action_agent_timeline in terminal.tools_menu.actions()
     assert terminal.action_command_palette in terminal.tools_menu.actions()
     assert terminal.action_favorite_symbol in terminal.charts_menu.actions()
 
@@ -186,6 +190,7 @@ def test_command_palette_entries_include_operator_actions():
         controller=SimpleNamespace(symbols=[]),
         _open_manual_trade=lambda *args, **kwargs: None,
         _open_notification_center=lambda: None,
+        _open_agent_timeline=lambda: None,
         _open_performance=lambda: None,
         _show_portfolio_exposure=lambda: None,
         _open_position_analysis_window=lambda: None,
@@ -214,6 +219,520 @@ def test_command_palette_entries_include_operator_actions():
     assert "Research Workspace" in titles
     assert "Risk Workspace" in titles
     assert "Review Workspace" in titles
+
+
+def test_open_agent_timeline_builds_runtime_table_from_controller_feed():
+    _app()
+    terminal = _MenuTerminal()
+    now = time.time()
+    terminal.controller = SimpleNamespace(
+        language_code="en",
+        set_language=lambda _code: None,
+        symbols=[],
+        live_agent_runtime_feed=lambda limit=200, symbol=None, kinds=None: [
+            {
+                "timestamp_label": "2026-03-17 10:05:00 UTC",
+                "timestamp": now - 10,
+                "kind": "memory",
+                "symbol": "EUR/USD",
+                "agent_name": "SignalAgent",
+                "stage": "selected",
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "message": "Signal selected for EUR/USD.",
+                "payload": {"confidence": 0.82},
+            },
+            {
+                "timestamp_label": "2026-03-17 10:06:00 UTC",
+                "timestamp": now - 5,
+                "kind": "bus",
+                "symbol": "EUR/USD",
+                "event_type": "risk_approved",
+                "stage": "",
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "message": "Risk approved BUY for EUR/USD.",
+                "payload": {"approved": True},
+            },
+        ],
+        strategy_assignment_state_for_symbol=lambda symbol: {
+            "mode": "single",
+            "active_rows": [{"strategy_name": "Trend Following", "timeframe": "1h"}],
+            "locked": True,
+        },
+        latest_agent_decision_overview_for_symbol=lambda symbol: {
+            "strategy_name": "EMA Cross",
+            "timeframe": "4h",
+            "side": "buy",
+            "approved": True,
+            "final_agent": "RiskAgent",
+            "final_stage": "approved",
+            "reason": "within limits",
+        },
+    )
+    _bind(
+        terminal,
+        "_get_or_create_tool_window",
+        "_is_qt_object_alive",
+        "_selected_agent_timeline_symbol",
+        "_selected_agent_timeline_row",
+        "_agent_timeline_row_status_label",
+        "_agent_timeline_assignment_text",
+        "_agent_timeline_recommendation_text",
+        "_agent_timeline_health_snapshot",
+        "_refresh_agent_timeline_health",
+        "_agent_timeline_anomaly_snapshot",
+        "_agent_timeline_anomaly_fingerprint",
+        "_visible_agent_timeline_anomaly_snapshot",
+        "_refresh_agent_timeline_anomalies",
+        "_refresh_agent_timeline_window",
+        "_refresh_agent_timeline_details",
+        "_replay_selected_agent_timeline_symbol",
+        "_open_selected_agent_timeline_symbol_in_strategy_assigner",
+        "_refresh_selected_agent_timeline_symbol",
+        "_acknowledge_selected_agent_timeline_anomaly",
+        "_open_agent_timeline",
+    )
+
+    window = Terminal._open_agent_timeline(terminal)
+    tree = window._agent_timeline_tree
+
+    assert tree.topLevelItemCount() == 1
+    group = tree.topLevelItem(0)
+    assert group.text(2) == "EUR/USD"
+    assert group.text(3) == "2 events"
+    assert group.childCount() == 2
+    assert group.child(0).text(3) == "SignalAgent"
+    assert group.child(1).text(3) == "risk_approved"
+    assert "Current Assignment" in window._agent_timeline_assignment_label.text()
+    assert "Strategy: Trend Following" in window._agent_timeline_assignment_label.text()
+    assert "Latest Agent Recommendation" in window._agent_timeline_recommendation_label.text()
+    assert "Strategy: EMA Cross" in window._agent_timeline_recommendation_label.text()
+    assert "Approved: 1" in window._agent_timeline_health_counts.text()
+    assert "Execution: 0" in window._agent_timeline_health_counts.text()
+    assert "Count: 1" in window._agent_timeline_health_symbols.text()
+    assert "Changes: 2" in window._agent_timeline_health_recent.text()
+    group.setExpanded(True)
+    tree.setCurrentItem(group.child(0))
+    Terminal._refresh_agent_timeline_details(terminal, window)
+    assert "Agent/Event: SignalAgent" in window._agent_timeline_detail_browser.toPlainText()
+    assert '"confidence": 0.82' in window._agent_timeline_detail_browser.toPlainText()
+
+
+def test_replay_selected_agent_timeline_symbol_opens_strategy_assigner_for_selected_symbol():
+    _app()
+    terminal = _MenuTerminal()
+    terminal.controller = SimpleNamespace(
+        language_code="en",
+        set_language=lambda _code: None,
+        symbols=[],
+        live_agent_runtime_feed=lambda limit=200, symbol=None, kinds=None: [
+            {
+                "timestamp_label": "2026-03-17 10:05:00 UTC",
+                "kind": "memory",
+                "symbol": "GBP/USD",
+                "agent_name": "SignalAgent",
+                "stage": "selected",
+                "strategy_name": "Trend Following",
+                "timeframe": "1h",
+                "message": "Signal selected for GBP/USD.",
+            }
+        ],
+    )
+    replay_messages = []
+    strategy_window = SimpleNamespace(_strategy_assignment_symbol_picker=QComboBox())
+    terminal._open_strategy_assignment_window = lambda: strategy_window
+    terminal._refresh_strategy_assignment_window = lambda window=None, message=None: replay_messages.append((window, message))
+    _bind(
+        terminal,
+        "_get_or_create_tool_window",
+        "_is_qt_object_alive",
+        "_selected_agent_timeline_symbol",
+        "_selected_agent_timeline_row",
+        "_agent_timeline_row_status_label",
+        "_agent_timeline_assignment_text",
+        "_agent_timeline_recommendation_text",
+        "_agent_timeline_health_snapshot",
+        "_refresh_agent_timeline_health",
+        "_agent_timeline_anomaly_snapshot",
+        "_agent_timeline_anomaly_fingerprint",
+        "_visible_agent_timeline_anomaly_snapshot",
+        "_refresh_agent_timeline_anomalies",
+        "_refresh_agent_timeline_window",
+        "_refresh_agent_timeline_details",
+        "_replay_selected_agent_timeline_symbol",
+        "_open_selected_agent_timeline_symbol_in_strategy_assigner",
+        "_refresh_selected_agent_timeline_symbol",
+        "_acknowledge_selected_agent_timeline_anomaly",
+        "_open_agent_timeline",
+    )
+
+    window = Terminal._open_agent_timeline(terminal)
+    window._agent_timeline_tree.setCurrentItem(window._agent_timeline_tree.topLevelItem(0).child(0))
+    opened = Terminal._replay_selected_agent_timeline_symbol(terminal, window)
+
+    assert opened is strategy_window
+    assert strategy_window._strategy_assignment_selected_symbol == "GBP/USD"
+    assert strategy_window._strategy_assignment_symbol_picker.currentText() == "GBP/USD"
+    assert replay_messages[0][0] is strategy_window
+    assert "Replaying the latest agent chain for GBP/USD." == replay_messages[0][1]
+
+
+def test_agent_timeline_filters_and_pin_symbol_scope_rows():
+    _app()
+    terminal = _MenuTerminal()
+    now = time.time()
+    terminal.controller = SimpleNamespace(
+        language_code="en",
+        set_language=lambda _code: None,
+        symbols=[],
+        live_agent_runtime_feed=lambda limit=200, symbol=None, kinds=None: [
+            {
+                "timestamp_label": "2026-03-17 10:06:00 UTC",
+                "timestamp": now - 10,
+                "kind": "bus",
+                "symbol": "EUR/USD",
+                "event_type": "risk_approved",
+                "approved": True,
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "message": "Risk approved BUY for EUR/USD.",
+                "payload": {"approved": True},
+            },
+            {
+                "timestamp_label": "2026-03-17 10:05:00 UTC",
+                "timestamp": now - 15,
+                "kind": "memory",
+                "symbol": "EUR/USD",
+                "agent_name": "SignalAgent",
+                "stage": "selected",
+                "strategy_name": "EMA Cross",
+                "timeframe": "4h",
+                "message": "Signal selected for EUR/USD.",
+                "payload": {"confidence": 0.82},
+            },
+            {
+                "timestamp_label": "2026-03-17 10:04:00 UTC",
+                "timestamp": now - 120,
+                "kind": "bus",
+                "symbol": "GBP/USD",
+                "event_type": "risk_alert",
+                "approved": False,
+                "strategy_name": "Trend Following",
+                "timeframe": "1h",
+                "message": "Risk blocked GBP/USD.",
+                "payload": {"approved": False},
+            },
+        ],
+        strategy_assignment_state_for_symbol=lambda symbol: {
+            "mode": "single",
+            "active_rows": [{"strategy_name": "Trend Following", "timeframe": "1h"}],
+            "locked": False,
+        },
+        latest_agent_decision_overview_for_symbol=lambda symbol: {
+            "strategy_name": "EMA Cross" if symbol == "EUR/USD" else "Trend Following",
+            "timeframe": "4h" if symbol == "EUR/USD" else "1h",
+            "side": "buy",
+            "approved": symbol == "EUR/USD",
+            "final_agent": "RiskAgent",
+            "final_stage": "approved" if symbol == "EUR/USD" else "rejected",
+            "reason": "within limits" if symbol == "EUR/USD" else "risk blocked",
+        },
+    )
+    _bind(
+        terminal,
+        "_get_or_create_tool_window",
+        "_is_qt_object_alive",
+        "_selected_agent_timeline_symbol",
+        "_selected_agent_timeline_row",
+        "_agent_timeline_row_status_label",
+        "_populate_agent_timeline_filters",
+        "_toggle_agent_timeline_pin_symbol",
+        "_agent_timeline_health_snapshot",
+        "_refresh_agent_timeline_health",
+        "_agent_timeline_anomaly_snapshot",
+        "_agent_timeline_anomaly_fingerprint",
+        "_visible_agent_timeline_anomaly_snapshot",
+        "_refresh_agent_timeline_anomalies",
+        "_agent_timeline_assignment_text",
+        "_agent_timeline_recommendation_text",
+        "_refresh_agent_timeline_window",
+        "_refresh_agent_timeline_details",
+        "_replay_selected_agent_timeline_symbol",
+        "_open_selected_agent_timeline_symbol_in_strategy_assigner",
+        "_refresh_selected_agent_timeline_symbol",
+        "_acknowledge_selected_agent_timeline_anomaly",
+        "_open_agent_timeline",
+    )
+
+    window = Terminal._open_agent_timeline(terminal)
+    tree = window._agent_timeline_tree
+
+    assert tree.topLevelItemCount() == 2
+    assert window._agent_timeline_status_filter.findText("Approved") >= 0
+    assert window._agent_timeline_status_filter.findText("Rejected") >= 0
+    assert window._agent_timeline_timeframe_filter.findText("4h") >= 0
+    assert window._agent_timeline_strategy_filter.findText("EMA Cross") >= 0
+    assert "Approved: 1" in window._agent_timeline_health_counts.text()
+    assert "Rejected: 1" in window._agent_timeline_health_counts.text()
+    assert "Changes: 2" in window._agent_timeline_health_recent.text()
+
+    window._agent_timeline_status_filter.setCurrentText("Approved")
+    Terminal._refresh_agent_timeline_window(terminal, window)
+    assert tree.topLevelItemCount() == 1
+    assert tree.topLevelItem(0).text(2) == "EUR/USD"
+
+    window._agent_timeline_status_filter.setCurrentIndex(0)
+    window._agent_timeline_timeframe_filter.setCurrentText("1h")
+    Terminal._refresh_agent_timeline_window(terminal, window)
+    assert tree.topLevelItemCount() == 1
+    assert tree.topLevelItem(0).text(2) == "GBP/USD"
+
+    window._agent_timeline_timeframe_filter.setCurrentIndex(0)
+    window._agent_timeline_strategy_filter.setCurrentText("EMA Cross")
+    Terminal._refresh_agent_timeline_window(terminal, window)
+    assert tree.topLevelItemCount() == 1
+    assert tree.topLevelItem(0).text(2) == "EUR/USD"
+
+    window._agent_timeline_strategy_filter.setCurrentIndex(0)
+    eur_group = tree.topLevelItem(0)
+    tree.setCurrentItem(eur_group)
+    pinned = Terminal._toggle_agent_timeline_pin_symbol(terminal, window)
+    assert pinned == "EUR/USD"
+    assert window._agent_timeline_pin_btn.text() == "Unpin EUR/USD"
+    assert "Pinned EUR/USD" in window._agent_timeline_summary.text()
+    assert "Count: 1" in window._agent_timeline_health_symbols.text()
+
+    unpinned = Terminal._toggle_agent_timeline_pin_symbol(terminal, window)
+    assert unpinned == ""
+    assert window._agent_timeline_pin_btn.text() == "Pin Selected Symbol"
+
+
+def test_agent_timeline_anomaly_summary_flags_rejections_stale_and_unfilled_execution():
+    _app()
+    terminal = _MenuTerminal()
+    now = time.time()
+    terminal.controller = SimpleNamespace(
+        language_code="en",
+        set_language=lambda _code: None,
+        symbols=[],
+        live_agent_runtime_feed=lambda limit=200, symbol=None, kinds=None: [
+            {
+                "timestamp_label": "2026-03-17 10:06:00 UTC",
+                "timestamp": now - 15,
+                "kind": "bus",
+                "symbol": "EUR/USD",
+                "event_type": "risk_alert",
+                "approved": False,
+                "message": "Risk blocked EUR/USD.",
+            },
+            {
+                "timestamp_label": "2026-03-17 10:05:00 UTC",
+                "timestamp": now - 25,
+                "kind": "bus",
+                "symbol": "EUR/USD",
+                "event_type": "risk_alert",
+                "approved": False,
+                "message": "Risk blocked EUR/USD again.",
+            },
+            {
+                "timestamp_label": "2026-03-17 09:55:00 UTC",
+                "timestamp": now - 600,
+                "kind": "memory",
+                "symbol": "GBP/USD",
+                "agent_name": "SignalAgent",
+                "stage": "selected",
+                "strategy_name": "Trend Following",
+                "timeframe": "1h",
+                "message": "Signal selected for GBP/USD.",
+            },
+            {
+                "timestamp_label": "2026-03-17 10:04:30 UTC",
+                "timestamp": now - 30,
+                "kind": "bus",
+                "symbol": "USD/JPY",
+                "event_type": "execution_plan",
+                "decision_id": "dec-42",
+                "strategy_name": "EMA Cross",
+                "timeframe": "15m",
+                "message": "Execution plan ready for USD/JPY.",
+            },
+        ],
+        strategy_assignment_state_for_symbol=lambda symbol: {"mode": "default", "active_rows": [], "locked": False},
+        latest_agent_decision_overview_for_symbol=lambda symbol: {},
+    )
+    _bind(
+        terminal,
+        "_get_or_create_tool_window",
+        "_is_qt_object_alive",
+        "_selected_agent_timeline_symbol",
+        "_selected_agent_timeline_row",
+        "_agent_timeline_row_status_label",
+        "_populate_agent_timeline_filters",
+        "_toggle_agent_timeline_pin_symbol",
+        "_agent_timeline_health_snapshot",
+        "_refresh_agent_timeline_health",
+        "_agent_timeline_anomaly_snapshot",
+        "_agent_timeline_anomaly_fingerprint",
+        "_visible_agent_timeline_anomaly_snapshot",
+        "_refresh_agent_timeline_anomalies",
+        "_agent_timeline_assignment_text",
+        "_agent_timeline_recommendation_text",
+        "_refresh_agent_timeline_window",
+        "_refresh_agent_timeline_details",
+        "_replay_selected_agent_timeline_symbol",
+        "_open_selected_agent_timeline_symbol_in_strategy_assigner",
+        "_refresh_selected_agent_timeline_symbol",
+        "_acknowledge_selected_agent_timeline_anomaly",
+        "_open_agent_timeline",
+    )
+
+    window = Terminal._open_agent_timeline(terminal)
+
+    anomaly_text = window._agent_timeline_anomaly_label.text()
+    assert "3 symbols flagged" in anomaly_text
+    assert "EUR/USD: Repeated risk rejections (2)" in anomaly_text
+    assert "GBP/USD: Stale decision flow" in anomaly_text
+    assert "USD/JPY: Execution plan without fill" in anomaly_text
+
+    tree = window._agent_timeline_tree
+    group = tree.topLevelItem(0)
+    tree.setCurrentItem(group)
+    Terminal._refresh_agent_timeline_details(terminal, window)
+    if group.text(2) == "EUR/USD":
+        assert "Anomalies: Repeated risk rejections (2)" in window._agent_timeline_detail_browser.toPlainText()
+
+
+def test_acknowledge_selected_agent_timeline_anomaly_hides_current_flagged_symbol():
+    _app()
+    terminal = _MenuTerminal()
+    now = time.time()
+    terminal.controller = SimpleNamespace(
+        language_code="en",
+        set_language=lambda _code: None,
+        symbols=[],
+        live_agent_runtime_feed=lambda limit=200, symbol=None, kinds=None: [
+            {
+                "timestamp_label": "2026-03-17 10:06:00 UTC",
+                "timestamp": now - 15,
+                "kind": "bus",
+                "symbol": "EUR/USD",
+                "event_type": "risk_alert",
+                "approved": False,
+                "message": "Risk blocked EUR/USD.",
+            },
+            {
+                "timestamp_label": "2026-03-17 10:05:00 UTC",
+                "timestamp": now - 25,
+                "kind": "bus",
+                "symbol": "EUR/USD",
+                "event_type": "risk_alert",
+                "approved": False,
+                "message": "Risk blocked EUR/USD again.",
+            },
+        ],
+        strategy_assignment_state_for_symbol=lambda symbol: {"mode": "default", "active_rows": [], "locked": False},
+        latest_agent_decision_overview_for_symbol=lambda symbol: {},
+    )
+    _bind(
+        terminal,
+        "_get_or_create_tool_window",
+        "_is_qt_object_alive",
+        "_selected_agent_timeline_symbol",
+        "_selected_agent_timeline_row",
+        "_agent_timeline_row_status_label",
+        "_populate_agent_timeline_filters",
+        "_toggle_agent_timeline_pin_symbol",
+        "_agent_timeline_health_snapshot",
+        "_refresh_agent_timeline_health",
+        "_agent_timeline_anomaly_snapshot",
+        "_agent_timeline_anomaly_fingerprint",
+        "_visible_agent_timeline_anomaly_snapshot",
+        "_refresh_agent_timeline_anomalies",
+        "_agent_timeline_assignment_text",
+        "_agent_timeline_recommendation_text",
+        "_refresh_agent_timeline_window",
+        "_refresh_agent_timeline_details",
+        "_replay_selected_agent_timeline_symbol",
+        "_open_selected_agent_timeline_symbol_in_strategy_assigner",
+        "_refresh_selected_agent_timeline_symbol",
+        "_acknowledge_selected_agent_timeline_anomaly",
+        "_open_agent_timeline",
+    )
+
+    window = Terminal._open_agent_timeline(terminal)
+    tree = window._agent_timeline_tree
+    tree.setCurrentItem(tree.topLevelItem(0))
+
+    acknowledged = Terminal._acknowledge_selected_agent_timeline_anomaly(terminal, window)
+
+    assert acknowledged == "EUR/USD"
+    assert window._agent_timeline_anomaly_snapshot["count"] == 0
+    assert window._agent_timeline_anomaly_label.text() == "Agent Anomalies\nAll current anomalies are acknowledged."
+
+
+def test_refresh_selected_agent_timeline_symbol_opens_chart_and_requests_refresh():
+    _app()
+    terminal = _MenuTerminal()
+    now = time.time()
+    calls = []
+    terminal.controller = SimpleNamespace(
+        language_code="en",
+        set_language=lambda _code: None,
+        symbols=[],
+        live_agent_runtime_feed=lambda limit=200, symbol=None, kinds=None: [
+            {
+                "timestamp_label": "2026-03-17 10:05:00 UTC",
+                "timestamp": now - 10,
+                "kind": "memory",
+                "symbol": "USD/JPY",
+                "agent_name": "SignalAgent",
+                "stage": "selected",
+                "strategy_name": "EMA Cross",
+                "timeframe": "15m",
+                "message": "Signal selected for USD/JPY.",
+            }
+        ],
+        strategy_assignment_state_for_symbol=lambda symbol: {"mode": "default", "active_rows": [], "locked": False},
+        latest_agent_decision_overview_for_symbol=lambda symbol: {},
+    )
+    terminal._open_symbol_chart = lambda symbol, timeframe=None: calls.append(("open", symbol, timeframe))
+    terminal._refresh_active_chart_data = lambda: calls.append(("chart",))
+    terminal._refresh_active_orderbook = lambda: calls.append(("orderbook",))
+    _bind(
+        terminal,
+        "_get_or_create_tool_window",
+        "_is_qt_object_alive",
+        "_selected_agent_timeline_symbol",
+        "_selected_agent_timeline_row",
+        "_agent_timeline_row_status_label",
+        "_populate_agent_timeline_filters",
+        "_toggle_agent_timeline_pin_symbol",
+        "_agent_timeline_health_snapshot",
+        "_refresh_agent_timeline_health",
+        "_agent_timeline_anomaly_snapshot",
+        "_agent_timeline_anomaly_fingerprint",
+        "_visible_agent_timeline_anomaly_snapshot",
+        "_refresh_agent_timeline_anomalies",
+        "_agent_timeline_assignment_text",
+        "_agent_timeline_recommendation_text",
+        "_refresh_agent_timeline_window",
+        "_refresh_agent_timeline_details",
+        "_replay_selected_agent_timeline_symbol",
+        "_open_selected_agent_timeline_symbol_in_strategy_assigner",
+        "_refresh_selected_agent_timeline_symbol",
+        "_acknowledge_selected_agent_timeline_anomaly",
+        "_open_agent_timeline",
+    )
+
+    window = Terminal._open_agent_timeline(terminal)
+    tree = window._agent_timeline_tree
+    tree.setCurrentItem(tree.topLevelItem(0).child(0))
+
+    refreshed = Terminal._refresh_selected_agent_timeline_symbol(terminal, window)
+
+    assert refreshed == "USD/JPY"
+    assert calls == [("open", "USD/JPY", "15m"), ("chart",), ("orderbook",)]
 
 
 def test_chart_context_action_supports_market_ticket_prefill():

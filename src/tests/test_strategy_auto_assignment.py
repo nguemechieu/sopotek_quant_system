@@ -41,17 +41,34 @@ class _FakeRanker:
 
     def rank(self, data, symbol, timeframe=None, strategy_names=None, top_n=None):
         self.calls.append((symbol, timeframe, tuple(strategy_names or []), len(data)))
-        top_strategy = "EMA Cross" if symbol == "EUR/USD" else "MACD Trend"
+        if symbol == "EUR/USD" and str(timeframe or "") == "4h":
+            top_strategy = "MACD Trend"
+            top_score = 12.0
+            top_profit = 180.0
+            top_sharpe = 1.9
+            top_equity = 10180.0
+        elif symbol == "EUR/USD":
+            top_strategy = "EMA Cross"
+            top_score = 9.0
+            top_profit = 140.0
+            top_sharpe = 1.6
+            top_equity = 10140.0
+        else:
+            top_strategy = "MACD Trend"
+            top_score = 9.0
+            top_profit = 140.0
+            top_sharpe = 1.6
+            top_equity = 10140.0
         alt_strategy = "Trend Following"
         return pd.DataFrame(
             [
                 {
                     "strategy_name": top_strategy,
-                    "score": 9.0,
-                    "total_profit": 140.0,
-                    "sharpe_ratio": 1.6,
+                    "score": top_score,
+                    "total_profit": top_profit,
+                    "sharpe_ratio": top_sharpe,
                     "win_rate": 0.61,
-                    "final_equity": 10140.0,
+                    "final_equity": top_equity,
                     "max_drawdown": 90.0,
                     "closed_trades": 18,
                 },
@@ -123,6 +140,7 @@ def _make_controller():
     controller.strategy_auto_assignment_progress = {}
     controller._strategy_auto_assignment_task = None
     controller.time_frame = "1h"
+    controller.strategy_assignment_scan_timeframes = ["1h"]
     controller.strategy_name = "Trend Following"
     controller.initial_capital = 10000
     controller.symbols = ["EUR/USD", "BTC/USDT"]
@@ -130,7 +148,12 @@ def _make_controller():
         "EUR/USD": {"1h": frame.copy()},
         "BTC/USDT": {"1h": frame.copy()},
     }
-    controller.request_candle_data = lambda *args, **kwargs: None
+    async def request_candle_data(symbol, timeframe="1h", limit=None):
+        frame_for_timeframe = frame.copy()
+        controller.candle_buffers.setdefault(str(symbol), {})[str(timeframe)] = frame_for_timeframe
+        return frame_for_timeframe
+
+    controller.request_candle_data = request_candle_data
     controller.trading_system = SimpleNamespace(
         strategy=SimpleNamespace(list=lambda: ["Trend Following", "EMA Cross", "MACD Trend"]),
         refresh_strategy_preferences=lambda: refresh_calls.append(True),
@@ -176,6 +199,30 @@ def test_auto_rank_and_assign_strategies_assigns_unlocked_symbols_and_preserves_
     assert controller._ranker.calls == [("EUR/USD", "1h", ("Trend Following", "EMA Cross", "MACD Trend"), 160)]
     assert controller._refresh_calls == [True]
 
+
+
+
+def test_auto_rank_and_assign_strategies_selects_best_timeframe_for_symbol():
+    controller = _make_controller()
+    controller.symbols = ["EUR/USD"]
+    controller.candle_buffers = {
+        "EUR/USD": {
+            "1h": _sample_frame(),
+            "4h": _sample_frame(),
+        }
+    }
+    controller.strategy_assignment_scan_timeframes = ["1h", "4h"]
+
+    result = asyncio.run(controller.auto_rank_and_assign_strategies(timeframe="1h"))
+    assigned = controller.assigned_strategies_for_symbol("EUR/USD")
+    ranked = controller.ranked_strategies_for_symbol("EUR/USD")
+
+    assert result["assigned_symbols"] == ["EUR/USD"]
+    assert assigned[0]["strategy_name"] == "MACD Trend"
+    assert assigned[0]["timeframe"] == "4h"
+    assert ranked[0]["strategy_name"] == "MACD Trend"
+    assert ranked[0]["timeframe"] == "4h"
+    assert result["scan_timeframes"] == ["1h", "4h"]
 
 def test_strategy_auto_assignment_status_reports_ready_after_scan():
     controller = _make_controller()

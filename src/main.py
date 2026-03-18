@@ -113,10 +113,39 @@ def _install_asyncio_exception_filter(loop: Any, logger: Any = None) -> None:
     loop.set_exception_handler(handler)
 
 
+def _is_qt_windows_noise(message: str | None) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "External WM_DESTROY received for",
+            "QWindowsWindow::setGeometry: Unable to set geometry",
+            "OpenThemeData() failed for theme 15 (WINDOW).",
+        )
+    )
+
+
+def _install_qt_message_filter() -> None:
+    previous_handler =  QtCore.qInstallMessageHandler(None)
+
+    def handler(mode: Any, context: Any, message: str) -> None:
+        if _is_qt_windows_noise(message):
+            return
+        if previous_handler is not None:
+            previous_handler(mode, context, message)
+        else:
+            sys.stderr.write(f"{message}\n")
+
+    QtCore.qInstallMessageHandler(handler)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Start the Qt application and run the qasync event loop."""
 
     _install_faulthandler()
+    _install_qt_message_filter()
 
     app = QtWidgets.QApplication(sys.argv if argv is None else list(argv))
     app.setStyle("Fusion")
