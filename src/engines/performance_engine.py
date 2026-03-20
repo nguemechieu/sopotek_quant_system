@@ -110,35 +110,20 @@ class PerformanceEngine:
     # =====================================
 
     def report(self):
-        if len(self.equity_curve) < 2:
+        equity = Metrics._finite_array(self.equity_curve)
+        if len(equity) < 2:
             return {}
-
-        equity = np.array(self.equity_curve)
-
         returns = Metrics.returns(equity)
 
-        report = {
-
-            "cumulative_return":
-                Metrics.cumulative_return(equity),
-
-            "volatility":
-                Metrics.volatility(returns),
-
-            "sharpe_ratio":
-                Metrics.sharpe_ratio(returns),
-
-            "sortino_ratio":
-                Metrics.sortino_ratio(returns),
-
-            "max_drawdown":
-                RiskMetrics.max_drawdown(equity),
-
-            "value_at_risk":
-                RiskMetrics.var(returns),
-
-            "conditional_var":
-                RiskMetrics.cvar(returns),
-        }
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            report = {
+                "cumulative_return": Metrics.cumulative_return(equity),
+                "volatility": Metrics.volatility(returns),
+                "sharpe_ratio": Metrics.sharpe_ratio(returns),
+                "sortino_ratio": Metrics.sortino_ratio(returns),
+                "max_drawdown": RiskMetrics.max_drawdown(equity),
+                "value_at_risk": RiskMetrics.var(returns),
+                "conditional_var": RiskMetrics.cvar(returns),
+            }
 
         return report

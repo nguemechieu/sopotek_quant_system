@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import sys
 from pathlib import Path
@@ -116,6 +117,16 @@ class FakeOandaSession:
         self.closed = True
 
 
+class FakeOandaEmptyBidSession(FakeOandaSession):
+    def request(self, method, url, headers=None, params=None, json=None):
+        if "/candles" in url:
+            params = dict(params or {})
+            self.last_candle_params = params
+            if str(params.get("price") or "M").upper() == "B":
+                return FakeResponse({"candles": []})
+        return super().request(method, url, headers=headers, params=params, json=json)
+
+
 class FakeAlpacaREST:
     def __init__(self, api_key, secret, base_url, api_version="v2"):
         self.api_key = api_key
@@ -224,6 +235,92 @@ def test_oanda_broker_supports_switching_between_bid_and_mid_candles(monkeypatch
         bid_candles = await broker.fetch_ohlcv("EUR/USD", timeframe="1h", limit=2)
         assert broker.session.last_candle_params["price"] == "B"
         assert bid_candles[0][1:5] == [0.9998, 1.9998, 0.4998, 1.4998]
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_oanda_broker_falls_back_to_midpoint_candles_when_bid_history_is_empty(monkeypatch):
+    import broker.oanda_broker as oanda_module
+
+    monkeypatch.setattr(oanda_module.aiohttp, "ClientSession", FakeOandaEmptyBidSession)
+
+    async def scenario():
+        broker = OandaBroker(
+            SimpleNamespace(
+                api_key="token",
+                account_id="acct-1",
+                mode="practice",
+                options={"candle_price_component": "bid"},
+            )
+        )
+
+        candles = await broker.fetch_ohlcv("EUR/USD", timeframe="1h", limit=2)
+
+        assert broker.session.last_candle_params["price"] == "M"
+        assert candles[0][1:5] == [1.0, 2.0, 0.5, 1.5]
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_oanda_broker_falls_back_to_recent_time_window_when_latest_count_history_is_empty(monkeypatch):
+    import broker.oanda_broker as oanda_module
+
+    class EmptyCountOandaSession:
+        def __init__(self, *args, **kwargs):
+            self.closed = False
+            self.calls = []
+
+        def request(self, method, url, headers=None, params=None, json=None):
+            params = dict(params or {})
+            self.calls.append(params)
+            if "/candles" not in url:
+                raise AssertionError(f"Unhandled Oanda URL: {method} {url}")
+            if "count" in params:
+                candles = [
+                    {
+                        "complete": False,
+                        "time": "2026-01-04T12:00:00Z",
+                        "bid": {"o": "1.3", "h": "1.4", "l": "1.2", "c": "1.35"},
+                        "volume": 3,
+                    }
+                ]
+            else:
+                candles = [
+                    {
+                        "complete": True,
+                        "time": "2026-01-04T10:00:00Z",
+                        "bid": {"o": "1.1", "h": "1.2", "l": "1.0", "c": "1.15"},
+                        "volume": 11,
+                    },
+                    {
+                        "complete": True,
+                        "time": "2026-01-04T11:00:00Z",
+                        "bid": {"o": "1.15", "h": "1.25", "l": "1.1", "c": "1.2"},
+                        "volume": 12,
+                    },
+                ]
+            return FakeResponse({"candles": candles})
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(oanda_module.aiohttp, "ClientSession", EmptyCountOandaSession)
+
+    async def scenario():
+        broker = OandaBroker(SimpleNamespace(api_key="token", account_id="acct-1", mode="practice"))
+        broker._utc_now = lambda: datetime(2026, 1, 4, 12, 0, tzinfo=timezone.utc)
+
+        candles = await broker.fetch_ohlcv("EUR/USD", timeframe="1h", limit=2)
+
+        assert [row[0] for row in candles] == [
+            "2026-01-04T10:00:00Z",
+            "2026-01-04T11:00:00Z",
+        ]
+        assert "count" in broker.session.calls[0]
+        assert "from" in broker.session.calls[1]
+        assert "to" in broker.session.calls[1]
         await broker.close()
 
     asyncio.run(scenario())

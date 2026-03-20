@@ -35,8 +35,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem,
     QAbstractItemView,
     QPushButton, QLabel, QComboBox, QProgressBar,
-    QTabWidget, QToolBar, QFileDialog, QDialog, QGridLayout, QDoubleSpinBox, QMessageBox, QFormLayout, QInputDialog, QColorDialog, QDateEdit,
-    QFrame, QHeaderView, QMenu, QMenuBar,
+    QTabWidget, QToolBar, QDialog, QGridLayout, QDoubleSpinBox, QMessageBox, QFormLayout, QInputDialog, QColorDialog, 
+    QFrame, QHeaderView,
     QHBoxLayout, QSizePolicy, QTextEdit, QTextBrowser, QApplication, QLineEdit, QSlider, QCheckBox, QScrollArea
 )
 

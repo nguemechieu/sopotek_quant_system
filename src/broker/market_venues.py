@@ -1,4 +1,4 @@
-SPOT_ONLY_EXCHANGES = {"binanceus", "coinbase"}
+SPOT_ONLY_EXCHANGES = {"binanceus"}
 
 MARKET_VENUE_CHOICES = [
     ("Auto", "auto"),
@@ -21,6 +21,9 @@ def normalize_market_venue(value, default="auto"):
 def supported_market_venues_for_profile(broker_type=None, exchange=None):
     normalized_type = str(broker_type or "").strip().lower()
     normalized_exchange = str(exchange or "").strip().lower()
+
+    if normalized_exchange == "coinbase":
+        return ["auto", "spot", "derivative"]
 
     if normalized_exchange in SPOT_ONLY_EXCHANGES:
         return ["auto", "spot"]

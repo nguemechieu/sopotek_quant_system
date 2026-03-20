@@ -138,6 +138,7 @@ class CCXTBroker(BaseBroker):
         self._ohlcv_inflight = {}
         self._coinbase_ohlcv_semaphore = None
         self._account_asset_codes = []
+        self._market_symbol_lookup = set()
 
         if not self.exchange_name:
             raise ValueError("CCXT exchange name is required")
@@ -178,6 +179,44 @@ class CCXTBroker(BaseBroker):
 
     def _exchange_code(self):
         return str(self.exchange_name or "").strip().lower()
+
+    @staticmethod
+    def _normalize_market_symbol(symbol):
+        return str(symbol or "").strip().upper().replace("_", "/").replace("-", "/")
+
+    def _refresh_market_symbol_lookup(self, markets=None):
+        lookup = set()
+
+        for symbol in self.symbols or []:
+            normalized = self._normalize_market_symbol(symbol)
+            if normalized:
+                lookup.add(normalized)
+
+        if isinstance(markets, dict):
+            for market_symbol, market in markets.items():
+                normalized_market_symbol = self._normalize_market_symbol(market_symbol)
+                if normalized_market_symbol:
+                    lookup.add(normalized_market_symbol)
+
+                if isinstance(market, dict):
+                    normalized_declared_symbol = self._normalize_market_symbol(market.get("symbol"))
+                    if normalized_declared_symbol:
+                        lookup.add(normalized_declared_symbol)
+
+        self._market_symbol_lookup = lookup
+        return lookup
+
+    def supports_symbol(self, symbol):
+        normalized_symbol = self._normalize_market_symbol(symbol)
+        if not normalized_symbol:
+            return False
+
+        lookup = getattr(self, "_market_symbol_lookup", None)
+        if not lookup:
+            markets = getattr(self.exchange, "markets", {}) if self.exchange is not None else {}
+            lookup = self._refresh_market_symbol_lookup(markets)
+
+        return normalized_symbol in lookup
 
     def _normalize_credentials(self):
         self.exchange_name = self._normalized_credential(self.exchange_name)
@@ -327,6 +366,8 @@ class CCXTBroker(BaseBroker):
             return "option"
         if self.market_preference == "derivative":
             subtype = str(self.extra_options.get("defaultSubType", "") or "").strip().lower()
+            if self._exchange_code() == "coinbase":
+                return subtype if subtype in {"future", "swap"} else None
             return "future" if subtype == "future" else "swap"
         return None
 
@@ -347,6 +388,50 @@ class CCXTBroker(BaseBroker):
         for key in ("type", "marketType", "subType", "category"):
             if str(market.get(key) or "").strip().lower() == "otc":
                 return True
+        return False
+
+    def _market_flag_summary(self, markets):
+        summary = {
+            "flags_detected": False,
+            "spot": False,
+            "derivative": False,
+            "option": False,
+            "otc": False,
+        }
+        if not isinstance(markets, dict):
+            return summary
+
+        for market in markets.values():
+            if not isinstance(market, dict):
+                continue
+            if any(key in market for key in ("spot", "contract", "swap", "future", "option", "otc")):
+                summary["flags_detected"] = True
+            if bool(market.get("spot")):
+                summary["spot"] = True
+            if self._market_is_derivative(market):
+                summary["derivative"] = True
+            if bool(market.get("option")):
+                summary["option"] = True
+            if self._market_is_otc(market):
+                summary["otc"] = True
+
+        return summary
+
+    def _supports_coinbase_positions_endpoint(self, markets):
+        effective_preference = normalize_market_venue(getattr(self, "resolved_market_preference", None), default="auto")
+        if effective_preference == "spot":
+            return False
+        if effective_preference == "option":
+            return False
+
+        if not isinstance(markets, dict) or not markets:
+            return effective_preference == "derivative"
+
+        summary = self._market_flag_summary(markets)
+        if effective_preference == "derivative":
+            return summary["derivative"]
+        if summary["derivative"] and not summary["spot"]:
+            return True
         return False
 
     def _filtered_symbols_from_markets(self, markets):
@@ -376,23 +461,22 @@ class CCXTBroker(BaseBroker):
         return sorted(dict.fromkeys(fallback))
 
     def _supports_positions_endpoint(self):
-        if self._exchange_code() in SPOT_ONLY_EXCHANGES:
+        exchange_code = self._exchange_code()
+        if exchange_code in SPOT_ONLY_EXCHANGES:
             return False
 
         markets = getattr(self.exchange, "markets", None)
+        if exchange_code == "coinbase":
+            return self._supports_coinbase_positions_endpoint(markets)
+
         if not isinstance(markets, dict) or not markets:
             return True
 
-        market_flags_detected = False
-        for market in markets.values():
-            if not isinstance(market, dict):
-                continue
-            if any(key in market for key in ("spot", "contract", "swap", "future", "option")):
-                market_flags_detected = True
-            if any(bool(market.get(key)) for key in ("contract", "swap", "future", "option")):
-                return True
+        summary = self._market_flag_summary(markets)
+        if summary["derivative"] or summary["option"]:
+            return True
 
-        if market_flags_detected:
+        if summary["flags_detected"]:
             return False
 
         return True
@@ -404,6 +488,7 @@ class CCXTBroker(BaseBroker):
             self.extra_options["market_type"] = normalized
         markets = getattr(self.exchange, "markets", {}) if self.exchange is not None else {}
         self.symbols = self._filtered_symbols_from_markets(markets)
+        self._refresh_market_symbol_lookup(markets)
         return list(self.symbols)
 
     def supported_market_venues(self):
@@ -411,6 +496,7 @@ class CCXTBroker(BaseBroker):
         if exchange_code in SPOT_ONLY_EXCHANGES:
             return ["auto", "spot"]
 
+        profile_venues = supported_market_venues_for_profile("crypto", exchange_code)
         markets = getattr(getattr(self, "exchange", None), "markets", None)
         if isinstance(markets, dict) and markets:
             venues = ["auto"]
@@ -422,9 +508,13 @@ class CCXTBroker(BaseBroker):
                 venues.append("option")
             if any(self._market_is_otc(market) for market in markets.values()):
                 venues.append("otc")
-            return list(dict.fromkeys(venues))
+            if exchange_code == "coinbase":
+                venues = [venue for venue in venues if venue != "option"]
+                return list(dict.fromkeys(profile_venues + venues))
+            if len(venues) > 1:
+                return list(dict.fromkeys(venues))
 
-        return supported_market_venues_for_profile("crypto", exchange_code)
+        return profile_venues
 
     def _build_exchange_config(self):
         cfg = {
@@ -652,8 +742,10 @@ class CCXTBroker(BaseBroker):
         return [(symbol, base) for _, symbol, base in ranked]
 
     async def _spot_symbol_mid_price(self, symbol):
-        normalized_symbol = str(symbol or "").upper().strip()
+        normalized_symbol = self._normalize_market_symbol(symbol)
         if not normalized_symbol:
+            return None
+        if not self.supports_symbol(normalized_symbol):
             return None
 
         now = time.monotonic()
@@ -954,7 +1046,9 @@ class CCXTBroker(BaseBroker):
                 await self.exchange.load_time_difference()
 
             await self.exchange.load_markets()
-            self.symbols = self._filtered_symbols_from_markets(getattr(self.exchange, "markets", {}) or {})
+            markets = getattr(self.exchange, "markets", {}) or {}
+            self.symbols = self._filtered_symbols_from_markets(markets)
+            self._refresh_market_symbol_lookup(markets)
             self._connected = True
         except Exception:
             await self.close()
@@ -978,6 +1072,7 @@ class CCXTBroker(BaseBroker):
         self.exchange = None
         self.session = None
         self.symbols = []
+        self._market_symbol_lookup = set()
         self._connected = False
 
         if errors:
@@ -1022,13 +1117,24 @@ class CCXTBroker(BaseBroker):
     # ==========================================================
 
     async def fetch_ticker(self, symbol):
-        return await self._call_unified("fetch_ticker", symbol)
+        normalized_symbol = self._normalize_market_symbol(symbol)
+        if not self.supports_symbol(normalized_symbol):
+            return None
+        return await self._call_unified("fetch_ticker", normalized_symbol, default=None)
 
     async def fetch_tickers(self, symbols=None):
         return await self._call_unified("fetch_tickers", symbols, default={})
 
     async def fetch_orderbook(self, symbol, limit=100):
-        return await self._call_unified("fetch_order_book", symbol, limit)
+        normalized_symbol = self._normalize_market_symbol(symbol)
+        if not self.supports_symbol(normalized_symbol):
+            return {"bids": [], "asks": []}
+        return await self._call_unified(
+            "fetch_order_book",
+            normalized_symbol,
+            limit,
+            default={"bids": [], "asks": []},
+        )
 
     async def fetch_order_book(self, symbol, limit=100):
         return await self.fetch_orderbook(symbol, limit=limit)
@@ -1091,28 +1197,37 @@ class CCXTBroker(BaseBroker):
         return candles[-requested_limit:]
 
     async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+        normalized_symbol = self._normalize_market_symbol(symbol)
+        if not self.supports_symbol(normalized_symbol):
+            return []
         if self._exchange_code() == "coinbase":
-            return await self._fetch_coinbase_ohlcv_cached(symbol, timeframe=timeframe, limit=limit)
-        self.logger.debug("Fetching OHLCV for %s", symbol)
+            return await self._fetch_coinbase_ohlcv_cached(normalized_symbol, timeframe=timeframe, limit=limit)
+        self.logger.debug("Fetching OHLCV for %s", normalized_symbol)
         return await self._call_unified(
             "fetch_ohlcv",
-            symbol,
+            normalized_symbol,
             timeframe=timeframe,
             limit=limit,
             default=[],
         )
 
     async def fetch_trades(self, symbol, limit=None):
+        normalized_symbol = self._normalize_market_symbol(symbol)
+        if not self.supports_symbol(normalized_symbol):
+            return []
         kwargs = {}
         if limit is not None:
             kwargs["limit"] = limit
-        return await self._call_unified("fetch_trades", symbol, default=[], **kwargs)
+        return await self._call_unified("fetch_trades", normalized_symbol, default=[], **kwargs)
 
     async def fetch_my_trades(self, symbol=None, limit=None):
+        normalized_symbol = self._normalize_market_symbol(symbol) if symbol else None
+        if normalized_symbol and not self.supports_symbol(normalized_symbol):
+            return []
         kwargs = {}
         if limit is not None:
             kwargs["limit"] = limit
-        return await self._call_unified("fetch_my_trades", symbol, default=[], **kwargs)
+        return await self._call_unified("fetch_my_trades", normalized_symbol, default=[], **kwargs)
 
     # ==========================================================
     # TRADING

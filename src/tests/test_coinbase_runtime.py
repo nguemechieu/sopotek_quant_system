@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import ccxt.async_support as ccxt
 import jwt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -206,6 +207,71 @@ class FakeCoinbaseCrossValuationExchange(FakeCoinbaseExchange):
         return {"total": {"EUR": 1000.0, "AAVE": 2.0}}
 
 
+class FakeStrictCoinbaseExchange(FakeCoinbaseExchange):
+    async def load_markets(self):
+        self.markets = {
+            "BTC/USD": {"symbol": "BTC/USD", "active": True},
+            "ETH/USD": {"symbol": "ETH/USD", "active": True},
+        }
+        return self.markets
+
+    async def fetch_ticker(self, symbol):
+        if symbol not in self.markets:
+            raise ccxt.BadSymbol(f"coinbase does not have market symbol {symbol}")
+        return await super().fetch_ticker(symbol)
+
+    async def fetch_order_book(self, symbol, limit=100):
+        if symbol not in self.markets:
+            raise ccxt.BadSymbol(f"coinbase does not have market symbol {symbol}")
+        return await super().fetch_order_book(symbol, limit=limit)
+
+    async def fetch_ohlcv(self, symbol, timeframe="1h", since=None, limit=100, params=None):
+        if symbol not in self.markets:
+            raise ccxt.BadSymbol(f"coinbase does not have market symbol {symbol}")
+        return await super().fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit, params=params)
+
+    async def fetch_trades(self, symbol, limit=None):
+        if symbol not in self.markets:
+            raise ccxt.BadSymbol(f"coinbase does not have market symbol {symbol}")
+        return await super().fetch_trades(symbol, limit=limit)
+
+
+class FakeCoinbaseDerivativeExchange(FakeCoinbaseExchange):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.fetch_positions_calls = []
+        self.has["fetchPositions"] = True
+
+    async def load_markets(self):
+        self.markets = {
+            "BTC/USD:USD": {
+                "symbol": "BTC/USD:USD",
+                "active": True,
+                "base": "BTC",
+                "quote": "USD",
+                "settle": "USD",
+                "spot": False,
+                "contract": True,
+                "future": True,
+            },
+            "ETH/USD:USD": {
+                "symbol": "ETH/USD:USD",
+                "active": True,
+                "base": "ETH",
+                "quote": "USD",
+                "settle": "USD",
+                "spot": False,
+                "contract": True,
+                "future": True,
+            },
+        }
+        return self.markets
+
+    async def fetch_positions(self, symbols=None):
+        self.fetch_positions_calls.append(symbols)
+        return [{"symbol": "BTC/USD:USD", "contracts": 1.0, "side": "long"}]
+
+
 def test_coinbase_ccxt_broker_supports_market_data_and_order_methods(monkeypatch):
     import broker.ccxt_broker as broker_mod
 
@@ -241,6 +307,7 @@ def test_coinbase_ccxt_broker_supports_market_data_and_order_methods(monkeypatch
 
         assert broker.session.connector["resolver"] == "threaded-resolver"
         assert "BTC/USD" in await broker.fetch_symbols()
+        assert broker.supported_market_venues() == ["auto", "spot", "derivative"]
         assert (await broker.fetch_ticker("BTC/USD"))["bid"] == 64999.0
         assert len(await broker.fetch_ohlcv("BTC/USD", limit=3)) == 3
         assert (await broker.fetch_orderbook("BTC/USD"))["asks"][0][0] == 65001.0
@@ -271,6 +338,111 @@ def test_coinbase_ccxt_broker_supports_market_data_and_order_methods(monkeypatch
         assert stop_limit_order["type"] == "stop_limit"
         assert stop_limit_order["stop_price"] == 65010.0
         assert stop_limit_order["params"]["stopPrice"] == 65010.0
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_coinbase_ccxt_broker_skips_unsupported_symbols(monkeypatch):
+    import broker.ccxt_broker as broker_mod
+
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "TCPConnector",
+        lambda family=None, resolver=None, ttl_dns_cache=None: {
+            "family": family,
+            "resolver": resolver,
+            "ttl_dns_cache": ttl_dns_cache,
+        },
+    )
+    monkeypatch.setattr(broker_mod.aiohttp, "ThreadedResolver", lambda: "threaded-resolver")
+    monkeypatch.setattr(broker_mod.aiohttp, "ClientSession", lambda connector=None, **kwargs: FakeSession(connector=connector, **kwargs))
+    monkeypatch.setattr(broker_mod.ccxt, "coinbase", FakeStrictCoinbaseExchange, raising=False)
+
+    async def scenario():
+        broker = CCXTBroker(
+            SimpleNamespace(
+                exchange="coinbase",
+                api_key="organizations/test/apiKeys/key-1",
+                secret=(
+                    "-----BEGIN EC PRIVATE KEY-----\n"
+                    "MHcCAQEEIAqSV4qAfY1Nm0xd6k95EZ39suUWAuze5Vuhn671kB9OoAoGCCqGSM49\n"
+                    "AwEHoUQDQgAEcgYO1ly0wyz23wipRFpoM6Oyvh6WB1wy9EB8PHhrNw5VSJsAqsb7\n"
+                    "gc1E+mZ1HVX3H8eKNlw8GrQCQJsZ5ExllA==\n"
+                    "-----END EC PRIVATE KEY-----\n"
+                ),
+                password=None,
+                uid=None,
+                mode="live",
+                sandbox=False,
+                timeout=15000,
+                options={},
+                params={},
+            )
+        )
+
+        await broker.connect()
+
+        assert broker.supports_symbol("BTC/USD") is True
+        assert broker.supports_symbol("EUR/USD") is False
+        assert await broker.fetch_ticker("EUR/USD") is None
+        assert await broker.fetch_orderbook("EUR/USD") == {"bids": [], "asks": []}
+        assert await broker.fetch_ohlcv("EUR/USD", timeframe="1h", limit=50) == []
+        assert await broker.fetch_trades("EUR/USD", limit=20) == []
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_coinbase_ccxt_broker_derivative_mode_uses_native_positions(monkeypatch):
+    import broker.ccxt_broker as broker_mod
+
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "TCPConnector",
+        lambda family=None, resolver=None, ttl_dns_cache=None: {
+            "family": family,
+            "resolver": resolver,
+            "ttl_dns_cache": ttl_dns_cache,
+        },
+    )
+    monkeypatch.setattr(broker_mod.aiohttp, "ThreadedResolver", lambda: "threaded-resolver")
+    monkeypatch.setattr(broker_mod.aiohttp, "ClientSession", lambda connector=None, **kwargs: FakeSession(connector=connector, **kwargs))
+    monkeypatch.setattr(broker_mod.ccxt, "coinbase", FakeCoinbaseDerivativeExchange, raising=False)
+
+    async def scenario():
+        broker = CCXTBroker(
+            SimpleNamespace(
+                exchange="coinbase",
+                api_key="organizations/test/apiKeys/key-1",
+                secret=(
+                    "-----BEGIN EC PRIVATE KEY-----\n"
+                    "MHcCAQEEIAqSV4qAfY1Nm0xd6k95EZ39suUWAuze5Vuhn671kB9OoAoGCCqGSM49\n"
+                    "AwEHoUQDQgAEcgYO1ly0wyz23wipRFpoM6Oyvh6WB1wy9EB8PHhrNw5VSJsAqsb7\n"
+                    "gc1E+mZ1HVX3H8eKNlw8GrQCQJsZ5ExllA==\n"
+                    "-----END EC PRIVATE KEY-----\n"
+                ),
+                password=None,
+                uid=None,
+                mode="live",
+                sandbox=False,
+                timeout=15000,
+                options={"market_type": "derivative", "defaultSubType": "future"},
+                params={},
+            )
+        )
+
+        await broker.connect()
+        positions = await broker.fetch_positions()
+
+        assert broker.exchange.cfg["options"]["defaultType"] == "future"
+        assert broker.symbols == ["BTC/USD:USD", "ETH/USD:USD"]
+        assert broker.supported_market_venues() == ["auto", "spot", "derivative"]
+        assert broker._supports_positions_endpoint() is True
+        assert positions[0]["symbol"] == "BTC/USD:USD"
+        assert broker.exchange.fetch_positions_calls == [None]
 
         await broker.close()
 

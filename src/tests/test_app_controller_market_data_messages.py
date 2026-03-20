@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import ccxt.async_support as ccxt
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.ui.app_controller import AppController, _bounded_window_extent
@@ -137,6 +139,50 @@ def test_request_candle_data_warns_when_no_history_is_available():
     assert controller.candle_signal.calls == []
 
 
+def test_safe_fetch_ohlcv_does_not_synthesize_history_from_single_ticker():
+    logs = []
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.market_data_messages.no_synthetic_history")
+    controller.time_frame = "4h"
+    controller.terminal = SimpleNamespace(
+        system_console=SimpleNamespace(log=lambda message, level="INFO": logs.append((message, level)))
+    )
+    controller._market_data_warning_timestamps = {}
+    controller._resolve_history_limit = lambda limit=None: int(limit or 200)
+
+    async def fake_load(symbol, timeframe="1h", limit=200, start_time=None, end_time=None):
+        return []
+
+    persisted = []
+
+    async def fake_persist(symbol, timeframe, rows):
+        persisted.append((symbol, timeframe, list(rows)))
+
+    ticker_calls = []
+
+    async def fake_ticker(symbol):
+        ticker_calls.append(symbol)
+        return {
+            "symbol": symbol,
+            "last": 71.25,
+        }
+
+    async def failing_fetch_ohlcv(symbol, timeframe="1h", limit=200, start_time=None, end_time=None):
+        raise RuntimeError("history unavailable")
+
+    controller._load_candles_from_db = fake_load
+    controller._persist_candles_to_db = fake_persist
+    controller._safe_fetch_ticker = fake_ticker
+    controller.broker = SimpleNamespace(fetch_ohlcv=failing_fetch_ohlcv)
+
+    rows = asyncio.run(controller._safe_fetch_ohlcv("ALCX/USDC", timeframe="4h", limit=240))
+
+    assert rows == []
+    assert ticker_calls == []
+    assert persisted == []
+    assert logs == []
+
+
 def test_safe_fetch_ticker_uses_cached_stellar_snapshot_after_dns_failure():
     logs = []
     controller = AppController.__new__(AppController)
@@ -201,6 +247,41 @@ def test_safe_fetch_ticker_rate_limits_hotspot_warning_without_cache():
     assert logs == [
         (
             "Stellar Horizon is temporarily unreachable (Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]). The app will keep retrying automatically.",
+            "WARN",
+        )
+    ]
+
+
+def test_safe_fetch_ticker_skips_unsupported_coinbase_symbol():
+    logs = []
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.market_data_messages.unsupported_symbol")
+    controller.terminal = SimpleNamespace(
+        system_console=SimpleNamespace(log=lambda message, level="INFO": logs.append((message, level)))
+    )
+    controller.ticker_stream = TickerStream()
+    controller.ticker_buffer = TickerBuffer(max_length=20)
+    controller._market_data_warning_timestamps = {}
+
+    class UnsupportedCoinbaseBroker:
+        exchange_name = "coinbase"
+        symbols = ["BTC/USD", "ETH/USD"]
+
+        @staticmethod
+        def supports_symbol(symbol):
+            return symbol in {"BTC/USD", "ETH/USD"}
+
+        async def fetch_ticker(self, symbol):
+            raise ccxt.BadSymbol(f"coinbase does not have market symbol {symbol}")
+
+    controller.broker = UnsupportedCoinbaseBroker()
+
+    result = asyncio.run(controller._safe_fetch_ticker("EUR/USD"))
+
+    assert result is None
+    assert logs == [
+        (
+            "COINBASE does not support market symbol EUR/USD on the active broker. The app will skip live market data for this symbol until you switch to a supported market.",
             "WARN",
         )
     ]
@@ -297,6 +378,42 @@ def test_set_forex_candle_price_component_updates_live_oanda_preferences():
     assert controller.settings._values["market_data/forex_candle_price_component"] == "bid"
     assert controller.config.broker.options["candle_price_component"] == "bid"
     assert observed == ["bid"]
+
+
+def test_safe_fetch_ohlcv_returns_live_broker_rows_for_non_range_requests():
+    controller = AppController.__new__(AppController)
+    controller.limit = 50000
+    controller.MAX_HISTORY_LIMIT = 50000
+    controller.time_frame = "1h"
+    controller.logger = logging.getLogger("test.market_data_messages.live_broker_rows")
+    controller.terminal = None
+    controller._market_data_warning_timestamps = {}
+    controller._market_data_shortfall_notices = {}
+
+    class Broker:
+        exchange_name = "oanda"
+        symbols = ["USD_JPY"]
+
+        async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100, start_time=None, end_time=None):
+            return [
+                ["2026-03-19T10:00:00Z", 150.0, 151.0, 149.5, 150.5, 100.0],
+                ["2026-03-19T11:00:00Z", 150.5, 151.2, 150.1, 150.9, 110.0],
+            ]
+
+    async def fake_load(symbol, timeframe="1h", limit=200, start_time=None, end_time=None):
+        return []
+
+    async def fake_persist(symbol, timeframe, rows):
+        return None
+
+    controller.broker = Broker()
+    controller._load_candles_from_db = fake_load
+    controller._persist_candles_to_db = fake_persist
+
+    rows = asyncio.run(controller._safe_fetch_ohlcv("USD/JPY", timeframe="1h", limit=180))
+
+    assert len(rows) == 2
+    assert rows[0][0].startswith("2026-03-19T10:00:00")
 
 
 

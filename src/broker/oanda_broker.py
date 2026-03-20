@@ -220,6 +220,23 @@ class OandaBroker(BaseBroker):
     def _format_time_boundary(value):
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
+    @staticmethod
+    def _utc_now():
+        return datetime.now(timezone.utc)
+
+    def _recent_history_boundaries(self, granularity, requested):
+        step_seconds = self._granularity_seconds(granularity)
+        if not step_seconds:
+            return None, None
+        try:
+            requested_value = max(1, int(requested or 1))
+        except Exception:
+            requested_value = 1
+        overscan = min(max(requested_value // 4, 8), 500)
+        end_boundary = self._utc_now()
+        start_boundary = end_boundary - timedelta(seconds=step_seconds * (requested_value + overscan))
+        return start_boundary, end_boundary
+
     def _extract_price_entry(self, payload, symbol):
         prices = payload.get("prices", []) if isinstance(payload, dict) else []
         target = self._normalize_symbol(symbol)
@@ -472,20 +489,12 @@ class OandaBroker(BaseBroker):
 
         return {"symbol": self._normalize_symbol(symbol), "bids": bids, "asks": asks}
 
-    async def fetch_ohlcv(self, symbol, timeframe="H1", limit=100, start_time=None, end_time=None):
-        instrument = self._normalize_symbol(symbol)
-        granularity = self._normalize_granularity(timeframe)
-        requested = max(1, int(limit or 100))
+    async def _fetch_ohlcv_with_component(self, instrument, granularity, requested, *, price_component, start_boundary=None, end_boundary=None):
         collected = []
         seen_times = set()
         cursor_to = None
         previous_oldest = None
-        price_component = self._normalize_candle_price_component(
-            getattr(self, "candle_price_component", "bid")
-        )
         candle_price_bucket = self._candle_price_bucket(price_component)
-        start_boundary = self._normalize_time_boundary(start_time, end_of_day=False)
-        end_boundary = self._normalize_time_boundary(end_time, end_of_day=True)
         step_seconds = self._granularity_seconds(granularity)
 
         if start_boundary is not None and end_boundary is not None:
@@ -628,6 +637,52 @@ class OandaBroker(BaseBroker):
             cursor_to = oldest_time
 
         return collected[-requested:]
+
+    async def fetch_ohlcv(self, symbol, timeframe="H1", limit=100, start_time=None, end_time=None):
+        instrument = self._normalize_symbol(symbol)
+        granularity = self._normalize_granularity(timeframe)
+        requested = max(1, int(limit or 100))
+        price_component = self._normalize_candle_price_component(
+            getattr(self, "candle_price_component", "bid")
+        )
+        start_boundary = self._normalize_time_boundary(start_time, end_of_day=False)
+        end_boundary = self._normalize_time_boundary(end_time, end_of_day=True)
+        explicit_range_requested = start_boundary is not None or end_boundary is not None
+
+        async def _load_history(component, range_start=None, range_end=None):
+            return await self._fetch_ohlcv_with_component(
+                instrument,
+                granularity,
+                requested,
+                price_component=component,
+                start_boundary=range_start,
+                end_boundary=range_end,
+            )
+
+        async def _load_recent_window(component):
+            if explicit_range_requested:
+                return []
+            recent_start, recent_end = self._recent_history_boundaries(granularity, requested)
+            if recent_start is None or recent_end is None:
+                return []
+            return await _load_history(component, recent_start, recent_end)
+
+        candles = await _load_history(price_component, start_boundary, end_boundary)
+        if not candles:
+            candles = await _load_recent_window(price_component)
+        if candles or price_component == "M":
+            return candles
+
+        self.logger.warning(
+            "Oanda returned no %s candles for %s (%s); retrying with midpoint candles.",
+            self._candle_price_bucket(price_component),
+            instrument,
+            granularity,
+        )
+        candles = await _load_history("M", start_boundary, end_boundary)
+        if candles:
+            return candles
+        return await _load_recent_window("M")
 
     async def fetch_trades(self, symbol=None, limit=None):
         payload = await self._request("GET", f"/v3/accounts/{self.account_id}/trades")

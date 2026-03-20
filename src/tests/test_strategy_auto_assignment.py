@@ -211,6 +211,55 @@ def test_strategy_auto_assignment_timeframes_are_narrowed_for_coinbase():
     assert controller._strategy_auto_assignment_symbol_limit() == controller.COINBASE_AUTO_ASSIGN_SYMBOL_LIMIT
 
 
+def test_coinbase_derivative_selection_keeps_contract_symbols_and_broadens_scan_timeframes():
+    controller = _make_controller()
+    controller.strategy_assignment_scan_timeframes = None
+    controller.market_trade_preference = "derivative"
+    controller.broker = SimpleNamespace(
+        exchange_name="coinbase",
+        market_preference="derivative",
+        resolved_market_preference="derivative",
+        exchange=SimpleNamespace(
+            markets={
+                "BTC/USD": {"symbol": "BTC/USD", "spot": True, "base": "BTC", "quote": "USD"},
+                "BTC/USD:USD": {
+                    "symbol": "BTC/USD:USD",
+                    "contract": True,
+                    "future": True,
+                    "base": "BTC",
+                    "quote": "USD",
+                    "settle": "USD",
+                },
+                "ETH/USD:USD": {
+                    "symbol": "ETH/USD:USD",
+                    "contract": True,
+                    "future": True,
+                    "base": "ETH",
+                    "quote": "USD",
+                    "settle": "USD",
+                },
+            }
+        ),
+    )
+
+    symbols = ["BTC/USD", "BTC/USD:USD", "ETH/USD:USD"]
+
+    filtered = controller._filter_symbols_for_trading(symbols, "crypto", "coinbase")
+    selected = asyncio.run(controller._select_trade_symbols(symbols, "crypto", "coinbase"))
+
+    assert filtered == ["BTC/USD:USD", "ETH/USD:USD"]
+    assert selected == ["BTC/USD:USD", "ETH/USD:USD"]
+    assert controller._strategy_auto_assignment_timeframes(timeframe="15m") == [
+        "15m",
+        "1m",
+        "5m",
+        "30m",
+        "1h",
+        "4h",
+        "1d",
+    ]
+
+
 def test_auto_rank_and_assign_strategies_assigns_unlocked_symbols_and_preserves_manual_locks():
     controller = _make_controller()
     manual_assignment = controller.assign_strategy_to_symbol("BTC/USDT", "Trend Following", timeframe="4h")

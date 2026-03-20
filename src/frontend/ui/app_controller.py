@@ -1399,8 +1399,68 @@ class AppController(QMainWindow):
 
         return [s for s in symbols if s]
 
+    def _active_market_trade_preference_value(self):
+        broker = getattr(self, "broker", None)
+        if broker is not None:
+            for attr in ("resolved_market_preference", "market_preference"):
+                candidate = normalize_market_venue(getattr(broker, attr, None), default="auto")
+                if candidate != "auto":
+                    return candidate
+        return normalize_market_venue(getattr(self, "market_trade_preference", None), default="auto")
+
+    def _broker_market_for_symbol(self, symbol):
+        if not isinstance(symbol, str) or not symbol.strip():
+            return None
+
+        markets = getattr(getattr(getattr(self, "broker", None), "exchange", None), "markets", None)
+        if not isinstance(markets, dict) or not markets:
+            return None
+
+        normalized_symbol = str(symbol).strip().upper().replace("_", "/").replace("-", "/")
+        direct_market = markets.get(symbol)
+        if isinstance(direct_market, dict):
+            return direct_market
+
+        for market_symbol, market in markets.items():
+            if not isinstance(market, dict):
+                continue
+            declared_symbol = str(market.get("symbol") or market_symbol or "").strip()
+            normalized_market_symbol = declared_symbol.upper().replace("_", "/").replace("-", "/")
+            if normalized_market_symbol == normalized_symbol:
+                return market
+
+        return None
+
+    def _symbol_market_is_derivative(self, symbol, market=None):
+        market = market if isinstance(market, dict) else self._broker_market_for_symbol(symbol)
+        if isinstance(market, dict):
+            if bool(market.get("option")):
+                return False
+            return any(bool(market.get(key)) for key in ("contract", "swap", "future"))
+
+        normalized_symbol = str(symbol or "").upper().strip()
+        return ":" in normalized_symbol or normalized_symbol.endswith(("-PERP", "/PERP")) or "PERPETUAL" in normalized_symbol
+
+    def _market_symbol_base_quote(self, symbol, market=None):
+        market = market if isinstance(market, dict) else self._broker_market_for_symbol(symbol)
+        if isinstance(market, dict):
+            base = str(market.get("base") or "").upper().strip()
+            quote = str(market.get("quote") or market.get("settle") or "").upper().strip()
+            if base and quote:
+                return base, quote
+
+        normalized_symbol = str(symbol or "").upper().strip().replace("_", "/").replace("-", "/")
+        if "/" not in normalized_symbol:
+            return normalized_symbol, ""
+
+        base, quote = normalized_symbol.split("/", 1)
+        return base.strip(), quote.split(":", 1)[0].strip()
+
     def _filter_symbols_for_trading(self, symbols, broker_type, exchange=None):
-        if str(exchange or "").lower() == "stellar":
+        exchange_code = self._active_exchange_code(exchange=exchange)
+        active_preference = self._active_market_trade_preference_value()
+
+        if exchange_code == "stellar":
             filtered = []
             for symbol in symbols:
                 if not isinstance(symbol, str) or "/" not in symbol:
@@ -1417,6 +1477,22 @@ class AppController(QMainWindow):
 
         if broker_type != "crypto":
             return list(dict.fromkeys(symbols))
+
+        if exchange_code == "coinbase" and active_preference == "derivative":
+            filtered = []
+            for symbol in symbols:
+                if not isinstance(symbol, str) or not symbol.strip():
+                    continue
+
+                market = self._broker_market_for_symbol(symbol)
+                if not self._symbol_market_is_derivative(symbol, market=market):
+                    continue
+
+                normalized_symbol = str((market or {}).get("symbol") or symbol).strip().upper()
+                if normalized_symbol:
+                    filtered.append(normalized_symbol)
+
+            return list(dict.fromkeys(filtered))
 
         filtered = []
         for symbol in symbols:
@@ -1441,6 +1517,8 @@ class AppController(QMainWindow):
 
     def _is_spot_only_exchange_profile(self, broker_type=None, exchange=None):
         exchange_code = self._active_exchange_code(exchange=exchange)
+        if exchange_code == "coinbase":
+            return self._active_market_trade_preference_value() != "derivative"
         if exchange_code in SPOT_ONLY_EXCHANGES:
             return True
         return str(broker_type or "").strip().lower() == "stocks"
@@ -1548,13 +1626,14 @@ class AppController(QMainWindow):
             return symbols[:50]
 
         if exchange_code == "coinbase":
+            candidate_symbols = self._filter_symbols_for_trading(symbols, broker_type, exchange_code)
             prioritized = self._prioritize_symbols_for_trading(
-                symbols,
+                candidate_symbols,
                 top_n=self.COINBASE_SYMBOL_LIMIT,
                 quote_priority=self.COINBASE_QUOTE_PRIORITY,
                 account_assets=self._positive_balance_asset_codes(getattr(self, "balances", None)),
             )
-            return prioritized if prioritized else symbols[: self.COINBASE_SYMBOL_LIMIT]
+            return prioritized if prioritized else candidate_symbols[: self.COINBASE_SYMBOL_LIMIT]
 
         prioritized = self._prioritize_symbols_for_trading(symbols, top_n=30)
         return prioritized if prioritized else symbols[:30]
@@ -1572,14 +1651,19 @@ class AppController(QMainWindow):
         }
 
         def sort_key(symbol):
-            if not isinstance(symbol, str) or "/" not in symbol:
-                return (99, 99, symbol)
+            if not isinstance(symbol, str) or not symbol.strip():
+                return (99, 99, 99, "")
 
-            base, quote = symbol.upper().split("/", 1)
-            account_rank = 0 if base in account_asset_codes else 1
+            market = self._broker_market_for_symbol(symbol)
+            base, quote = self._market_symbol_base_quote(symbol, market=market)
+            if not base or not quote:
+                return (99, 99, 99, str(symbol).upper())
+
+            is_derivative = self._symbol_market_is_derivative(symbol, market=market)
+            account_rank = 0 if base in account_asset_codes or (is_derivative and quote in account_asset_codes) else 1
             preferred_rank = self.PREFERRED_BASES.index(base) if base in self.PREFERRED_BASES else len(self.PREFERRED_BASES)
             quote_rank = normalized_quote_priority.get(quote, 99)
-            return (account_rank, quote_rank, preferred_rank, base, quote)
+            return (account_rank, quote_rank, preferred_rank, f"{base}/{quote}")
 
         ordered = sorted(dict.fromkeys(symbols), key=sort_key)
         return ordered[:top_n]
@@ -5216,6 +5300,66 @@ class AppController(QMainWindow):
             )
         )
 
+    def _is_unsupported_market_symbol_error(self, exc):
+        name = str(getattr(getattr(exc, "__class__", None), "__name__", "") or "").strip().lower()
+        message = str(exc or "").strip().lower()
+        if "badsymbol" in name:
+            return True
+        return any(
+            token in message
+            for token in (
+                "does not have market symbol",
+                "unknown symbol",
+                "invalid symbol",
+                "symbol not found",
+                "unsupported symbol",
+            )
+        )
+
+    @staticmethod
+    def _normalize_market_data_symbol(symbol):
+        return str(symbol or "").strip().upper().replace("_", "/").replace("-", "/")
+
+    def _broker_supports_market_symbol(self, symbol):
+        normalized_symbol = self._normalize_market_data_symbol(symbol)
+        if not normalized_symbol:
+            return False
+
+        broker = getattr(self, "broker", None)
+        if broker is None:
+            return False
+
+        supports_symbol = getattr(broker, "supports_symbol", None)
+        if callable(supports_symbol):
+            try:
+                return bool(supports_symbol(normalized_symbol))
+            except Exception:
+                pass
+
+        symbols = getattr(broker, "symbols", None)
+        if isinstance(symbols, (list, tuple, set)):
+            normalized_symbols = {
+                self._normalize_market_data_symbol(item)
+                for item in symbols
+                if str(item or "").strip()
+            }
+            if normalized_symbols:
+                return normalized_symbol in normalized_symbols
+
+        return True
+
+    def _log_unsupported_market_symbol(self, broker_name, symbol):
+        normalized_symbol = self._normalize_market_data_symbol(symbol) or str(symbol or "").strip()
+        market_label = broker_name.upper() if broker_name else "BROKER"
+        self._log_market_data_warning_once(
+            f"unsupported-symbol:{broker_name}:{normalized_symbol}",
+            (
+                f"{market_label} does not support market symbol {normalized_symbol} on the active broker. "
+                "The app will skip live market data for this symbol until you switch to a supported market."
+            ),
+            interval_seconds=120.0,
+        )
+
     def _log_market_data_warning_once(self, key, message, *, interval_seconds=60.0):
         timestamps = getattr(self, "_market_data_warning_timestamps", None)
         if not isinstance(timestamps, dict):
@@ -5248,13 +5392,21 @@ class AppController(QMainWindow):
         if not self.broker:
             return None
 
+        normalized_symbol = self._normalize_market_data_symbol(symbol)
+        if not normalized_symbol:
+            return None
+
         broker_name = str(getattr(getattr(self, "broker", None), "exchange_name", "") or "").strip().lower()
         network_label = "Stellar Horizon" if broker_name == "stellar" else (broker_name.upper() if broker_name else "Market data")
+
+        if not self._broker_supports_market_symbol(normalized_symbol):
+            self._log_unsupported_market_symbol(broker_name, normalized_symbol)
+            return None
 
         # Primary path: use broker's native fetch_ticker call when available.
         if hasattr(self.broker, "fetch_ticker"):
             try:
-                tick = await self.broker.fetch_ticker(symbol)
+                tick = await self.broker.fetch_ticker(normalized_symbol)
                 if isinstance(tick, dict):
                     return tick
             except (TypeError, ValueError, RuntimeError, AttributeError, aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
@@ -5275,22 +5427,30 @@ class AppController(QMainWindow):
                     )
                     return None
                 self.logger.debug("Ticker fetch failed for %s: %s", symbol, exc)
+            except Exception as exc:
+                if self._is_unsupported_market_symbol_error(exc):
+                    self._log_unsupported_market_symbol(broker_name, normalized_symbol)
+                    return None
+                self.logger.debug("Ticker fetch failed for %s: %s", symbol, exc)
 
         # Secondary fallback: if only fetch_price is available, synthesize bid/ask.
         if hasattr(self.broker, "fetch_price"):
             try:
-                price = await self.broker.fetch_price(symbol)
+                price = await self.broker.fetch_price(normalized_symbol)
                 if price is None:
                     return None
                 price = float(price)
                 return {
-                    "symbol": symbol,
+                    "symbol": normalized_symbol,
                     "price": price,
                     "bid": price * 0.9998,
                     "ask": price * 1.0002,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             except Exception as exc:
+                if self._is_unsupported_market_symbol_error(exc):
+                    self._log_unsupported_market_symbol(broker_name, normalized_symbol)
+                    return None
                 self.logger.debug("Price fetch failed for %s: %s", symbol, exc)
 
         return None
@@ -7415,20 +7575,29 @@ class AppController(QMainWindow):
         return {"ok": False, "message": "OpenAI returned no text."}
 
     async def _safe_fetch_ohlcv(self, symbol, timeframe="1h", limit=200, start_time=None, end_time=None):
+        normalized_symbol = self._normalize_market_data_symbol(symbol)
+        if not normalized_symbol:
+            return []
+
         limit = self._resolve_history_limit(limit)
         range_requested = start_time is not None or end_time is not None
+        broker_name = str(getattr(getattr(self, "broker", None), "exchange_name", "") or "").strip().lower()
+        if self.broker and not self._broker_supports_market_symbol(normalized_symbol):
+            self._log_unsupported_market_symbol(broker_name, normalized_symbol)
+            return []
+
         # Preferred native broker OHLCV.
         if self.broker and hasattr(self.broker, "fetch_ohlcv"):
             try:
                 data = await self.broker.fetch_ohlcv(
-                    symbol,
+                    normalized_symbol,
                     timeframe=timeframe,
                     limit=limit,
                     start_time=start_time,
                     end_time=end_time,
                 )
                 data = self._sanitize_ohlcv_rows(
-                    symbol,
+                    normalized_symbol,
                     timeframe,
                     data,
                     requested_limit=limit,
@@ -7441,13 +7610,13 @@ class AppController(QMainWindow):
                         end_time=end_time,
                     )
                 if data:
-                    await self._persist_candles_to_db(symbol, timeframe, data)
+                    await self._persist_candles_to_db(normalized_symbol, timeframe, data)
                     return data
             except TypeError:
                 try:
-                    data = await self.broker.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                    data = await self.broker.fetch_ohlcv(normalized_symbol, timeframe=timeframe, limit=limit)
                     data = self._sanitize_ohlcv_rows(
-                        symbol,
+                        normalized_symbol,
                         timeframe,
                         data,
                         requested_limit=limit,
@@ -7460,7 +7629,7 @@ class AppController(QMainWindow):
                             end_time=end_time,
                         )
                     if data:
-                        await self._persist_candles_to_db(symbol, timeframe, data)
+                        await self._persist_candles_to_db(normalized_symbol, timeframe, data)
                         return data
                 except Exception:
                     pass
@@ -7468,14 +7637,14 @@ class AppController(QMainWindow):
                 pass
 
         cached_data = await self._load_candles_from_db(
-            symbol,
+            normalized_symbol,
             timeframe=timeframe,
             limit=limit,
             start_time=start_time,
             end_time=end_time,
         )
         cached_data = self._sanitize_ohlcv_rows(
-            symbol,
+            normalized_symbol,
             timeframe,
             cached_data,
             requested_limit=limit,
@@ -7487,26 +7656,9 @@ class AppController(QMainWindow):
         if range_requested:
             return []
 
-        # Fallback: synthesize tiny OHLCV from latest tick.
-        tick = await self._safe_fetch_ticker(symbol)
-        if not tick:
-            return []
-
-        price = float(tick.get("price") or tick.get("last") or 0)
-        if price <= 0:
-            return []
-
-        now = datetime.now(timezone.utc).isoformat()
-        synthetic = [[now, price, price, price, price, 0.0] for _ in range(min(limit, 50))]
-        synthetic = self._sanitize_ohlcv_rows(
-            symbol,
-            timeframe,
-            synthetic,
-            requested_limit=limit,
-            source_label="synthetic",
-        )
-        await self._persist_candles_to_db(symbol, timeframe, synthetic)
-        return synthetic
+        # Avoid fabricating historical candles from a single live tick. That creates
+        # duplicate timestamps, misleading price action, and noisy sanitizer warnings.
+        return []
 
     async def _safe_fetch_orderbook(self, symbol, limit=20):
         if self.broker and hasattr(self.broker, "fetch_orderbook"):
@@ -7570,6 +7722,10 @@ class AppController(QMainWindow):
 
             self.orderbook_buffer.update(symbol, bids, asks)
             self.orderbook_signal.emit(symbol, bids, asks)
+        except Exception as exc:
+            self.logger.debug("Orderbook request failed for %s: %s", symbol, exc)
+            self.orderbook_buffer.update(symbol, [], [])
+            self.orderbook_signal.emit(symbol, [], [])
         finally:
             active_task = self._orderbook_tasks.get(symbol)
             if active_task is current_task:
@@ -7603,6 +7759,10 @@ class AppController(QMainWindow):
             normalized = self._normalize_public_trade_rows(symbol, trades, limit=limit)
             self._recent_trades_cache[symbol] = normalized
             self.recent_trades_signal.emit(symbol, normalized)
+        except Exception as exc:
+            self.logger.debug("Recent trade request failed for %s: %s", symbol, exc)
+            self._recent_trades_cache[symbol] = []
+            self.recent_trades_signal.emit(symbol, [])
         finally:
             active_task = self._recent_trades_tasks.get(symbol)
             if active_task is current_task:
