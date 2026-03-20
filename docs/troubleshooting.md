@@ -4,6 +4,15 @@
 
 `Using polling market data for Oanda` is informational in this repo, not an error. Oanda is intentionally using polling in the current application flow.
 
+## Oanda Says No Candles Were Returned
+
+Check these items:
+- restart the app after broker updates so the latest Oanda fallback logic is actually loaded
+- confirm the symbol is one Oanda serves on the connected account and pricing division
+- switch between `Bid`, `Mid`, and `Ask` candle source if you are matching another platform such as MT4
+- try another timeframe to confirm whether the issue is symbol-specific or timeframe-specific
+- if the chart still says `No data received.`, capture the exact symbol and timeframe because the app now treats truly empty broker responses honestly instead of inventing filler candles
+
 ## Detached Chart Opens Blank
 
 Detached chart rendering was hardened, but if one still looks blank:
@@ -28,6 +37,16 @@ Check these items:
 - switch to another symbol to rule out a symbol-specific broker limitation
 - wait for the normal order book refresh cycle, because recent trades refresh alongside it
 - confirm the connected session still has live ticker data, since the app can only synthesize a fallback feed when quote data is available
+
+## Coinbase Says A Symbol Is Unsupported
+
+Coinbase does not expose every pair-like symbol the rest of the app may know about.
+
+Check these items:
+- confirm the symbol exists on the connected Coinbase venue, not just on another broker
+- reopen the chart with a Coinbase-native market symbol rather than a forex-style pair such as `EUR/USD`
+- refresh markets after login if the symbol list may be stale
+- if the symbol is unsupported, the app should now skip order book and recent-trades refreshes instead of raising repeated background task errors
 
 ## Depth Chart Or Market Info Looks Blank
 
@@ -89,6 +108,15 @@ If you see DNS lookup failures or `Cannot connect to host` errors:
 - check VPN, proxy, or firewall behavior
 - confirm the broker host resolves from the machine
 - retry after validating Windows DNS configuration
+
+## Chart Shows Loading Forever Or No Data Received
+
+Check:
+- whether the broker is returning any candles at all for that symbol and timeframe
+- whether the chart asked for more history than the venue actually keeps for that market
+- whether the symbol was loaded from another broker session and is stale for the current broker
+- whether the shorter-history notice says the broker returned only part of the requested window, which is a real data limitation rather than a drawing bug
+- whether malformed rows were dropped during sanitizing, which can happen if the venue sends duplicate timestamps or invalid OHLC values
 
 ## qasync Timer KeyError Or Async UI Noise
 

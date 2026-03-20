@@ -89,6 +89,15 @@ flowchart LR
 - `paper` through `PaperBroker`
 - `stellar` through `StellarBroker`
 
+## Recent Reliability Updates
+
+- Broker-backed balances, equity, and positions are favored over local fallbacks when the connected adapter can provide them directly.
+- Coinbase runtime now treats venue selection more explicitly, keeping `spot` and `derivative` paths distinct while leaving stocks and options disabled there until a dedicated adapter path is added.
+- Coinbase history loading now backfills candle requests in chunks, skips unsupported stale symbols safely, and avoids fabricating duplicate synthetic candles when real history is missing.
+- Oanda history loading now retries empty latest-candle responses with an explicit recent time window and can fall back to midpoint candles when bid or ask candles come back empty.
+- Charts now show a visible loading state, a `No data received.` background message for empty responses, and shorter-history notices when the broker returns fewer candles than requested.
+- Malformed OHLCV rows are sanitized before they are cached or drawn so bad timestamps, duplicate rows, `NaN`, `inf`, and invalid high or low bounds do not corrupt the chart.
+
 ## Recommended Local Setup
 
 ### 1. Create A Virtual Environment
