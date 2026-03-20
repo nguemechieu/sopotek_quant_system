@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -28,17 +29,14 @@ from PySide6.QtWidgets import (
 )
 
 from broker.broker_factory import BrokerFactory
-from broker.market_venues import normalize_market_venue, supported_market_venues_for_profile
+from broker.market_venues import SPOT_ONLY_EXCHANGES, normalize_market_venue, supported_market_venues_for_profile
 from broker.rate_limiter import RateLimiter
 from core.sopotek_trading import SopotekTrading
 from event_bus.event_bus import EventBus
 from event_bus.event_types import EventType
 from frontend.ui.dashboard import Dashboard
 from frontend.console.system_console import SystemConsole
-
-from frontend.ui.i18n import DEFAULT_LANGUAGE, apply_runtime_translations, normalize_language_code, translate
 from frontend.ui.services.screenshot_service import capture_widget_to_output, sanitize_screenshot_fragment
-from frontend.ui.terminal import Terminal
 from integrations.news_service import NewsService
 from integrations.telegram_service import TelegramService
 from integrations.voice_service import VoiceService
@@ -60,7 +58,8 @@ from storage.market_data_repository import MarketDataRepository
 from storage.trade_repository import TradeRepository
 from strategy.strategy import Strategy
 
-
+from frontend.ui.i18n import DEFAULT_LANGUAGE, apply_runtime_translations, normalize_language_code, translate
+from frontend.ui.terminal import Terminal
 try:
     import winsound
 except Exception:  # pragma: no cover - non-Windows fallback
@@ -170,6 +169,11 @@ class AppController(QMainWindow):
         "DOT", "LINK", "LTC", "ATOM", "AAVE", "NEAR", "UNI", "MKR",
     ]
     QUOTE_PRIORITY = {"USDT": 0, "USD": 1, "USDC": 2, "BUSD": 3, "BTC": 4, "ETH": 5}
+    COINBASE_QUOTE_PRIORITY = {"USD": 0, "USDC": 1, "EUR": 2, "GBP": 3, "USDT": 4, "BUSD": 5, "BTC": 6, "ETH": 7}
+    COINBASE_SYMBOL_LIMIT = 10
+    COINBASE_AUTO_ASSIGN_SYMBOL_LIMIT = 6
+    COINBASE_TICKER_POLL_LIMIT = 8
+    COINBASE_TICKER_POLL_SECONDS = 2.0
     FOREX_SYMBOL_QUOTES = {
         "AED", "AUD", "CAD", "CHF", "CNH", "CZK", "DKK", "EUR", "GBP", "HKD",
         "HUF", "JPY", "MXN", "NOK", "NZD", "PLN", "SEK", "SGD", "THB", "TRY",
@@ -283,6 +287,7 @@ class AppController(QMainWindow):
         if self.autotrade_scope not in {"all", "selected", "watchlist"}:
             self.autotrade_scope = "all"
         self._market_data_shortfall_notices = {}
+        self._market_data_warning_timestamps = {}
         raw_watchlist = self.settings.value("autotrade/watchlist", "[]")
         try:
             parsed_watchlist = json.loads(raw_watchlist or "[]")
@@ -1321,13 +1326,13 @@ class AppController(QMainWindow):
                 else:
                     await self.broker.connect()
 
-                raw_symbols = await self._fetch_symbols(self.broker)
-                filtered_symbols = self._filter_symbols_for_trading(raw_symbols, broker_type, exchange)
-                self.symbols = await self._select_trade_symbols(filtered_symbols, broker_type, exchange)
-
                 self.balances = await self._fetch_balances(self.broker)
                 self.balance = self.balances
                 self._update_performance_equity(self.balances)
+
+                raw_symbols = await self._fetch_symbols(self.broker)
+                filtered_symbols = self._filter_symbols_for_trading(raw_symbols, broker_type, exchange)
+                self.symbols = await self._select_trade_symbols(filtered_symbols, broker_type, exchange)
 
                 self.logger.info(
                     "Broker ready exchange=%s type=%s symbols=%s (raw=%s filtered=%s)",
@@ -1434,7 +1439,58 @@ class AppController(QMainWindow):
 
         return list(dict.fromkeys(filtered))
 
+    def _is_spot_only_exchange_profile(self, broker_type=None, exchange=None):
+        exchange_code = self._active_exchange_code(exchange=exchange)
+        if exchange_code in SPOT_ONLY_EXCHANGES:
+            return True
+        return str(broker_type or "").strip().lower() == "stocks"
+
+    def _positive_balance_asset_codes(self, balances=None):
+        if not isinstance(balances, dict):
+            return set()
+
+        skip_keys = {
+            "free",
+            "used",
+            "total",
+            "info",
+            "raw",
+            "equity",
+            "cash",
+            "balance",
+            "account_value",
+            "total_account_value",
+            "net_liquidation",
+            "position_value",
+            "positions_value",
+            "asset_balances",
+        }
+        asset_codes = set()
+        buckets = [
+            balances.get("asset_balances"),
+            balances.get("total"),
+            balances.get("free"),
+            balances.get("used"),
+        ]
+        candidate_buckets = [bucket for bucket in buckets if isinstance(bucket, dict)]
+        if not candidate_buckets:
+            candidate_buckets = [balances]
+
+        for bucket in candidate_buckets:
+            for asset_code, raw_value in bucket.items():
+                normalized_code = str(asset_code or "").upper().strip()
+                if not normalized_code or normalized_code in skip_keys:
+                    continue
+                try:
+                    numeric_value = float(raw_value or 0.0)
+                except Exception:
+                    continue
+                if numeric_value > 0:
+                    asset_codes.add(normalized_code)
+        return asset_codes
+
     async def _select_trade_symbols(self, symbols, broker_type, exchange=None):
+        exchange_code = self._active_exchange_code(exchange=exchange)
         if str(exchange or "").lower() == "stellar":
             prioritized = []
             preferred_quotes = ("USDC", "USDT", "XLM", "EURC")
@@ -1491,18 +1547,39 @@ class AppController(QMainWindow):
         if broker_type != "crypto":
             return symbols[:50]
 
+        if exchange_code == "coinbase":
+            prioritized = self._prioritize_symbols_for_trading(
+                symbols,
+                top_n=self.COINBASE_SYMBOL_LIMIT,
+                quote_priority=self.COINBASE_QUOTE_PRIORITY,
+                account_assets=self._positive_balance_asset_codes(getattr(self, "balances", None)),
+            )
+            return prioritized if prioritized else symbols[: self.COINBASE_SYMBOL_LIMIT]
+
         prioritized = self._prioritize_symbols_for_trading(symbols, top_n=30)
         return prioritized if prioritized else symbols[:30]
 
-    def _prioritize_symbols_for_trading(self, symbols, top_n=30):
+    def _prioritize_symbols_for_trading(self, symbols, top_n=30, quote_priority=None, account_assets=None):
+        account_asset_codes = {
+            str(code or "").upper().strip()
+            for code in (account_assets or [])
+            if str(code or "").strip()
+        }
+        normalized_quote_priority = {
+            str(quote or "").upper().strip(): int(rank)
+            for quote, rank in (quote_priority or self.QUOTE_PRIORITY).items()
+            if str(quote or "").strip()
+        }
+
         def sort_key(symbol):
             if not isinstance(symbol, str) or "/" not in symbol:
                 return (99, 99, symbol)
 
             base, quote = symbol.upper().split("/", 1)
+            account_rank = 0 if base in account_asset_codes else 1
             preferred_rank = self.PREFERRED_BASES.index(base) if base in self.PREFERRED_BASES else len(self.PREFERRED_BASES)
-            quote_rank = self.QUOTE_PRIORITY.get(quote, 99)
-            return (quote_rank, preferred_rank, base, quote)
+            quote_rank = normalized_quote_priority.get(quote, 99)
+            return (account_rank, quote_rank, preferred_rank, base, quote)
 
         ordered = sorted(dict.fromkeys(symbols), key=sort_key)
         return ordered[:top_n]
@@ -2701,6 +2778,8 @@ class AppController(QMainWindow):
             raw_timeframes = [configured]
         elif isinstance(configured, (list, tuple, set)) and configured:
             raw_timeframes = list(configured)
+        elif self._is_spot_only_exchange_profile(exchange=self._active_exchange_code()):
+            raw_timeframes = ["1h", "4h"]
         else:
             raw_timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 
@@ -2710,6 +2789,14 @@ class AppController(QMainWindow):
             if value and value not in normalized:
                 normalized.append(value)
         return normalized
+
+    def _strategy_auto_assignment_symbol_limit(self):
+        exchange_code = self._active_exchange_code()
+        if exchange_code == "coinbase":
+            return self.COINBASE_AUTO_ASSIGN_SYMBOL_LIMIT
+        if exchange_code in SPOT_ONLY_EXCHANGES:
+            return 10
+        return 0
 
     def _best_strategy_rankings_across_timeframes(self, rankings):
         best_by_strategy = {}
@@ -2813,10 +2900,15 @@ class AppController(QMainWindow):
 
         timeframe_value = str(timeframe or getattr(self, "time_frame", "1h") or "1h").strip() or "1h"
         symbol_candidates = self._strategy_auto_assignment_symbols(symbols=symbols)
+        symbol_limit = int(self._strategy_auto_assignment_symbol_limit() or 0)
+        if symbol_limit > 0:
+            symbol_candidates = symbol_candidates[:symbol_limit]
         restored_symbols = []
         if not force:
             _all_symbols, missing_symbols, restored_symbols = self._partition_strategy_auto_assignment_symbols(symbols=symbols)
             symbol_candidates = list(missing_symbols)
+            if symbol_limit > 0:
+                symbol_candidates = symbol_candidates[:symbol_limit]
 
         registry = self._strategy_registry_for_auto_assignment()
         strategy_names = list(getattr(registry, "list", lambda: [])() or [])
@@ -2854,8 +2946,6 @@ class AppController(QMainWindow):
             message=scan_message,
             failed_symbols=[]
         )
-        self.system_console= SystemConsole(self.controller)  # Ensure system_console is available for logging
-
         terminal = getattr(self, "terminal", None)
         system_console = getattr(terminal, "system_console", None) if terminal is not None else None
         if system_console is not None:
@@ -3648,6 +3738,9 @@ class AppController(QMainWindow):
             "- disable telegram\n"
             "- restart telegram\n"
             "- send telegram test message\n"
+            "- telegram slash commands: /status /management /balances /positions /orders /recommendations /performance /history /analysis\n"
+            "- telegram control commands: /settings /health /quantpm /journal /review /logs /refreshmarkets /reloadbalances /refreshchart /refreshorderbook\n"
+            "- telegram trading control: /autotradeon /autotradeoff /killswitch /resume /chartshot\n"
             "\n"
             "Trading Commands\n"
             "- trade buy EUR/USD amount 0.01 lots confirm\n"
@@ -4983,6 +5076,12 @@ class AppController(QMainWindow):
         return None
 
     async def _on_ws_market_tick(self, event):
+        """Handle incoming WebSocket market tick events.
+
+        - Validates data structure and required symbol field.
+        - Normalizes bid/ask fallback to last price when missing.
+        - Updates ticker stream/buffer and emits ticker signal for UI updates.
+        """
         try:
             data = event.data if hasattr(event, "data") else None
             if not isinstance(data, dict):
@@ -4996,6 +5095,7 @@ class AppController(QMainWindow):
             ask = float(data.get("ask") or data.get("ap") or 0)
             last = float(data.get("price") or data.get("last") or 0)
 
+            # Ensure we have non-zero bid/ask values, else use last price.
             if bid == 0 and ask == 0:
                 bid = last
                 ask = last
@@ -5004,23 +5104,48 @@ class AppController(QMainWindow):
             self.ticker_buffer.update(symbol, data)
             self.ticker_signal.emit(symbol, bid, ask)
 
-        except Exception as e:
+        except (TypeError, ValueError, AttributeError, KeyError) as e:
+            # Do not interrupt stream processing for a single bad message.
             self.logger.error("WS tick handling error: %s", e)
 
     async def _start_ticker_polling(self):
+        """Ensure polling loop task is scheduled and single-instance.
+
+        Cancels existing ticker polling task before creating a new one.
+        """
         if self._ticker_task and not self._ticker_task.done():
             self._ticker_task.cancel()
 
         self._ticker_task = self._create_task(self._ticker_loop(), "ticker_poll")
 
     async def _ticker_loop(self):
+        """Polling loop that updates ticker data for active symbols.
+
+        - Uses different polling cadence for Stellar due to rate limits.
+        - Uses broker-specific fetch methods in _safe_fetch_ticker.
+        - Emits ticker updates through ticker_signal for UI/logic consumers.
+        """
+        # Default in case an exception occurs before broker_name is set.
+        broker_name = "unknown"
+
         while self.connected and self.broker is not None:
             try:
                 broker_name = str(getattr(getattr(self, "broker", None), "exchange_name", "") or "").lower()
-                max_symbols = 10 if broker_name == "stellar" else 30
-                sleep_seconds = 4.0 if broker_name == "stellar" else 1.0
+                if broker_name == "stellar":
+                    max_symbols = 10
+                    sleep_seconds = 4.0
+                elif broker_name == "coinbase":
+                    max_symbols = self.COINBASE_TICKER_POLL_LIMIT
+                    sleep_seconds = self.COINBASE_TICKER_POLL_SECONDS
+                elif broker_name in SPOT_ONLY_EXCHANGES:
+                    max_symbols = 12
+                    sleep_seconds = 1.5
+                else:
+                    max_symbols = 30
+                    sleep_seconds = 1.0
 
                 for symbol in self.symbols[:max_symbols]:
+                    # Fetch latest ticker safely based on broker API availability.
                     ticker = await self._safe_fetch_ticker(symbol)
                     if not isinstance(ticker, dict):
                         continue
@@ -5029,6 +5154,7 @@ class AppController(QMainWindow):
                     ask = float(ticker.get("ask") or ticker.get("askPrice") or ticker.get("ap") or 0)
                     last = float(ticker.get("last") or ticker.get("price") or 0)
 
+                    # If both bid/ask are missing, fallback to last price to avoid zero spreads.
                     if bid == 0 and ask == 0:
                         bid = last
                         ask = last
@@ -5042,22 +5168,115 @@ class AppController(QMainWindow):
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except (TypeError, ValueError, RuntimeError, OSError) as e:
+                # Keep running and fall back to a safe sleep interval based on broker type.
                 self.logger.error("Ticker polling error: %s", e)
                 await asyncio.sleep(4.0 if broker_name == "stellar" else 1.0)
 
+    def _cached_ticker_snapshot(self, symbol):
+        normalized_symbol = str(symbol or "").upper().strip()
+        if not normalized_symbol:
+            return None
+
+        stream = getattr(self, "ticker_stream", None)
+        if stream is not None and hasattr(stream, "get"):
+            try:
+                cached = stream.get(normalized_symbol) or stream.get(symbol)
+            except Exception:
+                cached = None
+            if isinstance(cached, dict):
+                return dict(cached)
+
+        buffer = getattr(self, "ticker_buffer", None)
+        if buffer is not None and hasattr(buffer, "latest"):
+            try:
+                cached = buffer.latest(normalized_symbol) or buffer.latest(symbol)
+            except Exception:
+                cached = None
+            if isinstance(cached, dict):
+                return dict(cached)
+
+        return None
+
+    def _is_transient_market_data_error(self, exc):
+        if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError, OSError)):
+            return True
+        message = str(exc or "").strip().lower()
+        return any(
+            token in message
+            for token in (
+                "getaddrinfo failed",
+                "cannot connect to host",
+                "name or service not known",
+                "temporary failure in name resolution",
+                "network is unreachable",
+                "connection refused",
+                "connection reset",
+                "host is unreachable",
+            )
+        )
+
+    def _log_market_data_warning_once(self, key, message, *, interval_seconds=60.0):
+        timestamps = getattr(self, "_market_data_warning_timestamps", None)
+        if not isinstance(timestamps, dict):
+            timestamps = {}
+            self._market_data_warning_timestamps = timestamps
+
+        now = time.monotonic()
+        interval_value = max(1.0, float(interval_seconds or 60.0))
+        last_logged = float(timestamps.get(key, 0.0) or 0.0)
+        if (now - last_logged) < interval_value:
+            return
+
+        timestamps[key] = now
+        self.logger.warning(message)
+
+        terminal = getattr(self, "terminal", None)
+        system_console = getattr(terminal, "system_console", None)
+        if system_console is not None and hasattr(system_console, "log"):
+            try:
+                system_console.log(message, level="WARN")
+            except Exception:
+                pass
+
     async def _safe_fetch_ticker(self, symbol):
+        """Return normalized ticker updates from broker, with fallbacks.
+
+        This handles brokers that have either fetch_ticker or fetch_price and
+        ensures the app has a consistent dict representation for ticker updates.
+        """
         if not self.broker:
             return None
 
+        broker_name = str(getattr(getattr(self, "broker", None), "exchange_name", "") or "").strip().lower()
+        network_label = "Stellar Horizon" if broker_name == "stellar" else (broker_name.upper() if broker_name else "Market data")
+
+        # Primary path: use broker's native fetch_ticker call when available.
         if hasattr(self.broker, "fetch_ticker"):
             try:
                 tick = await self.broker.fetch_ticker(symbol)
                 if isinstance(tick, dict):
                     return tick
-            except Exception as exc:
+            except (TypeError, ValueError, RuntimeError, AttributeError, aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                if self._is_transient_market_data_error(exc):
+                    cached_tick = self._cached_ticker_snapshot(symbol)
+                    if isinstance(cached_tick, dict):
+                        self._log_market_data_warning_once(
+                            f"ticker-cache:{broker_name}:{str(symbol or '').upper().strip()}",
+                            f"{network_label} is temporarily unreachable for {symbol}. Using cached ticker data while the connection recovers.",
+                            interval_seconds=45.0 if broker_name == "stellar" else 30.0,
+                        )
+                        return cached_tick
+
+                    self._log_market_data_warning_once(
+                        f"ticker-offline:{broker_name}",
+                        f"{network_label} is temporarily unreachable ({exc}). The app will keep retrying automatically.",
+                        interval_seconds=60.0 if broker_name == "stellar" else 30.0,
+                    )
+                    return None
                 self.logger.debug("Ticker fetch failed for %s: %s", symbol, exc)
 
+        # Secondary fallback: if only fetch_price is available, synthesize bid/ask.
         if hasattr(self.broker, "fetch_price"):
             try:
                 price = await self.broker.fetch_price(symbol)
@@ -5179,17 +5398,21 @@ class AppController(QMainWindow):
         ]
         return synthetic[: max(1, min(int(limit or 2), len(synthetic)))]
 
-    def _active_exchange_code(self):
+    def _active_exchange_code(self, exchange=None):
+        normalized = str(exchange or "").strip().lower()
+        if normalized:
+            return normalized
+
         broker = getattr(self, "broker", None)
         if broker is not None:
             name = getattr(broker, "exchange_name", None)
             if name:
-                return str(name).lower()
+                return str(name).strip().lower()
 
         config = getattr(self, "config", None)
         broker_config = getattr(config, "broker", None)
         if broker_config is not None and getattr(broker_config, "exchange", None):
-            return str(broker_config.exchange).lower()
+            return str(broker_config.exchange).strip().lower()
 
         return None
 
@@ -5332,9 +5555,14 @@ class AppController(QMainWindow):
         if direct_equity is not None:
             return direct_equity
 
+        cash_value = self._balance_metric_value(balances, "cash")
+        position_value = self._balance_metric_value(balances, "position_value", "positions_value")
+        if cash_value is not None or position_value is not None:
+            return float(cash_value or 0.0) + float(position_value or 0.0)
+
         total = balances.get("total")
         if isinstance(total, dict):
-            for currency in ("USDT", "USD", "USDC", "BUSD"):
+            for currency in ("USDT", "USD", "USDC", "BUSD", "EUR", "GBP"):
                 value = total.get(currency)
                 if value is None:
                     continue
@@ -5343,6 +5571,9 @@ class AppController(QMainWindow):
                 except Exception:
                     continue
             if len(total) == 1:
+                sole_currency = str(next(iter(total.keys())) or "").upper().strip()
+                if sole_currency not in {"USDT", "USD", "USDC", "BUSD", "EUR", "GBP"}:
+                    return None
                 try:
                     return float(next(iter(total.values())))
                 except Exception:
@@ -5853,9 +6084,142 @@ class AppController(QMainWindow):
         if value in (None, "", "-"):
             return None
         try:
-            return float(value)
+            numeric = float(value)
         except Exception:
             return None
+        if not math.isfinite(numeric):
+            return None
+        return numeric
+
+    def _normalize_ohlcv_timestamp(self, value):
+        if value in (None, ""):
+            return None, None
+
+        try:
+            numeric = float(value)
+        except Exception:
+            numeric = None
+
+        try:
+            if numeric is not None and math.isfinite(numeric):
+                timestamp = pd.Timestamp(
+                    numeric,
+                    unit="ms" if abs(numeric) > 1e11 else "s",
+                    tz="UTC",
+                )
+            else:
+                text = str(value).strip()
+                if not text:
+                    return None, None
+                timestamp = pd.Timestamp(text)
+                if pd.isna(timestamp):
+                    return None, None
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.tz_localize("UTC")
+                else:
+                    timestamp = timestamp.tz_convert("UTC")
+        except Exception:
+            return None, None
+
+        if pd.isna(timestamp):
+            return None, None
+
+        try:
+            timestamp_ms = int(timestamp.timestamp() * 1000)
+        except Exception:
+            return None, None
+
+        if timestamp_ms <= 0:
+            return None, None
+
+        return timestamp.isoformat(), timestamp_ms
+
+    def _normalize_ohlcv_row(self, row):
+        if isinstance(row, dict):
+            timestamp_value = row.get("timestamp") or row.get("time") or row.get("datetime")
+            open_value = row.get("open") or row.get("o")
+            high_value = row.get("high") or row.get("h")
+            low_value = row.get("low") or row.get("l")
+            close_value = row.get("close") or row.get("c")
+            volume_value = row.get("volume", row.get("v", 0.0))
+        elif isinstance(row, (list, tuple)) and len(row) >= 6:
+            timestamp_value, open_value, high_value, low_value, close_value, volume_value = row[:6]
+        else:
+            return None
+
+        timestamp_text, timestamp_ms = self._normalize_ohlcv_timestamp(timestamp_value)
+        if timestamp_text is None or timestamp_ms is None:
+            return None
+
+        open_numeric = self._normalize_history_float(open_value)
+        high_numeric = self._normalize_history_float(high_value)
+        low_numeric = self._normalize_history_float(low_value)
+        close_numeric = self._normalize_history_float(close_value)
+        volume_numeric = self._normalize_history_float(volume_value)
+
+        ohlc_values = [open_numeric, high_numeric, low_numeric, close_numeric]
+        if any(value is None or value <= 0 for value in ohlc_values):
+            return None
+
+        normalized_high = max(ohlc_values)
+        normalized_low = min(ohlc_values)
+        normalized_volume = max(volume_numeric or 0.0, 0.0)
+
+        return {
+            "timestamp_ms": timestamp_ms,
+            "row": [
+                timestamp_text,
+                float(open_numeric),
+                float(normalized_high),
+                float(normalized_low),
+                float(close_numeric),
+                float(normalized_volume),
+            ],
+        }
+
+    def _sanitize_ohlcv_rows(self, symbol, timeframe, rows, *, requested_limit=None, source_label="broker"):
+        normalized_symbol = str(symbol or "").upper().strip() or "UNKNOWN"
+        normalized_timeframe = str(timeframe or self.time_frame or "1h").strip() or "1h"
+        deduped_rows = {}
+        malformed_count = 0
+        duplicate_count = 0
+
+        for row in rows or []:
+            normalized = self._normalize_ohlcv_row(row)
+            if normalized is None:
+                malformed_count += 1
+                continue
+
+            timestamp_ms = normalized["timestamp_ms"]
+            if timestamp_ms in deduped_rows:
+                duplicate_count += 1
+            deduped_rows[timestamp_ms] = normalized["row"]
+
+        cleaned_rows = [deduped_rows[key] for key in sorted(deduped_rows)]
+        if requested_limit is not None:
+            try:
+                limit_value = max(1, int(requested_limit))
+            except Exception:
+                limit_value = None
+            if limit_value is not None:
+                cleaned_rows = cleaned_rows[-limit_value:]
+
+        if malformed_count or duplicate_count:
+            detail_parts = []
+            if malformed_count:
+                detail_parts.append(f"dropped {malformed_count} malformed row(s)")
+            if duplicate_count:
+                detail_parts.append(f"replaced {duplicate_count} duplicate timestamp row(s)")
+            self._log_market_data_warning_once(
+                f"ohlcv-sanitize:{source_label}:{normalized_symbol}:{normalized_timeframe}",
+                (
+                    f"Sanitized OHLCV data for {normalized_symbol} ({normalized_timeframe}) from {source_label}: "
+                    f"kept {len(cleaned_rows)} row(s), " + ", ".join(detail_parts) + "."
+                ),
+                interval_seconds=30.0,
+            )
+
+        return cleaned_rows
 
     def _history_timestamp_text(self, value):
         if value in (None, ""):
@@ -7063,6 +7427,13 @@ class AppController(QMainWindow):
                     start_time=start_time,
                     end_time=end_time,
                 )
+                data = self._sanitize_ohlcv_rows(
+                    symbol,
+                    timeframe,
+                    data,
+                    requested_limit=limit,
+                    source_label="broker",
+                )
                 if range_requested and data:
                     data = self._filter_ohlcv_rows_by_time_range(
                         data,
@@ -7075,6 +7446,13 @@ class AppController(QMainWindow):
             except TypeError:
                 try:
                     data = await self.broker.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                    data = self._sanitize_ohlcv_rows(
+                        symbol,
+                        timeframe,
+                        data,
+                        requested_limit=limit,
+                        source_label="broker",
+                    )
                     if range_requested and data:
                         data = self._filter_ohlcv_rows_by_time_range(
                             data,
@@ -7096,6 +7474,13 @@ class AppController(QMainWindow):
             start_time=start_time,
             end_time=end_time,
         )
+        cached_data = self._sanitize_ohlcv_rows(
+            symbol,
+            timeframe,
+            cached_data,
+            requested_limit=limit,
+            source_label="cache",
+        )
         if cached_data:
             return cached_data
 
@@ -7113,6 +7498,13 @@ class AppController(QMainWindow):
 
         now = datetime.now(timezone.utc).isoformat()
         synthetic = [[now, price, price, price, price, 0.0] for _ in range(min(limit, 50))]
+        synthetic = self._sanitize_ohlcv_rows(
+            symbol,
+            timeframe,
+            synthetic,
+            requested_limit=limit,
+            source_label="synthetic",
+        )
         await self._persist_candles_to_db(symbol, timeframe, synthetic)
         return synthetic
 
@@ -7328,6 +7720,13 @@ class AppController(QMainWindow):
             if "start_time" not in message and "end_time" not in message:
                 raise
             candles = await self._safe_fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        candles = self._sanitize_ohlcv_rows(
+            symbol,
+            timeframe,
+            candles,
+            requested_limit=limit,
+            source_label="runtime",
+        )
         received_count = len(candles) if isinstance(candles, list) else 0
         if start_time is None and end_time is None:
             self._notify_market_data_shortfall(symbol, timeframe, received_count, limit)

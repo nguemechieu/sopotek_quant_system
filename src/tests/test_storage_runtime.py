@@ -175,6 +175,29 @@ def test_market_data_repository_filters_candles_by_date_range():
     assert [row[0][:10] for row in candles] == ["2026-03-11", "2026-03-12"]
 
 
+def test_market_data_repository_skips_invalid_rows_and_repairs_ohlc_bounds():
+    repo = MarketDataRepository()
+
+    inserted = repo.save_candles(
+        "BTC/USDT",
+        "1h",
+        [
+            [1710000000000, 100.0, 95.0, 105.0, 101.0, -5.0],
+            [1710003600000, "bad", 106.0, 99.0, 103.0, 11.0],
+            [1710007200000, 104.0, 108.0, 102.0, 107.0, None],
+            [None, 105.0, 109.0, 103.0, 108.0, 9.0],
+            [1710010800000, 0.0, 110.0, 104.0, 109.0, 7.0],
+        ],
+        exchange="coinbase",
+    )
+
+    candles = repo.get_candles("BTC/USDT", timeframe="1h", limit=10, exchange="coinbase")
+
+    assert inserted == 2
+    assert candles[0][1:6] == [100.0, 105.0, 95.0, 101.0, 0.0]
+    assert candles[1][1:6] == [104.0, 108.0, 102.0, 107.0, 0.0]
+
+
 def test_execution_manager_persists_trade_history():
     broker = MockBroker()
     bus = EventBus()

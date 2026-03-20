@@ -361,3 +361,3427 @@ Using polling market data for Oanda
 Initializing broker oanda
 Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
 Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker stellar
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1306, in handle_login
+    broker = BrokerFactory.create(config)
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\broker_factory.py", line 64, in create
+    return StellarBroker(broker_cfg)
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\stellar_broker.py", line 150, in __init__
+    raise ValueError(
+        "Invalid Stellar public key. It should start with 'G' and be a valid Stellar account address."
+    )
+ValueError: Invalid Stellar public key. It should start with 'G' and be a valid Stellar account address.
+Initializing broker stellar
+Connected to Stellar Horizon (https://horizon.stellar.org)
+Broker ready exchange=stellar type=crypto symbols=4 (raw=49 filtered=49)
+Using polling market data for Stellar Horizon
+Not enough data for AQUA/XLM (1h): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (1h): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (1d): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (1m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (1h): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (5m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (1h): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (15m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (30m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AQUA/XLM (4h): received 1 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (1m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/USDC (1h): no candles were returned. Try another timeframe, load more history, or wait for more market data.
+Not enough data for BTC/XLM (5m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (15m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (30m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (1d): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (1m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (5m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (15m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (30m): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (1d): received 200 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (1h): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (1m): received 26 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (5m): received 21 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (15m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (30m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (4h): no candles were returned. Try another timeframe, load more history, or wait for more market data.
+Not enough data for ZOOM/XLM (1d): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (1h): received 20 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (30m): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.650)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.649)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.648)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.647)
+Initializing broker stellar
+Connected to Stellar Horizon (https://horizon.stellar.org)
+Broker ready exchange=stellar type=crypto symbols=4 (raw=49 filtered=49)
+Not enough data for ZOOM/XLM (1h): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (1m): received 26 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (5m): received 21 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Using polling market data for Stellar Horizon
+Not enough data for ZOOM/XLM (15m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (30m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (4h): no candles were returned. Try another timeframe, load more history, or wait for more market data.
+Not enough data for ZOOM/XLM (1d): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTCLN/XLM (1h): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Ticker polling error: Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]
+Not enough data for BTC/XLM (1h): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.975)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.975)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.975)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.975)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.975)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.975)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.975)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.974)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.973)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.972)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Skipping BTC/XLM buy due to conflicting news bias (sell -0.971)
+Initializing broker stellar
+Connected to Stellar Horizon (https://horizon.stellar.org)
+Broker ready exchange=stellar type=crypto symbols=4 (raw=49 filtered=49)
+Using polling market data for Stellar Horizon
+Not enough data for ZOOM/XLM (1h): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for BTC/XLM (1h): received 200 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (1m): received 26 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (5m): received 21 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (15m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (30m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ZOOM/XLM (4h): no candles were returned. Try another timeframe, load more history, or wait for more market data.
+Not enough data for ZOOM/XLM (1d): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Stellar Horizon is temporarily unreachable for BTC/XLM. Using cached ticker data while the connection recovers.
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 472, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1541, in fetch2
+    return await self.fetch(request['url'], request['method'], request['headers'], request['body'])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 185, in fetch
+    self.handle_http_status_code(http_status_code, http_status_text, url, method, http_response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\base\exchange.py", line 1753, in handle_http_status_code
+    raise ErrorClass(self.id + ' ' + method + ' ' + url + ' ' + codeAsString + ' ' + reason + ' ' + body)
+ccxt.base.errors.AuthenticationError: coinbase GET https://api.coinbase.com/api/v3/brokerage/products 401 Unauthorized Unauthorized
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 472, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1541, in fetch2
+    return await self.fetch(request['url'], request['method'], request['headers'], request['body'])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 185, in fetch
+    self.handle_http_status_code(http_status_code, http_status_text, url, method, http_response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\base\exchange.py", line 1753, in handle_http_status_code
+    raise ErrorClass(self.id + ' ' + method + ' ' + url + ' ' + codeAsString + ' ' + reason + ' ' + body)
+ccxt.base.errors.AuthenticationError: coinbase GET https://api.coinbase.com/api/v3/brokerage/products 401 Unauthorized Unauthorized
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 476, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1541, in fetch2
+    return await self.fetch(request['url'], request['method'], request['headers'], request['body'])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 185, in fetch
+    self.handle_http_status_code(http_status_code, http_status_text, url, method, http_response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\base\exchange.py", line 1753, in handle_http_status_code
+    raise ErrorClass(self.id + ' ' + method + ' ' + url + ' ' + codeAsString + ' ' + reason + ' ' + body)
+ccxt.base.errors.AuthenticationError: coinbase GET https://api.coinbase.com/api/v3/brokerage/products 401 Unauthorized Unauthorized
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 476, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1541, in fetch2
+    return await self.fetch(request['url'], request['method'], request['headers'], request['body'])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 185, in fetch
+    self.handle_http_status_code(http_status_code, http_status_text, url, method, http_response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\base\exchange.py", line 1753, in handle_http_status_code
+    raise ErrorClass(self.id + ' ' + method + ' ' + url + ' ' + codeAsString + ' ' + reason + ' ' + body)
+ccxt.base.errors.AuthenticationError: coinbase GET https://api.coinbase.com/api/v3/brokerage/products 401 Unauthorized Unauthorized
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 476, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1541, in fetch2
+    return await self.fetch(request['url'], request['method'], request['headers'], request['body'])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 185, in fetch
+    self.handle_http_status_code(http_status_code, http_status_text, url, method, http_response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\base\exchange.py", line 1753, in handle_http_status_code
+    raise ErrorClass(self.id + ' ' + method + ' ' + url + ' ' + codeAsString + ' ' + reason + ' ' + body)
+ccxt.base.errors.AuthenticationError: coinbase GET https://api.coinbase.com/api/v3/brokerage/products 401 Unauthorized Unauthorized
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 476, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1541, in fetch2
+    return await self.fetch(request['url'], request['method'], request['headers'], request['body'])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 185, in fetch
+    self.handle_http_status_code(http_status_code, http_status_text, url, method, http_response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\base\exchange.py", line 1753, in handle_http_status_code
+    raise ErrorClass(self.id + ' ' + method + ' ' + url + ' ' + codeAsString + ' ' + reason + ' ' + body)
+ccxt.base.errors.AuthenticationError: coinbase GET https://api.coinbase.com/api/v3/brokerage/products 401 Unauthorized Unauthorized
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 476, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1541, in fetch2
+    return await self.fetch(request['url'], request['method'], request['headers'], request['body'])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 185, in fetch
+    self.handle_http_status_code(http_status_code, http_status_text, url, method, http_response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\base\exchange.py", line 1753, in handle_http_status_code
+    raise ErrorClass(self.id + ' ' + method + ' ' + url + ' ' + codeAsString + ' ' + reason + ' ' + body)
+ccxt.base.errors.AuthenticationError: coinbase GET https://api.coinbase.com/api/v3/brokerage/products 401 Unauthorized Unauthorized
+Initializing broker coinbase
+Initialization failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\app_controller.py", line 1321, in handle_login
+    await self.broker.connect()
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 534, in connect
+    await self.exchange.load_markets()
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 215, in load_markets
+    raise e
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 211, in load_markets
+    result = await self.markets_loading
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 201, in load_markets_helper
+    markets = await self.fetch_markets(params)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 859, in fetch_markets
+    return await getattr(self, method)(params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 931, in fetch_markets_v3
+    response = await self.v3PrivateGetBrokerageProducts(params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1544, in request
+    return await self.fetch2(path, api, method, params, headers, body, config, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 1540, in fetch2
+    request = self.sign(path, api, method, params, headers, body)
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 43, in sign
+    jwt_token = build_coinbase_rest_jwt(
+        request_method=method,
+    ...<3 lines>...
+        api_secret=self.secret,
+    )
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\coinbase_jwt_auth.py", line 38, in build_coinbase_rest_jwt
+    private_key = serialization.load_pem_private_key(secret_text.encode("utf-8"), password=None)
+ValueError: Could not deserialize key data. The data may be in an incorrect format, it may be encrypted with an unsupported algorithm, or it may be an unsupported key type (e.g. EC curves with explicit parameters). Details: ASN.1 parsing error: invalid length
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for 00/USD
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for ENS/USDT (1h): received 2 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (1h): received 3 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 3 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (5m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (15m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (30m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (1h): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (1m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (5m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (15m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (30m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Fetching OHLCV for ETH/USD
+Not enough data for ETH/USD (1h): received 5 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (1h): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (1m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (5m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (15m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Fetching OHLCV for ETH/USD
+Not enough data for 1INCH/EUR (30m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for ETH/USD (5m): received 60 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 1INCH/EUR (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (1h): received 2 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (1m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (5m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (15m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Fetching OHLCV for ETH/USD
+Not enough data for 1INCH/GBP (30m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (1h): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (1m): received 14 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (5m): received 12 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (15m): received 9 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (30m): received 7 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Fetching OHLCV for ETH/USD
+Not enough data for 1INCH/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for ETH/USD (4h): received 50 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 1INCH/USD (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (1h): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (1m): received 14 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (5m): received 12 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Fetching OHLCV for ETH/USD
+Not enough data for 1INCH/USDC (15m): received 9 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (30m): received 7 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (1m): received 65 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (5m): received 38 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (15m): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (1m): received 65 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (5m): received 38 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (15m): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Fetching OHLCV for ETC/BTC
+Not enough data for ETC/BTC (1h): received 1 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 2Z/USDC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (1m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (5m): received 11 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (15m): received 9 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (30m): received 8 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (1m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (5m): received 11 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (15m): received 9 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (30m): received 8 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Fetching OHLCV for ETC/BTC
+Not enough data for AAVE/BTC (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (1m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for ETC/BTC (1d): received 50 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AAVE/BTC (5m): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (15m): received 9 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (30m): received 8 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Fetching OHLCV for ERA/USD
+Not enough data for AAVE/EUR (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (1m): received 60 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for ERA/USD (1d): received 50 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ERA/USD
+Not enough data for AAVE/EUR (5m): received 37 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for ERA/USD (1d): received 1 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ETH/USD
+Not enough data for AAVE/EUR (15m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Fetching OHLCV for FET/USD
+Not enough data for FET/USD (1h): received 5 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AAVE/EUR (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (1m): received 37 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (5m): received 23 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (15m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USD
+Not enough data for AAVE/USD (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for FIL/USD
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for AAVE/USD
+Not enough data for FIL/USD (1h): received 5 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ATOM/USDT
+Not enough data for AAVE/USD (5m): received 60 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USD
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Not enough data for AAVE/USD (15m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USD
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Not enough data for AAVE/USD (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Not enough data for AAVE/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Not enough data for FET/USDT (1h): received 5 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Not enough data for AAVE/USD (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USDC
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Not enough data for AAVE/USDC (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USDC
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for AAVE/USDC
+Not enough data for AAVE/USDC (5m): received 60 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USDC
+Fetching OHLCV for NEAR/USDT
+Not enough data for AAVE/USDC (15m): received 20 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USDC
+Fetching OHLCV for XRP/USDT
+Not enough data for AAVE/USDC (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USDC
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Not enough data for AAVE/USDC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/USDC
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Not enough data for AAVE/USDC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Not enough data for ABT/USD (1h): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Not enough data for ABT/USD (1m): received 8 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Not enough data for ABT/USD (5m): received 7 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Not enough data for ABT/USD (15m): received 7 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Not enough data for ABT/USD (30m): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Not enough data for ABT/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Not enough data for ABT/USD (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Not enough data for ABT/USDC (1h): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Not enough data for ABT/USDC (1m): received 8 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Not enough data for ABT/USDC (5m): received 7 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Not enough data for ABT/USDC (15m): received 6 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Not enough data for ABT/USDC (30m): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Not enough data for ABT/USDC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Not enough data for ABT/USDC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Not enough data for ACH/USD (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Not enough data for ACH/USD (1m): received 40 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for ETC/USD
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Not enough data for ACH/USD (5m): received 27 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Not enough data for ETC/USD (1h): received 5 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Not enough data for ACH/USD (15m): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Not enough data for ACH/USD (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for FIL/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for FET/USD
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Not enough data for ACH/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Not enough data for ACH/USD (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Not enough data for ACH/USDC (1h): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Not enough data for ACH/USDC (1m): received 39 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Not enough data for ACH/USDC (5m): received 27 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Not enough data for ACH/USDC (15m): received 17 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Not enough data for BTC/USD (1h): received 5 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Not enough data for ACH/USDC (30m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Not enough data for ACH/USDC (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Not enough data for ACH/USDC (1d): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Not enough data for ACS/USD (1h): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Not enough data for ACS/USD (1m): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Not enough data for ACS/USD (5m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Not enough data for ACS/USD (15m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Not enough data for ACS/USD (30m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XRP/USDT
+Not enough data for ACS/USD (4h): received 50 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for QNT/USDT
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for 00/USD
+Not enough data for QNT/USDT (1h): received 95 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USD (1h): received 149 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 113 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 113 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for RED/USD
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (1m): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (5m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (15m): received 46 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (30m): received 90 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Not enough data for 00/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (1h): received 149 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (1m): received 5 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (5m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (15m): received 46 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (30m): received 90 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USDC
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (1h): received 131 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for RED/USD
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (1m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (5m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (15m): received 41 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (30m): received 77 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Not enough data for 1INCH/EUR (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/EUR
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (1h): received 96 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (1m): received 2 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (5m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (15m): received 35 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (30m): received 58 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Not enough data for 1INCH/GBP (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/GBP
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (1h): received 208 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for PROMPT/USDC
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (1m): received 11 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (5m): received 51 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Fetching OHLCV for PROMPT/USD
+Not enough data for 1INCH/USD (15m): received 100 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (30m): received 161 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Not enough data for 1INCH/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USD
+Fetching OHLCV for PROMPT/USDC
+Not enough data for PROMPT/USDC (1h): received 299 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (1h): received 207 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for 1INCH/USDC
+Not enough data for SAND/USDT (1h): received 93 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 1INCH/USDC (1m): received 10 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (5m): received 52 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (15m): received 101 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (30m): received 161 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Not enough data for 1INCH/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 1INCH/USDC
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for 2Z/USD
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (1m): received 43 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Fetching OHLCV for ETH/USD
+Not enough data for 2Z/USD (5m): received 139 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for 2Z/USD
+Not enough data for 2Z/USD (15m): received 203 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for PROMPT/USDC
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for 2Z/USD
+Fetching OHLCV for SHIB/USDT
+Not enough data for 2Z/USD (30m): received 234 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for QNT/USD
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for QNT/USD
+Fetching OHLCV for 2Z/USD
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ENS/USDT
+Not enough data for 2Z/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USD
+Fetching OHLCV for ATOM/USDT
+Not enough data for 2Z/USD (1d): received 155 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for 2Z/USDC
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for 2Z/USDC
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for 2Z/USDC
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for DOT/USDT (1h): received 168 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for DOT/USDT
+Not enough data for DOT/USDT (1d): received 299 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Fetching OHLCV for 00/USD
+Not enough data for 2Z/USDC (1m): received 42 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (5m): received 140 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (15m): received 204 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (30m): received 235 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for 2Z/USDC
+Not enough data for QNT/USDT (1h): received 96 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for QNT/USDC
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (1m): received 40 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (5m): received 140 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (15m): received 204 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (30m): received 235 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 2Z/USDC
+Not enough data for 2Z/USDC (1d): received 155 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (1h): received 237 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (1m): received 32 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (5m): received 61 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (15m): received 158 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (30m): received 221 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for A8/USD
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for OP/USDT (1h): received 90 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for A8/USD (1h): received 237 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (1m): received 31 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (5m): received 61 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (15m): received 158 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (30m): received 221 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Not enough data for A8/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USD
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (1h): received 237 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for OXT/USD
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (1m): received 31 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (5m): received 60 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (15m): received 157 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for A8/USDC
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for XRP/USDT (1h): received 298 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for A8/USDC (1h): received 237 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for XLM/USD
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (1m): received 31 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (5m): received 60 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (15m): received 157 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Not enough data for A8/USDC (30m): received 221 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Fetching OHLCV for 1INCH/EUR
+Fetching OHLCV for A8/USDC
+Not enough data for 00/USD (1h): received 181 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 181 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 1INCH/EUR (1h): received 170 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for A8/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for A8/USDC
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (1h): received 225 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker oanda
+Broker ready exchange=oanda type=forex symbols=50 (raw=68 filtered=68)
+Using polling market data for Oanda
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for AAVE/BTC
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for APE/USDT (1h): received 115 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AAVE/BTC (1h): received 225 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for APR/USD
+Not enough data for APR/USD (1h): received 298 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (1m): received 19 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (5m): received 79 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (15m): received 106 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (30m): received 187 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ALLO/USDC
+Fetching OHLCV for AAVE/BTC
+Not enough data for AAVE/BTC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/BTC
+Fetching OHLCV for BAT/USD
+Fetching OHLCV for ALLO/USDC
+Fetching OHLCV for AAVE/EUR
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (1m): received 70 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (5m): received 151 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (15m): received 205 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for BAT/USD
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=30 (raw=889 filtered=791)
+Fetching OHLCV for ENS/USDT
+Fetching OHLCV for AAVE/EUR
+WebSocket market data enabled for coinbase
+Fetching OHLCV for 00/USD
+Fetching OHLCV for 00/USDC
+Not enough data for ENS/USDT (1h): received 129 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ENS/USDT
+Not enough data for ENS/USDT (1d): received 296 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for 00/USD
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (1m): received 70 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (5m): received 151 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (15m): received 204 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (30m): received 235 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Not enough data for AAVE/EUR (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/EUR
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for AAVE/GBP
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (1m): received 26 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Fetching OHLCV for ADA/USDT
+Not enough data for AAVE/GBP (5m): received 99 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Not enough data for AAVE/GBP (15m): received 174 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (30m): received 225 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for AAVE/GBP
+Not enough data for AAVE/GBP (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AAVE/GBP
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for XLM/USDT
+Not enough data for ABT/USD (1h): received 197 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Not enough data for ABT/USD (1m): received 2 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USDT
+Not enough data for ABT/USD (5m): received 26 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Not enough data for ABT/USD (15m): received 81 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Not enough data for ABT/USD (30m): received 130 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Not enough data for ABT/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USD
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for ABT/USDC
+Not enough data for ABT/USDC (1h): received 196 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for NEAR/USDT
+Not enough data for ABT/USDC (1m): received 2 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for SOL/USDT
+Not enough data for ABT/USDC (5m): received 26 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for BTC/USDT
+Not enough data for ABT/USDC (15m): received 81 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USDT
+Not enough data for ABT/USDC (30m): received 130 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ABT/USDC
+Not enough data for ABT/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ABT/USDC
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for ACH/USD
+Not enough data for ACH/USD (1m): received 23 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Not enough data for ACH/USD (5m): received 119 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Not enough data for ACH/USD (15m): received 213 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ACH/USD
+Not enough data for ACH/USD (30m): received 237 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Not enough data for ACH/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USD
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for ACH/USDC
+Not enough data for ACH/USDC (1m): received 23 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Not enough data for ACH/USDC (5m): received 120 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACH/USDC
+Not enough data for ACH/USDC (15m): received 214 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for ACH/USDC
+Not enough data for ACH/USDC (30m): received 238 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for AVAX/USDT
+Not enough data for ACH/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for ACH/USDC
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Not enough data for ACS/USD (1h): received 196 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ACS/USD
+Not enough data for ACS/USD (1m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Not enough data for ACS/USD (5m): received 28 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Not enough data for ACS/USD (15m): received 80 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Not enough data for ACS/USD (30m): received 129 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Not enough data for ACS/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USD
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for ACS/USDC
+Not enough data for ACS/USDC (1h): received 196 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ACS/USDC
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for XLM/USDT
+Not enough data for ACS/USDC (1m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USDC
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Not enough data for ACS/USDC (5m): received 28 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USDC
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for ETH/USDT
+Not enough data for ACS/USDC (15m): received 80 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USDC
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Not enough data for ACS/USDC (30m): received 129 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ACS/USDC
+Sanitized OHLCV data for ACS/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ACS/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACS/USDC
+Fetching OHLCV for ACX/USD
+Not enough data for ACX/USD (1h): received 237 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for ACX/USD
+Fetching OHLCV for ATOM/USDT
+Not enough data for ACX/USD (1m): received 44 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACX/USD
+Not enough data for ACX/USD (5m): received 118 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACX/USD
+Fetching OHLCV for DOGE/USDT
+Not enough data for ACX/USD (15m): received 192 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for ACX/USD
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ROSE/USDT
+Not enough data for ACX/USD (30m): received 234 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for ACX/USD
+Sanitized OHLCV data for ACX/USD (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ACX/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACX/USD
+Fetching OHLCV for ACX/USDC
+Not enough data for ACX/USDC (1h): received 237 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for ACX/USDC
+Fetching OHLCV for IMX/USDT
+Not enough data for ACX/USDC (1m): received 44 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACX/USDC
+Not enough data for ACX/USDC (5m): received 119 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACX/USDC
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XLM/USDT
+Not enough data for ACX/USDC (15m): received 192 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for ACX/USDC
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Not enough data for ACX/USDC (30m): received 234 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for ACX/USDC
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Sanitized OHLCV data for ACX/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ACX/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ACX/USDC
+Fetching OHLCV for ADA/BTC
+Not enough data for ADA/BTC (1h): received 169 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ADA/BTC
+Fetching OHLCV for ETH/USDT
+Not enough data for ADA/BTC (1m): received 3 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/BTC
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Not enough data for ADA/BTC (5m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/BTC
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Not enough data for ADA/BTC (15m): received 63 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/BTC
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Not enough data for ADA/BTC (30m): received 118 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/BTC
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for NEAR/USDT
+Sanitized OHLCV data for ADA/BTC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ADA/BTC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/BTC
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for ADA/ETH
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Not enough data for ADA/ETH (1h): received 131 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for ADA/ETH
+Not enough data for ADA/ETH (1m): received 4 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/ETH
+Not enough data for ADA/ETH (5m): received 16 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/ETH
+Not enough data for ADA/ETH (15m): received 49 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/ETH
+Not enough data for ADA/ETH (30m): received 100 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/ETH
+Sanitized OHLCV data for ADA/ETH (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ADA/ETH (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/ETH
+Not enough data for ADA/ETH (1d): received 238 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/EUR
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for ADA/EUR
+Fetching OHLCV for LINK/USDT
+Not enough data for ADA/EUR (1m): received 74 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/EUR
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Not enough data for ADA/EUR (5m): received 216 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for ADA/EUR
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Not enough data for ADA/EUR (15m): received 238 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/EUR
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for ADA/EUR
+Sanitized OHLCV data for ADA/EUR (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ADA/EUR (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/EUR
+Fetching OHLCV for ADA/GBP
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for ADA/GBP
+Not enough data for ADA/GBP (1m): received 67 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/GBP
+Fetching OHLCV for QNT/USDT
+Not enough data for ADA/GBP (5m): received 217 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for ADA/GBP
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Not enough data for ADA/GBP (15m): received 235 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for ADA/GBP
+Fetching OHLCV for ADA/GBP
+Not enough data for ETH/USD (1d): received 3582 of 25000 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for ADA/GBP (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ADA/GBP (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/GBP
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for ADA/USD
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for ADA/USD
+Fetching OHLCV for ADA/USD
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ADA/USD
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for ADA/USD
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USD
+Sanitized OHLCV data for ADA/USD (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ADA/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ADA/USD
+Fetching OHLCV for SAND/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for ADA/USDC
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ATOM/USDT
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ADA/USDC
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for LINK/USDT
+Fetching OHLCV for SHIB/USDT
+Fetching OHLCV for HBAR/USDT
+Fetching OHLCV for JASMY/USDT
+Fetching OHLCV for NEAR/USDT
+Fetching OHLCV for ATOM/USDT
+Not enough data for ADA/USDC (1m): received 238 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Fetching OHLCV for ICP/USDT
+Fetching OHLCV for DOGE/USDT
+Fetching OHLCV for AVAX/USDT
+Fetching OHLCV for OP/USDT
+Fetching OHLCV for FET/USDT
+Fetching OHLCV for QNT/USDT
+Fetching OHLCV for SOL/USDT
+Fetching OHLCV for ADA/USDC
+Fetching OHLCV for BTC/USD
+Fetching OHLCV for APT/USDT
+Fetching OHLCV for ROSE/USDT
+Fetching OHLCV for APE/USDT
+Fetching OHLCV for DOT/USDT
+Fetching OHLCV for IMX/USDT
+Fetching OHLCV for XLM/USDT
+Fetching OHLCV for ADA/USDT
+Fetching OHLCV for BTC/USDT
+Fetching OHLCV for ETH/USDT
+Fetching OHLCV for ETH/USD
+Fetching OHLCV for STX/USDT
+Fetching OHLCV for CRO/USDT
+Fetching OHLCV for CHZ/USDT
+Fetching OHLCV for XRP/USDT
+Fetching OHLCV for LINK/USDT
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=10 (raw=889 filtered=791)
+WebSocket market data enabled for coinbase
+Not enough data for DAI/USD (1h): received 299 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for CRV/BTC (1h): received 258 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for ADA/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ADA/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for ADA/USDT (1h): received 230 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for ADA/USDT (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for ADA/USDT (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AERGO/USD (1h): received 232 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AERGO/USD (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AERGO/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AERGO/USDC (1h): received 232 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AERGO/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AERGO/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AERO/USD (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AERO/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DEGEN/USDC (1h): received 289 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AERO/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AERO/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DEXT/USDC (1h): received 148 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DBR/USD (1h): received 162 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DBR/USD (5m): received 218 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DBR/USD (30m): received 143 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DOT/BTC (30m): received 271 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DOT/BTC (1h): received 292 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Initializing broker coinbase
+Broker ready exchange=coinbase type=crypto symbols=10 (raw=889 filtered=791)
+WebSocket market data enabled for coinbase
+Not enough data for AGLD/USD (1h): received 234 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USD (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for 00/USDC (1h): received 112 of 180 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DASH/USDC (5m): received 269 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AGLD/USD (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AGLD/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for AGLD/USDC (1h): received 234 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DASH/USDC (1m): received 128 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AGLD/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AGLD/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for DASH/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for DASH/USDC (4h): received 1 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AIOZ/USD (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AIOZ/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AIOZ/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AIOZ/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AKT/USD (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AKT/USD (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Sanitized OHLCV data for AKT/USDC (4h) from synthetic: kept 1 row(s), replaced 49 duplicate timestamp row(s).
+Not enough data for AKT/USDC (4h): received 1 of 240 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DAI/USD (1h): received 299 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Not enough data for DNT/USD (1h): received 230 of 500 requested candles. Indicators, AI signals, and backtests may be limited.
+Close-all positions failed
+Traceback (most recent call last):
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\frontend\ui\actions\trading_actions.py", line 99, in close_all_positions_async
+    results = await broker.close_all_positions()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\base_broker.py", line 212, in close_all_positions
+    result = await self.close_position(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\base_broker.py", line 191, in close_position
+    return await self.create_order(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "C:\Users\nguem\Documents\GitHub\sopotek-trading-ai\src\broker\ccxt_broker.py", line 1161, in create_order
+    created = await self.exchange.create_order(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\coinbase.py", line 1970, in create_order
+    'base_size': self.amount_to_precision(symbol, amount),
+                 ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\nguem\AppData\Roaming\Python\Python314\site-packages\ccxt\async_support\base\exchange.py", line 2022, in amount_to_precision
+    raise ArgumentsRequired(self.id + ' amount of ' + market['symbol'] + ' must be greater than minimum amount precision of ' + self.number_to_string(market['precision']['amount']))
+ccxt.base.errors.ArgumentsRequired: coinbase amount of CELO/USD must be greater than minimum amount precision of 0.01

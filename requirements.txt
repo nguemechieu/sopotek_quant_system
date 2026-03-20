@@ -46,6 +46,7 @@ SQLAlchemy>=2.0
 python-dotenv>=1.0
 keyring>=24.0
 cryptography>=42.0
+PyJWT>=2.8
 
 # ==========================================
 # ASYNC / EVENT SYSTEM

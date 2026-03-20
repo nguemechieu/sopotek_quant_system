@@ -208,6 +208,9 @@ class TelegramService:
         if command == "/status":
             await self.send_message(await self.controller.telegram_status_text())
             return
+        if command == "/management":
+            await self.send_message(str(getattr(self.controller, "telegram_management_text", lambda: "Management summary is not available.")()))
+            return
         if command == "/balances":
             await self.send_message(await self.controller.telegram_balances_text())
             return
@@ -222,6 +225,13 @@ class TelegramService:
             return
         if command == "/performance":
             await self.send_message(await self.controller.telegram_performance_text())
+            return
+        if command in {"/history", "/journalsummary"}:
+            summary_builder = getattr(self.controller, "market_chat_trade_history_summary", None)
+            if callable(summary_builder):
+                await self.send_message(await summary_builder(limit=300, open_window=True))
+            else:
+                await self.send_message("Trade history summary is not available right now.")
             return
         if command in {"/analysis", "/positionanalysis"}:
             await self.send_message(await self.controller.telegram_position_analysis_text(open_window=True))
@@ -245,21 +255,26 @@ class TelegramService:
             return
         if command in {"/chartshot", "/chartphoto", "/sendchart"}:
             parsed = self._parse_chart_args(args_text)
-            if not parsed.get("symbol"):
-                await self.send_message("Usage: /chartshot SYMBOL [TIMEFRAME]. Example: <code>/chartshot BTC/USDT 15m</code>")
-                return
             screenshot_path = await self.controller.capture_chart_screenshot(
-                parsed["symbol"],
+                parsed.get("symbol") or None,
                 parsed.get("timeframe"),
                 prefix="telegram_chart",
             )
             if screenshot_path:
-                caption = f"Sopotek chart {parsed['symbol']} ({parsed.get('timeframe') or getattr(self.controller, 'time_frame', '1h')})"
+                symbol_text = parsed.get("symbol") or "current chart"
+                timeframe_text = parsed.get("timeframe") or getattr(self.controller, "time_frame", "1h")
+                caption = f"Sopotek chart {symbol_text} ({timeframe_text})"
                 sent = await self.send_photo(screenshot_path, caption=caption)
                 if not sent:
                     await self.send_message(f"Chart captured but could not be uploaded: <code>{screenshot_path}</code>")
             else:
                 await self.send_message("Unable to open or capture that chart right now.")
+            return
+        action_commands = self._slash_action_commands()
+        action_text = action_commands.get(command)
+        if action_text:
+            answer = await self._handle_direct_action(action_text, incoming_chat_id)
+            await self.send_message(answer)
             return
         if command in {"/ask", "/chat"}:
             question = args_text
@@ -301,16 +316,30 @@ class TelegramService:
             "<b>Sopotek Telegram Commands</b>\n"
             "/commands - show keyboard and command list\n"
             "/status - trading status and AI scope\n"
+            "/management - broker, AI, and Telegram management summary\n"
             "/balances - account balances\n"
             "/positions - open positions\n"
             "/orders - open exchange orders\n"
             "/recommendations - top trade recommendations\n"
             "/performance - performance snapshot\n"
+            "/history - closed trade history summary\n"
             "/analysis - broker position analysis summary\n"
             "/screenshot - terminal screenshot\n"
-            "/chart SYMBOL [TIMEFRAME] - open/focus a chart in the app\n"
-            "/chartshot SYMBOL [TIMEFRAME] - capture that chart and send it here\n"
-            "/trade ... - preview or place a trade with CONFIRM\n"
+            "/chartshot - capture the current chart and send it here\n"
+            "/settings - open settings in the app\n"
+            "/health - open system health\n"
+            "/quantpm - open Quant PM\n"
+            "/journal - open closed journal\n"
+            "/review - open journal review\n"
+            "/logs - open logs\n"
+            "/refreshmarkets - refresh markets\n"
+            "/reloadbalances - reload balances\n"
+            "/refreshchart - refresh the active chart\n"
+            "/refreshorderbook - refresh the active order book\n"
+            "/autotradeon - enable AI trading\n"
+            "/autotradeoff - stop AI trading\n"
+            "/killswitch - activate the emergency kill switch\n"
+            "/resume - resume trading after a stop\n"
             "/ask &lt;question&gt; - ask Sopotek Pilot about the app or current market context\n"
             "/help - show this message"
         )
@@ -320,15 +349,37 @@ class TelegramService:
             "keyboard": [
                 [{"text": "/status"}, {"text": "/balances"}, {"text": "/positions"}],
                 [{"text": "/orders"}, {"text": "/recommendations"}, {"text": "/performance"}],
-                [{"text": "/analysis"}, {"text": "/screenshot"}, {"text": "/commands"}],
-                [{"text": "/chart EUR/USD 1h"}, {"text": "/chartshot EUR/USD 1h"}],
-                [{"text": "/trade buy EUR/USD amount 1000"}, {"text": "/trade buy EUR/USD amount 1000 confirm"}],
+                [{"text": "/analysis"}, {"text": "/history"}, {"text": "/management"}],
+                [{"text": "/screenshot"}, {"text": "/chartshot"}, {"text": "/commands"}],
+                [{"text": "/settings"}, {"text": "/health"}, {"text": "/quantpm"}],
+                [{"text": "/journal"}, {"text": "/review"}, {"text": "/logs"}],
+                [{"text": "/refreshmarkets"}, {"text": "/reloadbalances"}, {"text": "/refreshchart"}],
+                [{"text": "/refreshorderbook"}, {"text": "/autotradeon"}, {"text": "/autotradeoff"}],
+                [{"text": "/killswitch"}, {"text": "/resume"}],
                 [{"text": "/ask Give me a short market and account summary"}],
             ],
             "resize_keyboard": True,
             "is_persistent": True,
             "one_time_keyboard": False,
             "input_field_placeholder": "Choose a command or type /ask ...",
+        }
+
+    def _slash_action_commands(self):
+        return {
+            "/settings": "open settings",
+            "/health": "open system health",
+            "/quantpm": "open quant pm",
+            "/journal": "open closed journal",
+            "/review": "open journal review",
+            "/logs": "open logs",
+            "/refreshmarkets": "refresh markets",
+            "/reloadbalances": "reload balances",
+            "/refreshchart": "refresh chart",
+            "/refreshorderbook": "refresh orderbook",
+            "/autotradeon": "start ai trading",
+            "/autotradeoff": "stop ai trading",
+            "/killswitch": "activate kill switch",
+            "/resume": "resume trading",
         }
 
     def _trade_confirmation_markup(self, token):

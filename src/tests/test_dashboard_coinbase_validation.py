@@ -21,6 +21,48 @@ def test_coinbase_validation_accepts_valid_pem_with_org_key_name():
     assert error is None
 
 
+def test_coinbase_validation_accepts_uuid_key_id_with_pem():
+    error = Dashboard._coinbase_validation_error(
+        "2ffe3f58-d600-47a8-a147-1c55854eddc8",
+        "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIExamplePrivateKeyMaterial1234567890\n-----END EC PRIVATE KEY-----\n",
+        password=None,
+    )
+
+    assert error is None
+
+
+def test_coinbase_validation_accepts_json_bundle_with_private_key_body():
+    error = Dashboard._coinbase_validation_error(
+        "",
+        '{"id":"2ffe3f58-d600-47a8-a147-1c55854eddc8","privateKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}',
+        password=None,
+    )
+
+    assert error is None
+
+
+def test_dashboard_resolved_inputs_prefer_coinbase_key_name_from_json_bundle(monkeypatch):
+    _get_app()
+    monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.list_accounts", lambda: [])
+    controller = _make_controller()
+
+    dashboard = Dashboard(controller)
+    dashboard.exchange_type_box.setCurrentText("crypto")
+    dashboard.exchange_box.setCurrentText("coinbase")
+    dashboard.api_input.clear()
+    dashboard.secret_input.setText(
+        (
+            '{"name":"organizations/test/apiKeys/key-1",'
+            '"id":"2ffe3f58-d600-47a8-a147-1c55854eddc8",'
+            '"privateKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
+        )
+    )
+
+    resolved = dashboard._resolved_broker_inputs()
+
+    assert resolved["api_key"] == "organizations/test/apiKeys/key-1"
+
+
 def test_coinbase_validation_rejects_non_advanced_trade_api_key_name():
     error = Dashboard._coinbase_validation_error(
         "GA4CIZX3QJADGZZKI7HUS6WVHBNIX3EUNUW4MZUDW7VR7UIFV6D4CQW4",
@@ -28,7 +70,7 @@ def test_coinbase_validation_rejects_non_advanced_trade_api_key_name():
         password=None,
     )
 
-    assert "must start with organizations/" in error
+    assert "format is not recognized" in error
 
 
 def test_coinbase_validation_rejects_truncated_private_key():
@@ -110,3 +152,23 @@ def test_dashboard_connect_emits_controller_strategy_without_dashboard_override(
 
     assert len(emitted) == 1
     assert emitted[0].strategy == "EMA Cross"
+
+
+def test_dashboard_resolved_inputs_normalize_coinbase_json_bundle(monkeypatch):
+    _get_app()
+    monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.list_accounts", lambda: [])
+    controller = _make_controller()
+
+    dashboard = Dashboard(controller)
+    dashboard.exchange_type_box.setCurrentText("crypto")
+    dashboard.exchange_box.setCurrentText("coinbase")
+    dashboard.api_input.clear()
+    dashboard.secret_input.setText(
+        '{"id":"2ffe3f58-d600-47a8-a147-1c55854eddc8","privateKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
+    )
+
+    resolved = dashboard._resolved_broker_inputs()
+
+    assert resolved["api_key"] == "2ffe3f58-d600-47a8-a147-1c55854eddc8"
+    assert resolved["secret"].startswith("-----BEGIN EC PRIVATE KEY-----\n")
+    assert resolved["secret"].endswith("\n-----END EC PRIVATE KEY-----\n")

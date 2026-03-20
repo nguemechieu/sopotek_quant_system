@@ -1,4 +1,4 @@
-SPOT_ONLY_EXCHANGES = {"binanceus"}
+SPOT_ONLY_EXCHANGES = {"binanceus", "coinbase"}
 
 MARKET_VENUE_CHOICES = [
     ("Auto", "auto"),

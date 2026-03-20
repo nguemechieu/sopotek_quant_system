@@ -153,6 +153,28 @@ def test_chart_volume_bar_is_optional_and_can_be_restored_from_the_chart_menu_st
     assert widget.volume_plot.getPlotItem().getAxis("bottom").isVisible() is True
 
 
+def test_chart_visual_theme_updates_plot_background_and_axis_colors():
+    _app()
+    widget = ChartWidget("BTC/USDT", "1h", _controller())
+
+    widget.set_visual_theme(
+        chart_background="#f4efe5",
+        grid_color="#6b7a8f",
+        axis_color="#223344",
+    )
+
+    axis = widget.price_plot.getPlotItem().getAxis("right")
+
+    assert widget.chart_background == "#f4efe5"
+    assert widget.grid_color == "#6b7a8f"
+    assert widget.axis_color == "#223344"
+    assert widget.price_plot.backgroundBrush().color().name() == "#f4efe5"
+    assert axis.pen().color().name() == "#223344"
+    assert axis.textPen().color().name() == "#223344"
+    assert axis.tickPen().color().name() == "#6b7a8f"
+    assert "#f4efe5" in widget.market_tabs.styleSheet()
+
+
 def test_chart_indicators_can_be_removed_from_price_and_lower_panes():
     _app()
     widget = ChartWidget("BTC/USDT", "1h", _controller())
@@ -189,3 +211,112 @@ def test_chart_compact_view_mode_prioritizes_candles_and_keeps_datetime_axis_vis
     assert widget.price_plot.minimumHeight() == 280
     assert widget.volume_plot.maximumHeight() == 96
     assert widget.price_plot.getPlotItem().getAxis("bottom").isVisible() is True
+
+
+def test_chart_status_overlay_handles_loading_no_data_and_limited_history_states():
+    _app()
+    widget = ChartWidget("AAVE/USD", "1h", _controller())
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1700000000 + (index * 3600) for index in range(12)],
+            "open": [100.0 + index for index in range(12)],
+            "high": [101.1 + index for index in range(12)],
+            "low": [99.4 + index for index in range(12)],
+            "close": [100.5 + index for index in range(12)],
+            "volume": [900.0 + (index * 25.0) for index in range(12)],
+        }
+    )
+
+    widget.set_loading_state(True, requested_bars=240)
+
+    assert widget.status_overlay_item.isVisible() is True
+    assert widget._chart_status_mode == "loading"
+    assert widget._chart_status_message == "Loading market data..."
+    assert widget._chart_status_requested_bars == 240
+
+    widget.update_candles(frame)
+
+    assert widget.status_overlay_item.isVisible() is False
+    assert widget._chart_status_mode == "idle"
+
+    widget.set_no_data_state()
+
+    assert widget.status_overlay_item.isVisible() is True
+    assert widget._chart_status_mode == "error"
+    assert widget._chart_status_message == "No data received."
+
+    widget.set_history_notice(60, 240)
+
+    assert widget.status_overlay_item.isVisible() is True
+    assert widget._chart_status_mode == "notice"
+    assert widget._chart_status_message == "Loaded 60 / 240 candles."
+
+
+def test_chart_update_candles_filters_malformed_rows_before_rendering():
+    _app()
+    widget = ChartWidget("QNT/USDC", "1h", _controller())
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1700000000, 1700000000, 1700003600, None, 1700007200],
+            "open": [74.0, 74.5, "bad", 75.0, 76.0],
+            "high": [73.0, 76.0, 78.0, 76.0, 77.0],
+            "low": [75.0, 73.5, 72.0, 74.0, 75.5],
+            "close": [74.2, 75.2, 76.0, 75.5, 76.8],
+            "volume": [-3.0, 15.0, 20.0, 4.0, None],
+        }
+    )
+
+    widget.update_candles(frame)
+
+    assert widget._last_df is not None
+    assert len(widget._last_df.index) == 2
+    assert float(widget._last_df.iloc[0]["open"]) == 74.5
+    assert float(widget._last_df.iloc[0]["high"]) == 76.0
+    assert float(widget._last_df.iloc[0]["low"]) == 73.5
+    assert float(widget._last_df.iloc[0]["close"]) == 75.2
+    assert float(widget._last_df.iloc[0]["volume"]) == 15.0
+    assert float(widget._last_df.iloc[1]["volume"]) == 0.0
+
+
+def test_chart_update_candles_normalizes_mixed_second_and_millisecond_timestamps():
+    _app()
+    widget = ChartWidget("AAVE/USD", "1m", _controller())
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1700000000, 1700000060000, 1700000120],
+            "open": [100.0, 100.2, 100.4],
+            "high": [100.5, 100.7, 100.9],
+            "low": [99.8, 100.0, 100.2],
+            "close": [100.2, 100.4, 100.6],
+            "volume": [12.0, 15.0, 18.0],
+        }
+    )
+
+    widget.update_candles(frame)
+
+    assert widget._last_x is not None
+    assert len(widget._last_x) == 3
+    diffs = [round(float(widget._last_x[i + 1] - widget._last_x[i]), 3) for i in range(2)]
+    assert diffs == [60.0, 60.0]
+
+
+def test_chart_update_candles_regularizes_sparse_intraday_spacing_to_timeframe():
+    _app()
+    widget = ChartWidget("AAVE/USD", "1m", _controller())
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1700000000, 1700003600, 1700007200],
+            "open": [100.0, 100.2, 100.4],
+            "high": [100.5, 100.7, 100.9],
+            "low": [99.8, 100.0, 100.2],
+            "close": [100.2, 100.4, 100.6],
+            "volume": [12.0, 15.0, 18.0],
+        }
+    )
+
+    widget.update_candles(frame)
+
+    assert widget._last_x is not None
+    assert len(widget._last_x) == 3
+    diffs = [round(float(widget._last_x[i + 1] - widget._last_x[i]), 3) for i in range(2)]
+    assert diffs == [60.0, 60.0]

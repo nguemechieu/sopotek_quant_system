@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import aiohttp
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -225,6 +226,15 @@ class FakePagedAssetSession(FakeStellarSession):
                     "_links": {},
                     "_embedded": {
                         "records": [
+                            {
+                                "asset_code": "SCAM",
+                                "asset_issuer": "GSCAMASSETAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                                "num_accounts": 2500,
+                                "accounts": {"authorized": 2400},
+                                "balances": {"authorized": "750000.0000000"},
+                                "liquidity_pools_amount": "125.0000000",
+                                "flags": ["scam"],
+                            },
                             {
                                 "asset_code": "AQUA",
                                 "asset_issuer": "GAQUA",
@@ -1024,6 +1034,87 @@ def test_stellar_broker_can_open_trustline_for_screened_asset(monkeypatch, tmp_p
         assert FakeServerAsync.last_transaction.operations[0]["kind"] == "change_trust"
         assert FakeServerAsync.last_transaction.operations[0]["asset"].code == "AQUA"
         assert "AQUA" in broker._account_asset_codes
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stellar_broker_fetches_asset_directory_page(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", FakePagedAssetSession)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=None,
+                mode="live",
+                params={"quote_assets": ["USDC", "XLM"], "asset_limit": 10, "asset_scan_pages": 3},
+            )
+        )
+
+        await broker.connect()
+        payload = await broker.fetch_asset_directory_page(cursor="page-2", limit=10)
+
+        row_map = {row["id"]: row for row in payload["rows"]}
+        assert "AQUA:GAQUA" in row_map
+        assert "USDC:GUSDC" in row_map
+        assert "SCAM:GSCAMASSETAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" not in row_map
+        assert row_map["AQUA:GAQUA"]["needs_trustline"] is True
+        assert row_map["USDC:GUSDC"]["trusted"] is True
+        assert broker.is_asset_blocked("SCAM:GSCAMASSETAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") is True
+        assert payload["next_cursor"] is None
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stellar_broker_estimates_asset_roi_from_recent_candles(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", FakeStellarSession)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=None,
+                mode="live",
+                params={"quote_assets": ["USDC", "XLM"]},
+            )
+        )
+
+        await broker.connect()
+        snapshot = await broker.estimate_asset_roi("AQUA:GAQUA", timeframe="1h", limit=12)
+
+        assert snapshot is not None
+        assert snapshot["asset"] == "AQUA:GAQUA"
+        assert snapshot["symbol"].endswith("/USDC:GUSDC")
+        assert round(float(snapshot["roi_pct"]), 4) == round(((0.101 - 0.098) / 0.098) * 100.0, 4)
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stellar_broker_rejects_trustline_for_blocked_asset(monkeypatch):
+    import broker.stellar_broker as stellar_module
+
+    monkeypatch.setattr(stellar_module.aiohttp, "ClientSession", FakeStellarSession)
+
+    async def scenario():
+        broker = StellarBroker(
+            SimpleNamespace(
+                api_key=TEST_PUBLIC_KEY,
+                secret=TEST_SECRET_KEY,
+                mode="paper",
+                params={"blocked_assets": ["SCAM:GSCAMISSUER"]},
+            )
+        )
+
+        await broker.connect()
+        with pytest.raises(ValueError, match="marked as banned"):
+            await broker.create_trustline("SCAM:GSCAMISSUER")
         await broker.close()
 
     asyncio.run(scenario())

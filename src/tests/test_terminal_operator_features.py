@@ -1,14 +1,17 @@
 import os
 import sys
 import time
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 from PySide6.QtWidgets import QApplication, QComboBox, QDockWidget, QMainWindow
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from frontend.ui.chart.chart_widget import ChartWidget
 from frontend.ui.terminal import Terminal
 
 
@@ -63,6 +66,37 @@ class _MenuTerminal(QMainWindow):
         if name.startswith("_"):
             return lambda *args, **kwargs: None
         raise AttributeError(name)
+
+
+class _ChartRequestController:
+    def __init__(self, frame):
+        self.frame = frame
+        self.candle_buffers = {}
+        self.news_draw_on_chart = False
+
+    async def request_candle_data(self, symbol, timeframe="1h", limit=None):
+        return self.frame
+
+
+class _ChartRequestTerminal(QMainWindow):
+    def __init__(self, frame):
+        super().__init__()
+        self.controller = _ChartRequestController(frame)
+        self._ui_shutting_down = False
+        self.logger = SimpleNamespace(error=lambda *args, **kwargs: None)
+        self.system_console = SimpleNamespace(log=lambda *args, **kwargs: None)
+        self.heartbeat = SimpleNamespace(setStyleSheet=lambda *args, **kwargs: None)
+        self._chart_request_tokens = {}
+        self.chart = ChartWidget("AAVE/USD", "1h", self.controller)
+
+    def _history_request_limit(self):
+        return 240
+
+    def _is_qt_object_alive(self, obj):
+        return obj is not None
+
+    def _iter_chart_widgets(self):
+        return [self.chart]
 
 
 def _app():
@@ -758,3 +792,51 @@ def test_chart_context_action_supports_market_ticket_prefill():
     assert captured["prefill"]["symbol"] == "BTC/USDT"
     assert captured["prefill"]["side"] == "buy"
     assert captured["prefill"]["order_type"] == "market"
+
+
+def test_request_chart_data_for_widget_marks_empty_broker_history_on_chart():
+    _app()
+    terminal = _ChartRequestTerminal(None)
+    _bind(
+        terminal,
+        "_register_chart_request_token",
+        "_is_chart_request_current",
+        "_request_chart_data_for_widget",
+        "_update_chart",
+    )
+
+    result = asyncio.run(Terminal._request_chart_data_for_widget(terminal, terminal.chart, limit=240))
+
+    assert result is None
+    assert terminal.chart._chart_status_mode == "error"
+    assert terminal.chart._chart_status_message == "No data received."
+
+
+def test_request_chart_data_for_widget_marks_limited_history_after_loading():
+    _app()
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1700000000 + (index * 3600) for index in range(60)],
+            "open": [100.0 + index for index in range(60)],
+            "high": [101.0 + index for index in range(60)],
+            "low": [99.0 + index for index in range(60)],
+            "close": [100.4 + index for index in range(60)],
+            "volume": [1000.0 + (index * 20.0) for index in range(60)],
+        }
+    )
+    terminal = _ChartRequestTerminal(frame)
+    _bind(
+        terminal,
+        "_register_chart_request_token",
+        "_is_chart_request_current",
+        "_request_chart_data_for_widget",
+        "_update_chart",
+    )
+
+    result = asyncio.run(Terminal._request_chart_data_for_widget(terminal, terminal.chart, limit=240))
+
+    assert result is not None
+    assert terminal.chart._chart_status_mode == "notice"
+    assert terminal.chart._chart_status_message == "Loaded 60 / 240 candles."
+    assert terminal.chart._last_df is not None
+    assert len(terminal.chart._last_df.index) == 60

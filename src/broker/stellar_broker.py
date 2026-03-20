@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -87,6 +87,38 @@ class StellarBroker(BaseBroker):
     VALID_ASSET_CODE_RE = re.compile(r"^[A-Z]{2,12}$")
     VALID_PUBLIC_KEY_RE = re.compile(r"^G[A-Z2-7]{55}$")
     VALID_SECRET_KEY_RE = re.compile(r"^S[A-Z2-7]{55}$")
+    BLOCK_REASON_TEXT_MAP = {
+        "scam": "Scam",
+        "spam": "Scam",
+        "fraud": "Scam",
+        "phishing": "Scam",
+        "malicious": "Scam",
+        "fake": "Scam",
+        "banned": "Banned",
+        "blacklist": "Banned",
+        "blacklisted": "Banned",
+        "blocked": "Banned",
+    }
+    BLOCK_REASON_BOOL_FIELDS = {
+        "scam": "Scam",
+        "is_scam": "Scam",
+        "spam": "Scam",
+        "is_spam": "Scam",
+        "fraud": "Scam",
+        "is_fraud": "Scam",
+        "phishing": "Scam",
+        "is_phishing": "Scam",
+        "malicious": "Scam",
+        "is_malicious": "Scam",
+        "fake": "Scam",
+        "is_fake": "Scam",
+        "banned": "Banned",
+        "is_banned": "Banned",
+        "blocked": "Banned",
+        "is_blocked": "Banned",
+        "blacklisted": "Banned",
+        "is_blacklisted": "Banned",
+    }
 
     def __init__(self, config):
         super().__init__()
@@ -129,6 +161,9 @@ class StellarBroker(BaseBroker):
         self.asset_registry: Dict[str, StellarAssetDescriptor] = {"XLM": StellarAssetDescriptor("XLM", None)}
         self._network_asset_codes: List[str] = []
         self._account_asset_codes: List[str] = ["XLM"]
+        self._blocked_asset_identifiers: Set[str] = set()
+        self._blocked_asset_codes: Set[str] = set()
+        self._blocked_asset_reasons: Dict[str, str] = {}
         self.market_registry: Dict[str, dict] = {}
         self._cached_account: Optional[dict] = None
         self._cached_account_until = 0.0
@@ -158,6 +193,7 @@ class StellarBroker(BaseBroker):
                 )
 
         self._load_config_assets()
+        self._load_config_blocked_assets()
         self._load_cached_assets()
 
     def supported_market_venues(self):
@@ -224,6 +260,16 @@ class StellarBroker(BaseBroker):
                 network_codes.insert(0, "XLM")
             self._network_asset_codes = list(dict.fromkeys(network_codes))
 
+        for item in payload.get("blocked_assets", []):
+            if isinstance(item, dict):
+                self._register_blocked_asset(
+                    item.get("asset") or item.get("code"),
+                    issuer=item.get("issuer"),
+                    reason=item.get("reason") or "Banned",
+                )
+                continue
+            self._register_blocked_asset(item, reason="Banned")
+
     def _save_asset_cache(self):
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,6 +277,13 @@ class StellarBroker(BaseBroker):
                 "saved_at": time.time(),
                 "network_asset_codes": [code for code in self._network_asset_codes if code in self.asset_registry],
                 "account_asset_codes": [code for code in self._account_asset_codes if code in self.asset_registry],
+                "blocked_assets": [
+                    {
+                        "asset": asset_id,
+                        "reason": self._blocked_asset_reasons.get(asset_id, "Banned"),
+                    }
+                    for asset_id in sorted(self._blocked_asset_identifiers)
+                ],
                 "asset_registry": [
                     {"code": descriptor.code, "issuer": descriptor.issuer}
                     for descriptor in self.asset_registry.values()
@@ -285,6 +338,150 @@ class StellarBroker(BaseBroker):
                 parsed[code] = StellarAssetDescriptor(code, str(issuer))
 
         return parsed
+
+    def _iter_blocked_asset_inputs(self, raw_assets):
+        if raw_assets in (None, "", False):
+            return []
+        if isinstance(raw_assets, dict):
+            entries = []
+            for asset, value in raw_assets.items():
+                if isinstance(value, dict):
+                    item = dict(value)
+                    item.setdefault("asset", asset)
+                    entries.append(item)
+                elif value in (None, "", True):
+                    entries.append({"asset": asset})
+                else:
+                    entries.append({"asset": asset, "reason": value})
+            return entries
+        if isinstance(raw_assets, (list, tuple, set)):
+            return list(raw_assets)
+        return [raw_assets]
+
+    def _normalize_block_reason(self, reason) -> str:
+        text = str(reason or "").strip()
+        lowered = text.lower()
+        for marker, label in self.BLOCK_REASON_TEXT_MAP.items():
+            if marker in lowered:
+                return label
+        return text.title() if text else "Banned"
+
+    def _iter_nested_mapping_items(self, value):
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                yield str(key or "").strip().lower(), nested
+                yield from self._iter_nested_mapping_items(nested)
+        elif isinstance(value, (list, tuple, set)):
+            for nested in value:
+                yield from self._iter_nested_mapping_items(nested)
+
+    def _iter_nested_text(self, value):
+        if isinstance(value, dict):
+            for nested in value.values():
+                yield from self._iter_nested_text(nested)
+        elif isinstance(value, (list, tuple, set)):
+            for nested in value:
+                yield from self._iter_nested_text(nested)
+        elif value not in (None, ""):
+            yield str(value)
+
+    def _load_config_blocked_assets(self):
+        for key in ("blocked_assets", "banned_assets", "scam_assets"):
+            for entry in self._iter_blocked_asset_inputs(self.params.get(key)):
+                if isinstance(entry, dict):
+                    self._register_blocked_asset(
+                        entry.get("asset") or entry.get("code"),
+                        issuer=entry.get("issuer"),
+                        reason=entry.get("reason") or key.replace("_assets", ""),
+                    )
+                else:
+                    self._register_blocked_asset(entry, reason=key.replace("_assets", ""))
+
+    def _register_blocked_asset(self, asset, issuer=None, reason="Banned"):
+        descriptor = None
+        if isinstance(asset, StellarAssetDescriptor):
+            descriptor = asset
+        elif isinstance(asset, str):
+            raw_text = str(asset or "").strip()
+            if not raw_text:
+                return
+            if issuer not in (None, ""):
+                descriptor = StellarAssetDescriptor(str(raw_text).upper().strip(), str(issuer).strip())
+            elif raw_text.upper() == "XLM":
+                return
+            elif ":" in raw_text:
+                code, parsed_issuer = raw_text.split(":", 1)
+                code = str(code or "").upper().strip()
+                parsed_issuer = str(parsed_issuer or "").strip()
+                if not code or not parsed_issuer or not self._is_valid_asset_code(code):
+                    return
+                descriptor = StellarAssetDescriptor(code, parsed_issuer)
+            else:
+                code = str(raw_text or "").upper().strip()
+                if not code or not self._is_valid_asset_code(code):
+                    return
+                descriptor = StellarAssetDescriptor(code, None)
+        elif isinstance(asset, dict):
+            code = str(asset.get("code") or asset.get("asset_code") or "").upper().strip()
+            parsed_issuer = str(asset.get("issuer") or asset.get("asset_issuer") or issuer or "").strip()
+            if not code or not self._is_valid_asset_code(code):
+                return
+            descriptor = StellarAssetDescriptor(code, parsed_issuer or None)
+        if descriptor is None or descriptor.code == "XLM":
+            return
+
+        identifier = self._asset_identifier(descriptor)
+        self._blocked_asset_identifiers.add(identifier)
+        self._blocked_asset_reasons[identifier] = self._normalize_block_reason(reason)
+        if descriptor.issuer is None:
+            self._blocked_asset_codes.add(descriptor.code)
+
+    def block_reason_for_asset(self, asset, issuer=None) -> Optional[str]:
+        descriptor = asset if isinstance(asset, StellarAssetDescriptor) else None
+        if descriptor is None:
+            if issuer not in (None, ""):
+                descriptor = StellarAssetDescriptor(str(asset or "").upper().strip(), str(issuer).strip())
+            else:
+                raw_text = str(asset or "").strip()
+                if ":" in raw_text:
+                    code, parsed_issuer = raw_text.split(":", 1)
+                    descriptor = StellarAssetDescriptor(str(code or "").upper().strip(), str(parsed_issuer or "").strip())
+                elif raw_text:
+                    descriptor = StellarAssetDescriptor(str(raw_text).upper().strip(), None)
+        if descriptor is None or not descriptor.code or descriptor.code == "XLM":
+            return None
+
+        identifier = self._asset_identifier(descriptor)
+        if identifier in self._blocked_asset_reasons:
+            return self._blocked_asset_reasons[identifier]
+        if descriptor.code in self._blocked_asset_codes:
+            return self._blocked_asset_reasons.get(descriptor.code, "Banned")
+        return None
+
+    def is_asset_blocked(self, asset, issuer=None) -> bool:
+        return self.block_reason_for_asset(asset, issuer=issuer) is not None
+
+    def _asset_record_block_reason(self, record: dict) -> Optional[str]:
+        if not isinstance(record, dict):
+            return None
+
+        code = str(record.get("asset_code") or record.get("code") or "").upper().strip()
+        issuer = str(record.get("asset_issuer") or record.get("issuer") or "").strip()
+        configured_reason = self.block_reason_for_asset(code if not issuer else f"{code}:{issuer}")
+        if configured_reason:
+            return configured_reason
+
+        for key, value in self._iter_nested_mapping_items(record):
+            if key in self.BLOCK_REASON_BOOL_FIELDS and bool(value):
+                return self.BLOCK_REASON_BOOL_FIELDS[key]
+
+            if any(token in key for token in ("scam", "ban", "block", "blacklist", "flag", "risk", "warn", "tag", "label", "status", "fraud", "phishing", "spam")):
+                for fragment in self._iter_nested_text(value):
+                    lowered = str(fragment or "").strip().lower()
+                    for marker, label in self.BLOCK_REASON_TEXT_MAP.items():
+                        if marker in lowered:
+                            return label
+        return None
 
     async def _ensure_connected(self):
         if not self._connected:
@@ -482,7 +679,20 @@ class StellarBroker(BaseBroker):
     def _build_tradable_symbols(self) -> List[str]:
         explicit_symbols = self.params.get("symbols")
         if isinstance(explicit_symbols, list) and explicit_symbols:
-            return [str(symbol) for symbol in explicit_symbols if symbol]
+            filtered_symbols = []
+            for symbol in explicit_symbols:
+                normalized_symbol = str(symbol or "").strip()
+                if not normalized_symbol:
+                    continue
+                try:
+                    base_asset, quote_asset = self._resolve_symbol_assets(normalized_symbol)
+                except Exception:
+                    filtered_symbols.append(normalized_symbol)
+                    continue
+                if self.is_asset_blocked(base_asset) or self.is_asset_blocked(quote_asset):
+                    continue
+                filtered_symbols.append(normalized_symbol)
+            return filtered_symbols
 
         raw_codes = [
             code
@@ -510,10 +720,10 @@ class StellarBroker(BaseBroker):
         self.market_registry = {}
         for quote in quote_assets:
             quote_descriptor = self.asset_registry.get(quote)
-            if quote_descriptor is None:
+            if quote_descriptor is None or self.is_asset_blocked(quote_descriptor):
                 continue
             for base_descriptor in descriptors:
-                if base_descriptor.code == quote:
+                if base_descriptor.code == quote or self.is_asset_blocked(base_descriptor):
                     continue
                 pair_key = tuple(sorted((base_descriptor.code, quote)))
                 if pair_key in seen_pairs:
@@ -573,6 +783,10 @@ class StellarBroker(BaseBroker):
         code = str(record.get("asset_code") or "").upper().strip()
         issuer = str(record.get("asset_issuer") or "").strip()
         if not code or not issuer or not self._is_valid_asset_code(code):
+            return False
+        block_reason = self._asset_record_block_reason(record)
+        if block_reason:
+            self._register_blocked_asset(f"{code}:{issuer}", reason=block_reason)
             return False
 
         score = self._score_asset_record(record)
@@ -643,6 +857,116 @@ class StellarBroker(BaseBroker):
         if merged_codes:
             self._network_asset_codes = merged_codes
             self._save_asset_cache()
+
+    async def fetch_asset_directory_page(self, cursor=None, limit=60):
+        await self._ensure_connected()
+        page_limit = max(10, min(int(limit or 60), 200))
+        params = {"limit": page_limit, "order": "desc"}
+        if cursor not in (None, ""):
+            params["cursor"] = str(cursor)
+
+        payload = await self._request_connected("GET", "/assets", params=params)
+        records = ((payload or {}).get("_embedded") or {}).get("records") or []
+        rows = []
+
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            code = str(record.get("asset_code") or "").upper().strip()
+            issuer = str(record.get("asset_issuer") or "").strip()
+            if not code or not issuer or not self._is_valid_asset_code(code):
+                continue
+            block_reason = self._asset_record_block_reason(record)
+            if block_reason:
+                self._register_blocked_asset(f"{code}:{issuer}", reason=block_reason)
+                continue
+
+            descriptor = StellarAssetDescriptor(code, issuer)
+            self._register_asset_descriptor(descriptor)
+            screened = self._asset_record_is_discoverable(record)
+            trusted = self._has_trustline(descriptor)
+            rows.append(
+                {
+                    "id": self._asset_identifier(descriptor),
+                    "code": descriptor.code,
+                    "issuer": descriptor.issuer,
+                    "source": "Directory",
+                    "url": f"https://stellar.expert/explorer/public/asset/{descriptor.code}-{descriptor.issuer}",
+                    "screened": screened,
+                    "trusted": trusted,
+                    "needs_trustline": not trusted,
+                    "risk_label": "Screened" if screened else "Unscreened",
+                    "score": self._score_asset_record(record),
+                    "roi_pct": None,
+                    "roi_symbol": "",
+                }
+            )
+
+        rows.sort(
+            key=lambda item: (
+                0 if bool(item.get("screened")) else 1,
+                0 if bool(item.get("trusted")) else 1,
+                -self._float(item.get("score"), 0.0),
+                str(item.get("code") or ""),
+                str(item.get("issuer") or ""),
+            )
+        )
+        self._save_asset_cache()
+        return {
+            "rows": rows,
+            "cursor": str(cursor or ""),
+            "next_cursor": self._extract_next_cursor(payload),
+        }
+
+    async def estimate_asset_roi(self, asset, timeframe="1h", limit=48):
+        descriptor = asset if isinstance(asset, StellarAssetDescriptor) else self._parse_asset_text(str(asset or "").strip())
+        if descriptor.is_native:
+            return None
+
+        quote_codes = []
+        for code in list(self.params.get("quote_assets") or self.DEFAULT_QUOTE_PRIORITY) + ["XLM"]:
+            normalized_code = str(code or "").upper().strip()
+            if not normalized_code or normalized_code == descriptor.code or normalized_code in quote_codes:
+                continue
+            quote_codes.append(normalized_code)
+
+        best_snapshot = None
+        for quote_code in quote_codes:
+            if quote_code == "XLM":
+                quote_descriptor = StellarAssetDescriptor("XLM", None)
+            else:
+                quote_descriptor = self.asset_registry.get(quote_code)
+                if quote_descriptor is None:
+                    continue
+
+            symbol = f"{self._asset_identifier(descriptor)}/{self._asset_identifier(quote_descriptor)}"
+            try:
+                candles = await self.fetch_ohlcv(symbol, timeframe=timeframe, limit=max(int(limit or 0), 2))
+            except Exception:
+                continue
+            if not candles:
+                continue
+
+            opening_price = self._float(candles[0][1], 0.0)
+            closing_price = self._float(candles[-1][4], 0.0)
+            if opening_price <= 0 or closing_price <= 0:
+                continue
+
+            roi_pct = ((closing_price - opening_price) / opening_price) * 100.0
+            snapshot = {
+                "asset": self._asset_identifier(descriptor),
+                "symbol": symbol,
+                "quote": quote_descriptor.code,
+                "timeframe": str(timeframe or "1h"),
+                "bars": len(candles),
+                "start_price": opening_price,
+                "end_price": closing_price,
+                "roi_pct": roi_pct,
+            }
+            if best_snapshot is None or roi_pct > float(best_snapshot.get("roi_pct") or 0.0):
+                best_snapshot = snapshot
+
+        return best_snapshot
 
     def _float(self, value, default=0.0) -> float:
         try:
@@ -930,7 +1254,11 @@ class StellarBroker(BaseBroker):
             ttl_dns_cache=300,
         )
         timeout = aiohttp.ClientTimeout(total=45)
-        self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        try:
+            self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        except TypeError:
+            await connector.close()
+            self.session = aiohttp.ClientSession()
 
         try:
             await self._load_account(suppress_rate_limit=True)
@@ -1301,6 +1629,11 @@ class StellarBroker(BaseBroker):
 
     async def create_trustline(self, asset, limit=None):
         descriptor = asset if isinstance(asset, StellarAssetDescriptor) else self._parse_asset_text(str(asset or "").strip())
+        block_reason = self.block_reason_for_asset(descriptor)
+        if block_reason:
+            raise ValueError(
+                f"Trustline blocked for {descriptor.code}: this asset is marked as {block_reason.lower()} and is filtered by Sopotek."
+            )
         if descriptor.is_native:
             return {
                 "asset": self._asset_identifier(descriptor),

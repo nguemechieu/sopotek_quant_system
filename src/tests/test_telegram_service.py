@@ -22,6 +22,9 @@ class DummyController:
     async def telegram_status_text(self):
         return "status"
 
+    def telegram_management_text(self):
+        return "management"
+
     async def telegram_balances_text(self):
         return "balances"
 
@@ -37,6 +40,9 @@ class DummyController:
     async def telegram_performance_text(self):
         return "performance"
 
+    async def market_chat_trade_history_summary(self, limit=300, open_window=True):
+        return f"history:{limit}:{open_window}"
+
     async def telegram_position_analysis_text(self, open_window=True):
         return f"analysis:{open_window}"
 
@@ -49,9 +55,7 @@ class DummyController:
 
     async def handle_market_chat_action(self, question):
         self.direct_actions.append(question)
-        if str(question).lower().startswith("trade "):
-            return f"direct:{question}"
-        return None
+        return f"direct:{question}"
 
     async def telegram_open_chart(self, symbol, timeframe=None):
         self.open_chart_calls.append((symbol, timeframe))
@@ -133,6 +137,16 @@ def test_chartshot_command_captures_and_sends_photo():
     assert service.photos == [("output/screenshots/chart.png", "Sopotek chart EUR/USD (1h)")]
 
 
+def test_chartshot_command_without_symbol_uses_current_chart_context():
+    controller = DummyController()
+    service = RecordingTelegramService(controller)
+
+    asyncio.run(service._handle_update(build_update("/chartshot")))
+
+    assert controller.chart_capture_calls == [(None, "", "telegram_chart")]
+    assert service.photos == [("output/screenshots/chart.png", "Sopotek chart current chart (1h)")]
+
+
 def test_help_command_requests_keyboard():
     controller = DummyController()
     service = RecordingTelegramService(controller)
@@ -142,6 +156,8 @@ def test_help_command_requests_keyboard():
     assert service.messages
     assert service.messages[-1][1] is True
     assert "/commands" in service.messages[-1][0]
+    assert "/trade ..." not in service.messages[-1][0]
+    assert "/chart SYMBOL" not in service.messages[-1][0]
 
 
 def test_command_keyboard_contains_core_buttons():
@@ -153,7 +169,42 @@ def test_command_keyboard_contains_core_buttons():
     flat_labels = [button["text"] for row in keyboard["keyboard"] for button in row]
     assert "/status" in flat_labels
     assert "/screenshot" in flat_labels
-    assert "/chart EUR/USD 1h" in flat_labels
+    assert "/management" in flat_labels
+    assert "/history" in flat_labels
+    assert "/chartshot" in flat_labels
+    assert "/settings" in flat_labels
+    assert "/refreshmarkets" in flat_labels
+    assert "/autotradeon" in flat_labels
+    assert all("EUR/USD" not in label for label in flat_labels)
+    assert all("trade buy" not in label.lower() for label in flat_labels)
+
+
+def test_management_command_returns_management_summary():
+    controller = DummyController()
+    service = RecordingTelegramService(controller)
+
+    asyncio.run(service._handle_update(build_update("/management")))
+
+    assert service.messages[-1] == ("management", False, None)
+
+
+def test_history_command_returns_trade_history_summary():
+    controller = DummyController()
+    service = RecordingTelegramService(controller)
+
+    asyncio.run(service._handle_update(build_update("/history")))
+
+    assert service.messages[-1] == ("history:300:True", False, None)
+
+
+def test_generic_action_command_routes_to_direct_action_handler():
+    controller = DummyController()
+    service = RecordingTelegramService(controller)
+
+    asyncio.run(service._handle_update(build_update("/settings")))
+
+    assert controller.direct_actions[-1] == "open settings"
+    assert service.messages[-1] == ("direct:open settings", False, None)
 
 
 def test_plain_text_message_gets_sopotek_pilot_reply():

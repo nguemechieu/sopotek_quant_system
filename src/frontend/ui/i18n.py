@@ -1,3 +1,6 @@
+import re
+
+
 DEFAULT_LANGUAGE = "en"
 
 SUPPORTED_LANGUAGES = {
@@ -568,6 +571,212 @@ LITERAL_TRANSLATIONS = {
     "Precision": {"en": "Precision", "fr": "Precision", "es": "Precision", "pt": "Precisao"},
     "Recall": {"en": "Recall", "fr": "Rappel", "es": "Recall", "pt": "Recall"},
     "Avg Conf.": {"en": "Avg Conf.", "fr": "Conf moy.", "es": "Conf prom.", "pt": "Conf media"},
+    "Strategy Tester": {"en": "Strategy Tester", "fr": "Testeur de strategie", "es": "Probador de estrategia", "pt": "Testador de estrategia"},
+    "Strategy tester ready.": {
+        "en": "Strategy tester ready.",
+        "fr": "Le testeur de strategie est pret.",
+        "es": "El probador de estrategia esta listo.",
+        "pt": "O testador de estrategia esta pronto.",
+    },
+    "Backtest Symbol": {"en": "Backtest Symbol", "fr": "Symbole backtest", "es": "Simbolo backtest", "pt": "Simbolo do backtest"},
+    "Backtest Strategy": {"en": "Backtest Strategy", "fr": "Strategie backtest", "es": "Estrategia backtest", "pt": "Estrategia do backtest"},
+    "Start Date": {"en": "Start Date", "fr": "Date de debut", "es": "Fecha de inicio", "pt": "Data inicial"},
+    "End Date": {"en": "End Date", "fr": "Date de fin", "es": "Fecha final", "pt": "Data final"},
+    "Target Bars": {"en": "Target Bars", "fr": "Barres cibles", "es": "Barras objetivo", "pt": "Barras alvo"},
+    "Expert": {"en": "Expert", "fr": "Expert", "es": "Experto", "pt": "Especialista"},
+    "Period": {"en": "Period", "fr": "Periode", "es": "Periodo", "pt": "Periodo"},
+    "Initial Deposit": {"en": "Initial Deposit", "fr": "Depot initial", "es": "Deposito inicial", "pt": "Deposito inicial"},
+    "Start Backtest": {"en": "Start Backtest", "fr": "Demarrer backtest", "es": "Iniciar backtest", "pt": "Iniciar backtest"},
+    "Load Exchange Data": {"en": "Load Exchange Data", "fr": "Charger les donnees marche", "es": "Cargar datos del mercado", "pt": "Carregar dados do mercado"},
+    "Generate Report": {"en": "Generate Report", "fr": "Generer rapport", "es": "Generar reporte", "pt": "Gerar relatorio"},
+    "Results": {"en": "Results", "fr": "Resultats", "es": "Resultados", "pt": "Resultados"},
+    "Graph": {"en": "Graph", "fr": "Graphique", "es": "Grafico", "pt": "Grafico"},
+    "Report": {"en": "Report", "fr": "Rapport", "es": "Reporte", "pt": "Relatorio"},
+    "Journal": {"en": "Journal", "fr": "Journal", "es": "Diario", "pt": "Diario"},
+    "Backtest stop requested...": {
+        "en": "Backtest stop requested...",
+        "fr": "Arret du backtest demande...",
+        "es": "Se solicito detener el backtest...",
+        "pt": "Parada do backtest solicitada...",
+    },
+    "Backtest running...": {"en": "Backtest running...", "fr": "Backtest en cours...", "es": "Backtest en ejecucion...", "pt": "Backtest em execucao..."},
+    "Backtest engine not initialized.": {
+        "en": "Backtest engine not initialized.",
+        "fr": "Le moteur de backtest n est pas initialise.",
+        "es": "El motor de backtest no esta inicializado.",
+        "pt": "O motor de backtest nao esta inicializado.",
+    },
+    "Loading Exchange Data...": {
+        "en": "Loading Exchange Data...",
+        "fr": "Chargement des donnees marche...",
+        "es": "Cargando datos del mercado...",
+        "pt": "Carregando dados do mercado...",
+    },
+    "Bar-close simulation": {
+        "en": "Bar-close simulation",
+        "fr": "Simulation en cloture de bougie",
+        "es": "Simulacion al cierre de vela",
+        "pt": "Simulacao no fechamento da vela",
+    },
+    "No backtest results yet.": {
+        "en": "No backtest results yet.",
+        "fr": "Aucun resultat de backtest pour le moment.",
+        "es": "Todavia no hay resultados de backtest.",
+        "pt": "Ainda nao ha resultados de backtest.",
+    },
+    "Choose your symbol and click Run Optimization or Rank All Strategies to start.": {
+        "en": "Choose your symbol and click Run Optimization or Rank All Strategies to start.",
+        "fr": "Choisissez votre symbole puis cliquez sur Lancer optimisation ou Classer toutes les strategies.",
+        "es": "Elige tu simbolo y haz clic en Ejecutar optimizacion o Clasificar todas las estrategias.",
+        "pt": "Escolha seu simbolo e clique em Executar otimizacao ou Classificar todas as estrategias.",
+    },
+    "Optimize Symbol": {"en": "Optimize Symbol", "fr": "Optimiser symbole", "es": "Optimizar simbolo", "pt": "Otimizar simbolo"},
+    "Optimize Strategy": {"en": "Optimize Strategy", "fr": "Optimiser strategie", "es": "Optimizar estrategia", "pt": "Otimizar estrategia"},
+    "Run Optimization": {"en": "Run Optimization", "fr": "Lancer optimisation", "es": "Ejecutar optimizacion", "pt": "Executar otimizacao"},
+    "Rank All Strategies": {"en": "Rank All Strategies", "fr": "Classer toutes les strategies", "es": "Clasificar todas las estrategias", "pt": "Classificar todas as estrategias"},
+    "Apply Best Params": {"en": "Apply Best Params", "fr": "Appliquer meilleurs parametres", "es": "Aplicar mejores parametros", "pt": "Aplicar melhores parametros"},
+    "Assign Best To Symbol": {"en": "Assign Best To Symbol", "fr": "Affecter le meilleur au symbole", "es": "Asignar la mejor al simbolo", "pt": "Atribuir a melhor ao simbolo"},
+    "Assign Top": {"en": "Assign Top", "fr": "Affecter top", "es": "Asignar top", "pt": "Atribuir topo"},
+    "Optimization workspace ready.": {
+        "en": "Optimization workspace ready.",
+        "fr": "L espace d optimisation est pret.",
+        "es": "El espacio de optimizacion esta listo.",
+        "pt": "O espaco de otimizacao esta pronto.",
+    },
+    "Running...": {"en": "Running...", "fr": "Execution...", "es": "Ejecutando...", "pt": "Executando..."},
+    "Score": {"en": "Score", "fr": "Score", "es": "Puntuacion", "pt": "Pontuacao"},
+    "Profit": {"en": "Profit", "fr": "Profit", "es": "Beneficio", "pt": "Lucro"},
+    "Drawdown": {"en": "Drawdown", "fr": "Drawdown", "es": "Drawdown", "pt": "Drawdown"},
+    "Closed Trades": {"en": "Closed Trades", "fr": "Trades clotures", "es": "Operaciones cerradas", "pt": "Trades fechados"},
+    "Rank All": {"en": "Rank All", "fr": "Classer tout", "es": "Clasificar todo", "pt": "Classificar tudo"},
+    "Parameter Optimize": {"en": "Parameter Optimize", "fr": "Optimisation des parametres", "es": "Optimizacion de parametros", "pt": "Otimizacao de parametros"},
+    "Notification Center": {"en": "Notification Center", "fr": "Centre de notifications", "es": "Centro de notificaciones", "pt": "Central de notificacoes"},
+    "Notifications collect fills, rejects, disconnects, stale market-data warnings, and guard events.": {
+        "en": "Notifications collect fills, rejects, disconnects, stale market-data warnings, and guard events.",
+        "fr": "Les notifications regroupent executions, rejets, deconnexions, alertes de donnees stale et evenements de garde.",
+        "es": "Las notificaciones agrupan ejecuciones, rechazos, desconexiones, alertas de datos obsoletos y eventos de proteccion.",
+        "pt": "As notificacoes agrupam execucoes, rejeicoes, desconexoes, alertas de dados defasados e eventos de protecao.",
+    },
+    "Filter notifications": {"en": "Filter notifications", "fr": "Filtrer notifications", "es": "Filtrar notificaciones", "pt": "Filtrar notificacoes"},
+    "Clear": {"en": "Clear", "fr": "Effacer", "es": "Limpiar", "pt": "Limpar"},
+    "Event": {"en": "Event", "fr": "Evenement", "es": "Evento", "pt": "Evento"},
+    "Details": {"en": "Details", "fr": "Details", "es": "Detalles", "pt": "Detalhes"},
+    "Live Agent Timeline": {"en": "Live Agent Timeline", "fr": "Chronologie agent live", "es": "Linea de tiempo de agentes", "pt": "Linha do tempo de agentes"},
+    "Watch the live multi-agent flow across symbols, from signal selection through risk and execution.": {
+        "en": "Watch the live multi-agent flow across symbols, from signal selection through risk and execution.",
+        "fr": "Suivez le flux multi agent en direct entre symboles, du signal au risque puis a l execution.",
+        "es": "Sigue el flujo multiagente en vivo entre simbolos, desde la senal hasta riesgo y ejecucion.",
+        "pt": "Acompanhe o fluxo multiagente ao vivo entre simbolos, do sinal ao risco e execucao.",
+    },
+    "Filter by symbol, agent, event, strategy, timeframe, or message": {
+        "en": "Filter by symbol, agent, event, strategy, timeframe, or message",
+        "fr": "Filtrer par symbole, agent, evenement, strategie, unite ou message",
+        "es": "Filtrar por simbolo, agente, evento, estrategia, marco temporal o mensaje",
+        "pt": "Filtrar por simbolo, agente, evento, estrategia, periodo ou mensagem",
+    },
+    "All Statuses": {"en": "All Statuses", "fr": "Tous les statuts", "es": "Todos los estados", "pt": "Todos os status"},
+    "All Timeframes": {"en": "All Timeframes", "fr": "Toutes les unites", "es": "Todos los marcos temporales", "pt": "Todos os periodos"},
+    "All Strategies": {"en": "All Strategies", "fr": "Toutes les strategies", "es": "Todas las estrategias", "pt": "Todas as estrategias"},
+    "Refresh": {"en": "Refresh", "fr": "Actualiser", "es": "Actualizar", "pt": "Atualizar"},
+    "Clear Filters": {"en": "Clear Filters", "fr": "Effacer filtres", "es": "Limpiar filtros", "pt": "Limpar filtros"},
+    "Pin Selected Symbol": {"en": "Pin Selected Symbol", "fr": "Epingler symbole selectionne", "es": "Fijar simbolo seleccionado", "pt": "Fixar simbolo selecionado"},
+    "Expand All": {"en": "Expand All", "fr": "Tout ouvrir", "es": "Expandir todo", "pt": "Expandir tudo"},
+    "Collapse All": {"en": "Collapse All", "fr": "Tout reduire", "es": "Colapsar todo", "pt": "Recolher tudo"},
+    "Replay Latest Chain": {"en": "Replay Latest Chain", "fr": "Rejouer la derniere chaine", "es": "Repetir la ultima cadena", "pt": "Repetir a ultima cadeia"},
+    "Approved": {"en": "Approved", "fr": "Approuve", "es": "Aprobado", "pt": "Aprovado"},
+    "Rejected": {"en": "Rejected", "fr": "Rejete", "es": "Rechazado", "pt": "Rejeitado"},
+    "Visible Symbols": {"en": "Visible Symbols", "fr": "Symboles visibles", "es": "Simbolos visibles", "pt": "Simbolos visiveis"},
+    "No active symbols": {"en": "No active symbols", "fr": "Aucun symbole actif", "es": "No hay simbolos activos", "pt": "Nenhum simbolo ativo"},
+    "Last Minute": {"en": "Last Minute", "fr": "Derniere minute", "es": "Ultimo minuto", "pt": "Ultimo minuto"},
+    "Changes": {"en": "Changes", "fr": "Changements", "es": "Cambios", "pt": "Mudancas"},
+    "Open Strategy Assigner": {"en": "Open Strategy Assigner", "fr": "Ouvrir assignation strategie", "es": "Abrir asignador de estrategia", "pt": "Abrir atribuidor de estrategia"},
+    "Refresh Symbol": {"en": "Refresh Symbol", "fr": "Actualiser symbole", "es": "Actualizar simbolo", "pt": "Atualizar simbolo"},
+    "Acknowledge Anomaly": {"en": "Acknowledge Anomaly", "fr": "Acquitter anomalie", "es": "Reconocer anomalia", "pt": "Reconhecer anomalia"},
+    "Agent / Event": {"en": "Agent / Event", "fr": "Agent / evenement", "es": "Agente / evento", "pt": "Agente / evento"},
+    "Current Assignment": {"en": "Current Assignment", "fr": "Affectation actuelle", "es": "Asignacion actual", "pt": "Atribuicao atual"},
+    "Latest Agent Recommendation": {
+        "en": "Latest Agent Recommendation",
+        "fr": "Derniere recommandation agent",
+        "es": "Ultima recomendacion del agente",
+        "pt": "Ultima recomendacao do agente",
+    },
+    "Select a symbol to inspect its active routing.": {
+        "en": "Select a symbol to inspect its active routing.",
+        "fr": "Selectionnez un symbole pour inspecter son routage actif.",
+        "es": "Selecciona un simbolo para inspeccionar su enrutamiento activo.",
+        "pt": "Selecione um simbolo para inspecionar seu roteamento ativo.",
+    },
+    "Select a symbol to inspect the latest decision.": {
+        "en": "Select a symbol to inspect the latest decision.",
+        "fr": "Selectionnez un symbole pour inspecter la derniere decision.",
+        "es": "Selecciona un simbolo para inspeccionar la ultima decision.",
+        "pt": "Selecione um simbolo para inspecionar a ultima decisao.",
+    },
+    "Select a symbol or event to inspect the live agent payload.": {
+        "en": "Select a symbol or event to inspect the live agent payload.",
+        "fr": "Selectionnez un symbole ou un evenement pour inspecter la charge agent live.",
+        "es": "Selecciona un simbolo o evento para inspeccionar la carga del agente en vivo.",
+        "pt": "Selecione um simbolo ou evento para inspecionar a carga do agente ao vivo.",
+    },
+    "No recent agent decision has been recorded yet.": {
+        "en": "No recent agent decision has been recorded yet.",
+        "fr": "Aucune decision agent recente n a encore ete enregistree.",
+        "es": "Todavia no se ha registrado una decision reciente del agente.",
+        "pt": "Ainda nao foi registrada uma decisao recente do agente.",
+    },
+    "Locked": {"en": "Locked", "fr": "Verrouille", "es": "Bloqueado", "pt": "Bloqueado"},
+    "Pending": {"en": "Pending", "fr": "En attente", "es": "Pendiente", "pt": "Pendente"},
+    "Reason": {"en": "Reason", "fr": "Raison", "es": "Motivo", "pt": "Motivo"},
+    "Execution": {"en": "Execution", "fr": "Execution", "es": "Ejecucion", "pt": "Execucao"},
+    "Default": {"en": "Default", "fr": "Defaut", "es": "Predeterminado", "pt": "Padrao"},
+    "Single": {"en": "Single", "fr": "Unique", "es": "Unico", "pt": "Unico"},
+    "Ranked Mix": {"en": "Ranked Mix", "fr": "Mix classe", "es": "Mezcla clasificada", "pt": "Mix ranqueado"},
+    "Yes": {"en": "Yes", "fr": "Oui", "es": "Si", "pt": "Sim"},
+    "No": {"en": "No", "fr": "Non", "es": "No", "pt": "Nao"},
+    "Set symbol, side, size, entry, stop loss, and take profit before sending the order.": {
+        "en": "Set symbol, side, size, entry, stop loss, and take profit before sending the order.",
+        "fr": "Definissez symbole, sens, taille, entree, stop loss et take profit avant d envoyer l ordre.",
+        "es": "Define simbolo, lado, tamano, entrada, stop loss y take profit antes de enviar la orden.",
+        "pt": "Defina simbolo, lado, tamanho, entrada, stop loss e take profit antes de enviar a ordem.",
+    },
+    "Order Type": {"en": "Order Type", "fr": "Type d ordre", "es": "Tipo de orden", "pt": "Tipo de ordem"},
+    "Size In": {"en": "Size In", "fr": "Taille en", "es": "Tamano en", "pt": "Tamanho em"},
+    "Entry Price": {"en": "Entry Price", "fr": "Prix d entree", "es": "Precio de entrada", "pt": "Preco de entrada"},
+    "Stop Trigger": {"en": "Stop Trigger", "fr": "Declencheur stop", "es": "Disparador stop", "pt": "Gatilho stop"},
+    "Stop Loss": {"en": "Stop Loss", "fr": "Stop loss", "es": "Stop loss", "pt": "Stop loss"},
+    "Take Profit": {"en": "Take Profit", "fr": "Take profit", "es": "Take profit", "pt": "Take profit"},
+    "Buy Market": {"en": "Buy Market", "fr": "Acheter marche", "es": "Comprar mercado", "pt": "Comprar mercado"},
+    "Sell Market": {"en": "Sell Market", "fr": "Vendre marche", "es": "Vender mercado", "pt": "Vender mercado"},
+    "Submit Order": {"en": "Submit Order", "fr": "Envoyer ordre", "es": "Enviar orden", "pt": "Enviar ordem"},
+    "Reset Ticket": {"en": "Reset Ticket", "fr": "Reinitialiser ticket", "es": "Restablecer ticket", "pt": "Redefinir ticket"},
+    "Lots": {"en": "Lots", "fr": "Lots", "es": "Lotes", "pt": "Lotes"},
+    "Order Book": {"en": "Order Book", "fr": "Carnet d ordres", "es": "Libro de ordenes", "pt": "Livro de ofertas"},
+    "Recent Trades": {"en": "Recent Trades", "fr": "Trades recents", "es": "Operaciones recientes", "pt": "Trades recentes"},
+    "Bid Depth": {"en": "Bid Depth", "fr": "Profondeur bid", "es": "Profundidad bid", "pt": "Profundidade bid"},
+    "Bid Size": {"en": "Bid Size", "fr": "Taille bid", "es": "Tamano bid", "pt": "Tamanho bid"},
+    "Bid Price": {"en": "Bid Price", "fr": "Prix bid", "es": "Precio bid", "pt": "Preco bid"},
+    "Ask Price": {"en": "Ask Price", "fr": "Prix ask", "es": "Precio ask", "pt": "Preco ask"},
+    "Ask Size": {"en": "Ask Size", "fr": "Taille ask", "es": "Tamano ask", "pt": "Tamanho ask"},
+    "Ask Depth": {"en": "Ask Depth", "fr": "Profondeur ask", "es": "Profundidad ask", "pt": "Profundidade ask"},
+    "Waiting for market trades.": {
+        "en": "Waiting for market trades.",
+        "fr": "En attente des trades de marche.",
+        "es": "Esperando operaciones del mercado.",
+        "pt": "Aguardando trades do mercado.",
+    },
+    "Recent public trades are unavailable for this symbol right now.": {
+        "en": "Recent public trades are unavailable for this symbol right now.",
+        "fr": "Les trades publics recents sont indisponibles pour ce symbole actuellement.",
+        "es": "Las operaciones publicas recientes no estan disponibles para este simbolo ahora mismo.",
+        "pt": "Os trades publicos recentes nao estao disponiveis para este simbolo agora.",
+    },
+    "Risk Heatmap": {"en": "Risk Heatmap", "fr": "Carte de chaleur du risque", "es": "Mapa de calor de riesgo", "pt": "Mapa de calor de risco"},
+    "Risk heatmap is waiting for portfolio data.": {
+        "en": "Risk heatmap is waiting for portfolio data.",
+        "fr": "La carte de chaleur du risque attend les donnees portefeuille.",
+        "es": "El mapa de calor de riesgo esta esperando datos de cartera.",
+        "pt": "O mapa de calor de risco esta aguardando dados da carteira.",
+    },
 }
 
 
@@ -618,7 +827,7 @@ def translate(language_code, key, **kwargs):
     if kwargs:
         try:
             return template.format(**kwargs)
-        except Exception:
+        except (KeyError, IndexError, ValueError) :
             return template
     return template
 
@@ -628,9 +837,79 @@ def translate_text(language_code, text):
     canonical = LOCALIZED_TEXT_TO_SOURCE.get(source_text, source_text)
     options = SOURCE_TEXT_TRANSLATIONS.get(canonical)
     if not options:
-        return source_text
+        return _translate_compound_text(language_code, source_text)
     normalized = normalize_language_code(language_code)
     return options.get(normalized) or options.get(DEFAULT_LANGUAGE) or canonical
+
+
+_COLON_LABEL_PATTERN = re.compile(r"^(?P<label>[^:\n]{1,80}?)(?P<sep>:\s*)(?P<rest>.+)$")
+_TRAILING_SUFFIX_PATTERN = re.compile(r"^(?P<label>.+?)(?P<suffix>\s+\([^)]*\))$")
+_SEGMENT_SPLIT_PATTERN = re.compile(r"(\s*\|\s*)")
+
+
+def _translate_exact_text(language_code, text):
+    source_text = str(text or "")
+    canonical = LOCALIZED_TEXT_TO_SOURCE.get(source_text, source_text)
+    options = SOURCE_TEXT_TRANSLATIONS.get(canonical)
+    if not options:
+        return source_text, False
+    normalized = normalize_language_code(language_code)
+    translated = options.get(normalized) or options.get(DEFAULT_LANGUAGE) or canonical
+    return translated, True
+
+
+def _translate_compound_segment(language_code, text):
+    source_text = str(text or "")
+    translated, found = _translate_exact_text(language_code, source_text)
+    if found:
+        return translated
+
+    if "|" in source_text:
+        parts = _SEGMENT_SPLIT_PATTERN.split(source_text)
+        translated_parts = []
+        changed = False
+        for part in parts:
+            if _SEGMENT_SPLIT_PATTERN.fullmatch(part or ""):
+                translated_parts.append(part)
+                continue
+            translated_part = _translate_compound_segment(language_code, part)
+            translated_parts.append(translated_part)
+            changed = changed or translated_part != part
+        if changed:
+            return "".join(translated_parts)
+
+    suffix_match = _TRAILING_SUFFIX_PATTERN.match(source_text)
+    if suffix_match:
+        translated_label, label_found = _translate_exact_text(language_code, suffix_match.group("label"))
+        if label_found:
+            return f"{translated_label}{suffix_match.group('suffix')}"
+
+    colon_match = _COLON_LABEL_PATTERN.match(source_text)
+    if colon_match:
+        translated_label, label_found = _translate_exact_text(language_code, colon_match.group("label").strip())
+        if label_found:
+            rest = colon_match.group("rest")
+            translated_rest, rest_found = _translate_exact_text(language_code, rest.strip())
+            if rest_found:
+                rest = translated_rest
+            return f"{translated_label}{colon_match.group('sep')}{rest}"
+
+    return source_text
+
+
+def _translate_compound_text(language_code, text):
+    source_text = str(text or "")
+    if not source_text:
+        return source_text
+
+    if "\n" in source_text:
+        lines = source_text.split("\n")
+        translated_lines = [_translate_compound_segment(language_code, line) for line in lines]
+        translated = "\n".join(translated_lines)
+        if translated != source_text:
+            return translated
+
+    return _translate_compound_segment(language_code, source_text)
 
 
 def _sync_runtime_source_text(current_text, stored_source, previous_language):
@@ -657,7 +936,7 @@ def _translate_runtime_attr(obj, language_code, previous_language, property_name
 
     try:
         current_value = getter()
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return
 
     if current_value is None:
@@ -700,7 +979,7 @@ def _translate_combo_items(combo, language_code, previous_language, item_role):
         try:
             current_text = item_text(index)
             stored_source = item_data(index, item_role)
-        except Exception:
+        except (TypeError, ValueError, IndexError):
             continue
         current_text, source_text = _sync_runtime_source_text(current_text, stored_source, previous_language)
         if source_text is None:
@@ -788,6 +1067,125 @@ def _translate_table_headers(table, language_code, previous_language, item_role)
                 item.setText(translated)
 
 
+def _translate_table_items(table, language_code, previous_language, item_role):
+    row_count = getattr(table, "rowCount", None)
+    column_count = getattr(table, "columnCount", None)
+    item_getter = getattr(table, "item", None)
+    if not all(callable(method) for method in (row_count, column_count, item_getter)):
+        return
+
+    try:
+        total_rows = int(row_count())
+        total_columns = int(column_count())
+    except Exception:
+        return
+
+    for row_index in range(total_rows):
+        for column_index in range(total_columns):
+            item = item_getter(row_index, column_index)
+            if item is None:
+                continue
+            current_text, source_text = _sync_runtime_source_text(item.text(), item.data(item_role), previous_language)
+            if source_text is None:
+                continue
+            item.setData(item_role, source_text)
+            translated = translate_text(language_code, source_text)
+            if translated != current_text:
+                item.setText(translated)
+
+
+def _translate_tree_headers(tree, language_code, previous_language):
+    column_count = getattr(tree, "columnCount", None)
+    header_text = getattr(tree, "headerItem", None)
+    if not callable(column_count) or not callable(header_text):
+        return
+
+    try:
+        total_columns = int(column_count())
+    except Exception:
+        return
+
+    header_item = header_text()
+    if header_item is None:
+        return
+
+    stored_sources = list(tree.property("_i18n_source_tree_headers") or [])
+    if len(stored_sources) < total_columns:
+        stored_sources.extend([None] * (total_columns - len(stored_sources)))
+
+    for index in range(total_columns):
+        current_text, source_text = _sync_runtime_source_text(header_item.text(index), stored_sources[index], previous_language)
+        stored_sources[index] = source_text
+        if source_text is None:
+            continue
+        translated = translate_text(language_code, source_text)
+        if translated != current_text:
+            try:
+                header_item.setText(index, translated)
+            except (TypeError, AttributeError, ValueError):
+               tree.setProperty("_i18n_source_tree_headers", stored_sources)
+
+
+def _translate_tree_item(item, language_code, previous_language, item_role):
+    column_count = getattr(item, "columnCount", None)
+    if not callable(column_count):
+        return
+
+    try:
+        total_columns = int(column_count())
+    except Exception:
+        total_columns = 0
+
+    for index in range(total_columns):
+        try:
+            current_text = item.text(index)
+            stored_source = item.data(index, item_role)
+        except Exception:
+            continue
+        current_text, source_text = _sync_runtime_source_text(current_text, stored_source, previous_language)
+        if source_text is None:
+            continue
+        try:
+            item.setData(index, item_role, source_text)
+            translated = translate_text(language_code, source_text)
+            if translated != current_text:
+                item.setText(index, translated)
+        except Exception:
+            continue
+
+    child_count = getattr(item, "childCount", None)
+    child_getter = getattr(item, "child", None)
+    if not callable(child_count) or not callable(child_getter):
+        return
+
+    try:
+        total_children = int(child_count())
+    except Exception:
+        total_children = 0
+
+    for child_index in range(total_children):
+        child_item = child_getter(child_index)
+        if child_item is not None:
+            _translate_tree_item(child_item, language_code, previous_language, item_role)
+
+
+def _translate_tree_items(tree, language_code, previous_language, item_role):
+    top_level_count = int(getattr(tree, "topLevelItemCount", 0))
+    top_level_item = getattr(tree, "topLevelItem", 0)
+    if not callable(top_level_count) or not callable(top_level_item):
+        return
+
+    try:
+        total_items = int(top_level_count())
+    except Exception:
+        return
+
+    for index in range(total_items):
+        item = top_level_item(index)
+        if item is not None:
+            _translate_tree_item(item, language_code, previous_language, item_role)
+
+
 def apply_runtime_translations(root, language_code, previous_language=None):
     try:
         from PySide6.QtCore import QObject, Qt
@@ -801,9 +1199,10 @@ def apply_runtime_translations(root, language_code, previous_language=None):
             QMenu,
             QTabWidget,
             QTableWidget,
+            QTreeWidget,
             QWidget,
         )
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return
 
     if root is None:
@@ -850,3 +1249,8 @@ def apply_runtime_translations(root, language_code, previous_language=None):
 
         if isinstance(obj, QTableWidget):
             _translate_table_headers(obj, normalized, previous, item_role)
+            _translate_table_items(obj, normalized, previous, item_role)
+
+        if isinstance(obj, QTreeWidget):
+            _translate_tree_headers(obj, normalized, previous)
+            _translate_tree_items(obj, normalized, previous, item_role)

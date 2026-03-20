@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import math
 
 from sqlalchemy import BigInteger, Column, DateTime, Float, Integer, String, and_, or_, select
 
@@ -77,15 +78,30 @@ class MarketDataRepository:
             return None
 
         try:
+            open_numeric = float(open_value)
+            high_numeric = float(high_value)
+            low_numeric = float(low_value)
+            close_numeric = float(close_value)
+            volume_numeric = float(volume_value or 0.0)
+        except Exception:
+            return None
+
+        ohlc_values = [open_numeric, high_numeric, low_numeric, close_numeric]
+        if any((not math.isfinite(value)) or value <= 0 for value in ohlc_values):
+            return None
+        if not math.isfinite(volume_numeric):
+            volume_numeric = 0.0
+
+        try:
             return {
                 "exchange": str(exchange or "").lower() or None,
                 "symbol": str(symbol),
                 "timeframe": str(timeframe or "1h"),
-                "open": float(open_value),
-                "high": float(high_value),
-                "low": float(low_value),
-                "close": float(close_value),
-                "volume": float(volume_value or 0.0),
+                "open": open_numeric,
+                "high": max(ohlc_values),
+                "low": min(ohlc_values),
+                "close": close_numeric,
+                "volume": max(volume_numeric, 0.0),
                 "timestamp": normalized_ts,
                 "timestamp_ms": int(timestamp_ms),
             }

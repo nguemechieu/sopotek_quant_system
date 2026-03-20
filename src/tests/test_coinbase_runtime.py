@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import jwt
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from broker.ccxt_broker import CCXTBroker
@@ -25,6 +27,7 @@ class FakeCoinbaseExchange:
         self.cfg = cfg
         self.closed = False
         self.sandbox_mode = None
+        self.fetch_ticker_calls = []
         self.has = {
             "fetchTicker": True,
             "fetchTickers": True,
@@ -59,6 +62,7 @@ class FakeCoinbaseExchange:
         return self.markets
 
     async def fetch_ticker(self, symbol):
+        self.fetch_ticker_calls.append(symbol)
         return {"symbol": symbol, "last": 65000.0, "bid": 64999.0, "ask": 65001.0}
 
     async def fetch_tickers(self, symbols=None):
@@ -67,7 +71,7 @@ class FakeCoinbaseExchange:
     async def fetch_order_book(self, symbol, limit=100):
         return {"symbol": symbol, "bids": [[64999.0, 1.0]], "asks": [[65001.0, 1.5]], "limit": limit}
 
-    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+    async def fetch_ohlcv(self, symbol, timeframe="1h", since=None, limit=100, params=None):
         return [[1710000000000 + i, 1, 2, 0.5, 1.5, 10] for i in range(limit)]
 
     async def fetch_trades(self, symbol, limit=None):
@@ -141,6 +145,67 @@ class FakeSocket:
         return self._messages.pop(0)
 
 
+class FakeCoinbaseHistoryExchange(FakeCoinbaseExchange):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.fetch_ohlcv_calls = []
+
+    async def fetch_ohlcv(self, symbol, timeframe="1h", since=None, limit=100, params=None):
+        params = dict(params or {})
+        self.fetch_ohlcv_calls.append(
+            {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "since": since,
+                "limit": limit,
+                "params": params,
+            }
+        )
+        timeframe_seconds = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "1h": 3600,
+            "4h": 14400,
+            "1d": 86400,
+        }.get(timeframe, 3600)
+        if since is None:
+            count = min(int(limit or 5), 5)
+            start_seconds = 1_710_000_000
+        else:
+            start_seconds = int(params.get("start") or int(since / 1000))
+            end_seconds = int(params.get("end") or (start_seconds + (timeframe_seconds * int(limit or 300))))
+            count = min(max(int((end_seconds - start_seconds) / timeframe_seconds), 0), 300)
+        return [
+            [(start_seconds + (index * timeframe_seconds)) * 1000, 1, 2, 0.5, 1.5, 10]
+            for index in range(count)
+        ]
+
+
+class FakeCoinbaseCrossValuationExchange(FakeCoinbaseExchange):
+    async def load_markets(self):
+        self.markets = {
+            "AAVE/EUR": {"symbol": "AAVE/EUR", "active": True},
+            "BTC/EUR": {"symbol": "BTC/EUR", "active": True},
+            "BTC/USD": {"symbol": "BTC/USD", "active": True},
+        }
+        return self.markets
+
+    async def fetch_ticker(self, symbol):
+        self.fetch_ticker_calls.append(symbol)
+        prices = {
+            "AAVE/EUR": {"last": 100.0, "bid": 99.5, "ask": 100.5},
+            "BTC/EUR": {"last": 50000.0, "bid": 49950.0, "ask": 50050.0},
+            "BTC/USD": {"last": 65000.0, "bid": 64950.0, "ask": 65050.0},
+        }
+        quote = prices[str(symbol)]
+        return {"symbol": symbol, **quote}
+
+    async def fetch_balance(self):
+        return {"total": {"EUR": 1000.0, "AAVE": 2.0}}
+
+
 def test_coinbase_ccxt_broker_supports_market_data_and_order_methods(monkeypatch):
     import broker.ccxt_broker as broker_mod
 
@@ -206,6 +271,121 @@ def test_coinbase_ccxt_broker_supports_market_data_and_order_methods(monkeypatch
         assert stop_limit_order["type"] == "stop_limit"
         assert stop_limit_order["stop_price"] == 65010.0
         assert stop_limit_order["params"]["stopPrice"] == 65010.0
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_coinbase_ccxt_broker_derives_spot_positions_and_equity(monkeypatch):
+    import broker.ccxt_broker as broker_mod
+
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "TCPConnector",
+        lambda family=None, resolver=None, ttl_dns_cache=None: {
+            "family": family,
+            "resolver": resolver,
+            "ttl_dns_cache": ttl_dns_cache,
+        },
+    )
+    monkeypatch.setattr(broker_mod.aiohttp, "ThreadedResolver", lambda: "threaded-resolver")
+    monkeypatch.setattr(broker_mod.aiohttp, "ClientSession", lambda connector=None, **kwargs: FakeSession(connector=connector, **kwargs))
+    monkeypatch.setattr(broker_mod.ccxt, "coinbase", FakeCoinbaseExchange, raising=False)
+
+    async def scenario():
+        broker = broker_mod.CCXTBroker(
+            SimpleNamespace(
+                exchange="coinbase",
+                api_key="organizations/test/apiKeys/key-1",
+                secret=(
+                    "-----BEGIN EC PRIVATE KEY-----\n"
+                    "MHcCAQEEIAqSV4qAfY1Nm0xd6k95EZ39suUWAuze5Vuhn671kB9OoAoGCCqGSM49\n"
+                    "AwEHoUQDQgAEcgYO1ly0wyz23wipRFpoM6Oyvh6WB1wy9EB8PHhrNw5VSJsAqsb7\n"
+                    "gc1E+mZ1HVX3H8eKNlw8GrQCQJsZ5ExllA==\n"
+                    "-----END EC PRIVATE KEY-----\n"
+                ),
+                password=None,
+                uid=None,
+                mode="live",
+                sandbox=False,
+                timeout=15000,
+                options={},
+                params={},
+            )
+        )
+
+        await broker.connect()
+
+        balances = await broker.fetch_balance()
+        positions = await broker.fetch_positions()
+
+        assert balances["cash"] == 500.0
+        assert balances["position_value"] == 16250.0
+        assert balances["equity"] == 16750.0
+        assert len(positions) == 1
+        assert positions[0]["asset_code"] == "BTC"
+        assert positions[0]["symbol"] == "BTC/USD"
+        assert positions[0]["amount"] == 0.25
+        assert positions[0]["value"] == 16250.0
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_coinbase_ccxt_broker_values_cash_and_assets_through_cross_pairs(monkeypatch):
+    import broker.ccxt_broker as broker_mod
+
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "TCPConnector",
+        lambda family=None, resolver=None, ttl_dns_cache=None: {
+            "family": family,
+            "resolver": resolver,
+            "ttl_dns_cache": ttl_dns_cache,
+        },
+    )
+    monkeypatch.setattr(broker_mod.aiohttp, "ThreadedResolver", lambda: "threaded-resolver")
+    monkeypatch.setattr(broker_mod.aiohttp, "ClientSession", lambda connector=None, **kwargs: FakeSession(connector=connector, **kwargs))
+    monkeypatch.setattr(broker_mod.ccxt, "coinbase", FakeCoinbaseCrossValuationExchange, raising=False)
+
+    async def scenario():
+        broker = broker_mod.CCXTBroker(
+            SimpleNamespace(
+                exchange="coinbase",
+                api_key="organizations/test/apiKeys/key-1",
+                secret=(
+                    "-----BEGIN EC PRIVATE KEY-----\n"
+                    "MHcCAQEEIAqSV4qAfY1Nm0xd6k95EZ39suUWAuze5Vuhn671kB9OoAoGCCqGSM49\n"
+                    "AwEHoUQDQgAEcgYO1ly0wyz23wipRFpoM6Oyvh6WB1wy9EB8PHhrNw5VSJsAqsb7\n"
+                    "gc1E+mZ1HVX3H8eKNlw8GrQCQJsZ5ExllA==\n"
+                    "-----END EC PRIVATE KEY-----\n"
+                ),
+                password=None,
+                uid=None,
+                mode="live",
+                sandbox=False,
+                timeout=15000,
+                options={},
+                params={},
+            )
+        )
+
+        await broker.connect()
+
+        balances = await broker.fetch_balance()
+        positions = await broker.fetch_positions()
+
+        assert round(balances["cash"], 2) == 1300.0
+        assert round(balances["position_value"], 2) == 260.0
+        assert round(balances["equity"], 2) == 1560.0
+        assert balances["asset_balances"]["EUR"] == 1000.0
+        assert balances["asset_balances"]["AAVE"] == 2.0
+        assert len(positions) == 1
+        assert positions[0]["asset_code"] == "AAVE"
+        assert positions[0]["symbol"] == "AAVE/EUR"
+        assert round(positions[0]["value"], 2) == 260.0
 
         await broker.close()
 
@@ -289,6 +469,148 @@ def test_coinbase_ccxt_broker_normalizes_single_line_pem_from_ui(monkeypatch):
         assert broker.api_key == "organizations/test/apiKeys/key-1"
         assert broker.secret == "-----BEGIN EC PRIVATE KEY-----\nline-1line-2\n-----END EC PRIVATE KEY-----\n"
         assert broker.exchange.cfg["secret"] == broker.secret
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_coinbase_ccxt_broker_accepts_uuid_id_and_json_private_key_bundle(monkeypatch):
+    import broker.ccxt_broker as broker_mod
+
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "TCPConnector",
+        lambda family=None, resolver=None, ttl_dns_cache=None: {
+            "family": family,
+            "resolver": resolver,
+            "ttl_dns_cache": ttl_dns_cache,
+        },
+    )
+    monkeypatch.setattr(broker_mod.aiohttp, "ThreadedResolver", lambda: "threaded-resolver")
+    monkeypatch.setattr(broker_mod.aiohttp, "ClientSession", lambda connector=None, **kwargs: FakeSession(connector=connector, **kwargs))
+    monkeypatch.setattr(broker_mod.ccxt, "coinbase", FakeCoinbaseExchange, raising=False)
+
+    async def scenario():
+        config = SimpleNamespace(
+            exchange="coinbase",
+            api_key="",
+            secret='{"id":"2ffe3f58-d600-47a8-a147-1c55854eddc8","privateKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}',
+            password=None,
+            uid=None,
+            mode="live",
+            sandbox=False,
+            timeout=15000,
+            options={},
+            params={},
+        )
+        broker = CCXTBroker(config)
+
+        await broker.connect()
+
+        assert broker.api_key == "2ffe3f58-d600-47a8-a147-1c55854eddc8"
+        assert broker.secret == "-----BEGIN EC PRIVATE KEY-----\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END EC PRIVATE KEY-----\n"
+        assert broker.exchange.cfg["secret"] == broker.secret
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_coinbase_ccxt_broker_signs_private_requests_with_bearer_jwt():
+    import broker.ccxt_broker as broker_mod
+
+    broker = broker_mod.CCXTBroker(
+        SimpleNamespace(
+            exchange="coinbase",
+            api_key="organizations/test/apiKeys/key-1",
+            secret=(
+                "-----BEGIN EC PRIVATE KEY-----\n"
+                "MHcCAQEEIAqSV4qAfY1Nm0xd6k95EZ39suUWAuze5Vuhn671kB9OoAoGCCqGSM49\n"
+                "AwEHoUQDQgAEcgYO1ly0wyz23wipRFpoM6Oyvh6WB1wy9EB8PHhrNw5VSJsAqsb7\n"
+                "gc1E+mZ1HVX3H8eKNlw8GrQCQJsZ5ExllA==\n"
+                "-----END EC PRIVATE KEY-----\n"
+            ),
+            password=None,
+            uid=None,
+            mode="live",
+            sandbox=False,
+            timeout=15000,
+            options={},
+            params={},
+        )
+    )
+    broker._normalize_credentials()
+    exchange_class = broker._exchange_class()
+    exchange = exchange_class({"apiKey": broker.api_key, "secret": broker.secret, "options": {}})
+
+    signed = exchange.sign("brokerage/accounts", api=["v3", "private"], method="GET", params={})
+
+    assert "Authorization" in signed["headers"]
+    assert "CB-ACCESS-KEY" not in signed["headers"]
+    token = signed["headers"]["Authorization"].split(" ", 1)[1]
+    headers = jwt.get_unverified_header(token)
+    payload = jwt.decode(token, options={"verify_signature": False})
+
+    assert headers["kid"] == "organizations/test/apiKeys/key-1"
+    assert payload["sub"] == "organizations/test/apiKeys/key-1"
+    assert payload["iss"] == "cdp"
+    assert payload["uri"] == "GET api.coinbase.com/api/v3/brokerage/accounts"
+
+
+def test_coinbase_ccxt_broker_backfills_requested_ohlcv_limit(monkeypatch):
+    import broker.ccxt_broker as broker_mod
+
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "TCPConnector",
+        lambda family=None, resolver=None, ttl_dns_cache=None: {
+            "family": family,
+            "resolver": resolver,
+            "ttl_dns_cache": ttl_dns_cache,
+        },
+    )
+    monkeypatch.setattr(broker_mod.aiohttp, "ThreadedResolver", lambda: "threaded-resolver")
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "ClientSession",
+        lambda connector=None, **kwargs: FakeSession(connector=connector, **kwargs),
+    )
+    monkeypatch.setattr(broker_mod.ccxt, "coinbase", FakeCoinbaseHistoryExchange, raising=False)
+
+    async def scenario():
+        broker = broker_mod.CCXTBroker(
+            SimpleNamespace(
+                exchange="coinbase",
+                api_key="organizations/test/apiKeys/key-1",
+                secret=(
+                    "-----BEGIN EC PRIVATE KEY-----\n"
+                    "MHcCAQEEIAqSV4qAfY1Nm0xd6k95EZ39suUWAuze5Vuhn671kB9OoAoGCCqGSM49\n"
+                    "AwEHoUQDQgAEcgYO1ly0wyz23wipRFpoM6Oyvh6WB1wy9EB8PHhrNw5VSJsAqsb7\n"
+                    "gc1E+mZ1HVX3H8eKNlw8GrQCQJsZ5ExllA==\n"
+                    "-----END EC PRIVATE KEY-----\n"
+                ),
+                password=None,
+                uid=None,
+                mode="live",
+                sandbox=False,
+                timeout=15000,
+                options={},
+                params={},
+            )
+        )
+
+        await broker.connect()
+        candles_240 = await broker.fetch_ohlcv("BTC/USD", timeframe="1h", limit=240)
+        candles_500 = await broker.fetch_ohlcv("BTC/USD", timeframe="1h", limit=500)
+        cached_240 = await broker.fetch_ohlcv("BTC/USD", timeframe="1h", limit=240)
+
+        assert len(candles_240) == 240
+        assert len(candles_500) == 500
+        assert len(cached_240) == 240
+        assert all(call["since"] is not None for call in broker.exchange.fetch_ohlcv_calls)
+        assert any(int(call["limit"]) == 300 for call in broker.exchange.fetch_ohlcv_calls)
+        assert len([call for call in broker.exchange.fetch_ohlcv_calls if int(call["limit"]) == 240]) == 1
 
         await broker.close()
 

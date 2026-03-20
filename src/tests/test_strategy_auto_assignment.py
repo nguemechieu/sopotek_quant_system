@@ -174,6 +174,43 @@ def test_assign_strategy_to_symbol_marks_manual_lock_and_source():
     assert controller.symbol_strategy_assignment_locked("BTC/USDT") is True
 
 
+def test_select_trade_symbols_limits_coinbase_and_prioritizes_held_assets():
+    controller = _make_controller()
+    controller.balances = {"total": {"USD": 500.0, "AAVE": 2.0}}
+    controller.broker = SimpleNamespace(exchange_name="coinbase")
+
+    symbols = [
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+        "AAVE/EUR",
+        "AAVE/BTC",
+        "DOGE/USD",
+        "XRP/USD",
+        "ADA/USD",
+        "AVAX/USD",
+        "LINK/USD",
+        "UNI/USD",
+        "NEAR/USD",
+        "FIL/USD",
+        "AAVE/USD",
+    ]
+
+    selected = asyncio.run(controller._select_trade_symbols(symbols, "crypto", "coinbase"))
+
+    assert len(selected) == controller.COINBASE_SYMBOL_LIMIT
+    assert selected[0] == "AAVE/USD"
+
+
+def test_strategy_auto_assignment_timeframes_are_narrowed_for_coinbase():
+    controller = _make_controller()
+    controller.strategy_assignment_scan_timeframes = None
+    controller.broker = SimpleNamespace(exchange_name="coinbase")
+
+    assert controller._strategy_auto_assignment_timeframes(timeframe="15m") == ["15m", "1h", "4h"]
+    assert controller._strategy_auto_assignment_symbol_limit() == controller.COINBASE_AUTO_ASSIGN_SYMBOL_LIMIT
+
+
 def test_auto_rank_and_assign_strategies_assigns_unlocked_symbols_and_preserves_manual_locks():
     controller = _make_controller()
     manual_assignment = controller.assign_strategy_to_symbol("BTC/USDT", "Trend Following", timeframe="4h")

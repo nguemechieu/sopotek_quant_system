@@ -568,6 +568,28 @@ def test_stellar_asset_explorer_rows_mark_screening_and_trustline_state():
     assert row_map["SCAM:GSCAMISSUER"]["screened"] is False
 
 
+def test_stellar_asset_explorer_rows_filter_blocked_assets():
+    broker = SimpleNamespace(
+        asset_registry={
+            "XLM": SimpleNamespace(code="XLM", issuer=None),
+            "USDC": SimpleNamespace(code="USDC", issuer="GUSDCISSUER"),
+            "SCAM": SimpleNamespace(code="SCAM", issuer="GSCAMISSUER"),
+        },
+        _account_asset_codes=["XLM", "USDC", "SCAM"],
+        _network_asset_codes=["USDC", "SCAM"],
+        is_asset_blocked=lambda code, issuer=None: str(code or "").upper().strip() == "SCAM",
+    )
+    fake = SimpleNamespace(controller=SimpleNamespace(broker=broker, exchange="stellar"))
+    fake._stellar_expert_asset_url = lambda code, issuer=None: Terminal._stellar_expert_asset_url(fake, code, issuer)
+    fake._stellar_asset_identifier = lambda code, issuer=None: Terminal._stellar_asset_identifier(fake, code, issuer)
+
+    rows = Terminal._stellar_asset_explorer_rows(fake)
+    row_map = {row["id"]: row for row in rows}
+
+    assert "USDC:GUSDCISSUER" in row_map
+    assert "SCAM:GSCAMISSUER" not in row_map
+
+
 def test_refresh_stellar_asset_explorer_window_filters_screened_assets_for_trustlines():
     _app()
     window = SimpleNamespace(
@@ -605,6 +627,142 @@ def test_refresh_stellar_asset_explorer_window_filters_screened_assets_for_trust
     assert window._stellar_asset_picker.currentData() == "AQUA:GAQUAISSUER"
     assert window._stellar_asset_trustline_btn.isEnabled() is True
     assert "Loaded 1 Stellar assets (4 total)." in window._stellar_asset_status.text()
+
+
+def test_refresh_stellar_asset_explorer_window_merges_directory_rows_and_enables_auto_trust():
+    _app()
+    window = SimpleNamespace(
+        _stellar_asset_status=QLabel(),
+        _stellar_asset_picker=QComboBox(),
+        _stellar_asset_input=QLineEdit(),
+        _stellar_asset_directory_cursor=QLineEdit(),
+        _stellar_asset_table=QTableWidget(),
+        _stellar_asset_details=QTextBrowser(),
+        _stellar_asset_filter_safe=QCheckBox(),
+        _stellar_asset_filter_untrusted=QCheckBox(),
+        _stellar_asset_trustline_btn=QPushButton(),
+        _stellar_asset_load_directory_btn=QPushButton(),
+        _stellar_asset_auto_trust_btn=QPushButton(),
+        _stellar_asset_directory_rows=[
+            {
+                "id": "AQUA:GAQUAISSUER",
+                "code": "AQUA",
+                "issuer": "GAQUAISSUER",
+                "source": "Directory",
+                "url": "https://stellar.expert/explorer/public/asset/AQUA-GAQUAISSUER",
+                "screened": True,
+                "trusted": False,
+                "needs_trustline": True,
+                "risk_label": "Screened",
+                "score": 920.0,
+                "roi_pct": 12.5,
+                "roi_symbol": "AQUA:GAQUAISSUER/USDC:GUSDCISSUER",
+            }
+        ],
+        _stellar_asset_next_cursor="page-2",
+    )
+    window._stellar_asset_filter_safe.setChecked(True)
+    broker = SimpleNamespace(
+        asset_registry={
+            "XLM": SimpleNamespace(code="XLM", issuer=None),
+            "USDC": SimpleNamespace(code="USDC", issuer="GUSDCISSUER"),
+        },
+        _account_asset_codes=["XLM", "USDC"],
+        _network_asset_codes=["USDC"],
+        create_trustline=lambda asset: asset,
+        fetch_asset_directory_page=lambda **kwargs: kwargs,
+        estimate_asset_roi=lambda *args, **kwargs: None,
+    )
+    fake = SimpleNamespace(controller=SimpleNamespace(broker=broker, exchange="stellar"))
+    fake._stellar_expert_asset_url = lambda code, issuer=None: Terminal._stellar_expert_asset_url(fake, code, issuer)
+    fake._stellar_asset_identifier = lambda code, issuer=None: Terminal._stellar_asset_identifier(fake, code, issuer)
+    fake._parse_stellar_asset_entry = lambda raw: Terminal._parse_stellar_asset_entry(fake, raw)
+    fake._selected_stellar_asset_row = lambda current_window=None: Terminal._selected_stellar_asset_row(fake, current_window)
+    fake._stellar_asset_explorer_rows = lambda: Terminal._stellar_asset_explorer_rows(fake)
+    fake._merge_stellar_asset_rows = lambda base_rows, extra_rows=None: Terminal._merge_stellar_asset_rows(fake, base_rows, extra_rows)
+
+    Terminal._refresh_stellar_asset_explorer_window(fake, window=window)
+
+    assert window._stellar_asset_picker.count() == 3
+    assert window._stellar_asset_table.rowCount() == 3
+    assert window._stellar_asset_auto_trust_btn.isEnabled() is True
+    assert "Directory imports: 1" in window._stellar_asset_status.text()
+    assert "AQUA:GAQUAISSUER" in window._stellar_asset_details.toHtml()
+
+
+def test_auto_trust_stellar_asset_by_roi_picks_best_visible_candidate():
+    _app()
+    window = SimpleNamespace(
+        _stellar_asset_status=QLabel(),
+        _stellar_asset_rows=[
+            {
+                "id": "AQUA:GAQUAISSUER",
+                "code": "AQUA",
+                "issuer": "GAQUAISSUER",
+                "screened": True,
+                "trusted": False,
+                "needs_trustline": True,
+                "score": 920.0,
+            },
+            {
+                "id": "AIRT:GAIRTISSUER",
+                "code": "AIRT",
+                "issuer": "GAIRTISSUER",
+                "screened": True,
+                "trusted": False,
+                "needs_trustline": True,
+                "score": 850.0,
+            },
+        ],
+        _stellar_asset_directory_rows=[
+            {
+                "id": "AQUA:GAQUAISSUER",
+                "code": "AQUA",
+                "issuer": "GAQUAISSUER",
+                "screened": True,
+                "trusted": False,
+                "needs_trustline": True,
+            },
+            {
+                "id": "AIRT:GAIRTISSUER",
+                "code": "AIRT",
+                "issuer": "GAIRTISSUER",
+                "screened": True,
+                "trusted": False,
+                "needs_trustline": True,
+            },
+        ],
+    )
+    trusted_assets = []
+    refreshed_messages = []
+
+    async def create_trustline(asset):
+        trusted_assets.append(asset)
+        return {"message": f"Trustline submitted for {asset}."}
+
+    async def estimate_asset_roi(asset, timeframe="1h", limit=48):
+        if asset == "AQUA:GAQUAISSUER":
+            return {"asset": asset, "symbol": "AQUA:GAQUAISSUER/USDC:GUSDCISSUER", "roi_pct": 14.2}
+        if asset == "AIRT:GAIRTISSUER":
+            return {"asset": asset, "symbol": "AIRT:GAIRTISSUER/USDC:GUSDCISSUER", "roi_pct": 4.1}
+        return None
+
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            broker=SimpleNamespace(create_trustline=create_trustline, estimate_asset_roi=estimate_asset_roi),
+            exchange="stellar",
+        ),
+        _refresh_markets=lambda: None,
+        _refresh_stellar_asset_explorer_window=lambda current_window, message=None: refreshed_messages.append(message),
+        _stellar_asset_identifier=lambda code, issuer=None: Terminal._stellar_asset_identifier(SimpleNamespace(), code, issuer),
+        system_console=SimpleNamespace(log=lambda message, level="INFO": None),
+    )
+
+    asyncio.run(Terminal._auto_trust_stellar_asset_by_roi_async(fake, window=window))
+
+    assert trusted_assets == ["AQUA:GAQUAISSUER"]
+    assert any("ROI 14.20%" in str(message or "") for message in refreshed_messages)
+    assert window._stellar_asset_directory_rows[0]["trusted"] is True
 
 
 def test_refresh_strategy_assignment_window_disables_manual_controls_until_auto_scan_finishes():

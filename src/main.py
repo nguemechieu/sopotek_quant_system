@@ -190,4 +190,3 @@ else:
     # hosting process. This is especially important for test runs, which may not
     # execute the main() function.
     _install_faulthandler()
-###  End of file.

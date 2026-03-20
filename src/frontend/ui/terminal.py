@@ -1,6 +1,16 @@
+"""Terminal UI definitions and behavior for Sopotek trading app.
+
+This module defines Terminal window, chart panes, market watch, session
+control, and many supporting UI actions for live trading and analysis.
+
+Type-checking directives are configured for dynamic UI attributes and hotpatch
+methods that are assigned outside of class definitions.
+"""
+
 # mypy: disable-error-code="attr-defined, method-assign"
+# pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportGeneralTypeIssues=false
 import asyncio
-from datetime import datetime, timedelta, timezone
+
 import html
 import json
 from pathlib import Path
@@ -10,12 +20,14 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any
-
+import shiboken6 # type: ignore[import-untyped]
 import traceback
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 import pyqtgraph as pg  # type: ignore[import-untyped]
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional, cast
 from PySide6.QtCore import Qt, QDate, QSettings, QDateTime, Signal, QTimer, QUrl, QRect
 from PySide6.QtGui import QAction, QColor, QTextCursor, QDesktopServices
 from PySide6.QtWidgets import (
@@ -27,7 +39,14 @@ from PySide6.QtWidgets import (
     QFrame, QHeaderView, QMenu, QMenuBar,
     QHBoxLayout, QSizePolicy, QTextEdit, QTextBrowser, QApplication, QLineEdit, QSlider, QCheckBox, QScrollArea
 )
-import shiboken6
+
+
+class _MultiChartPage(QWidget):
+    """Subclass for dynamic multi-chart page state keys used in Terminal."""
+    _detach_window_key: str
+    _terminal_multi_chart_symbols: list[str]
+    _terminal_multi_chart_timeframe: str
+
 
 if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     repo_root = Path(__file__).resolve().parents[3]
@@ -195,6 +214,7 @@ RISK_PROFILE_PRESETS = {
 
 
 def global_exception_hook(exctype, value, tb):
+    """Global exception hook to capture unexpected errors in the GUI process."""
     # Ignore expected shutdown interrupts so the terminal closes quietly.
     if exctype in (KeyboardInterrupt, SystemExit):
         return
@@ -204,18 +224,20 @@ def global_exception_hook(exctype, value, tb):
 
 
 def _json_text(value: object, fallback: str) -> str:
+    """Convert a JSON value to a safe string representation with fallback."""
     if isinstance(value, str):
         return value or fallback
     if isinstance(value, (bytes, bytearray)):
         try:
             decoded = bytes(value).decode("utf-8")
-        except Exception:
+        except (UnicodeDecodeError, TypeError, ValueError):
             return fallback
         return decoded or fallback
     return fallback
 
 
 def _setting_bool(value: object, default: bool = False) -> bool:
+    """Normalize various setting value formats to a boolean."""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -231,13 +253,15 @@ def _setting_bool(value: object, default: bool = False) -> bool:
 
 
 def _coerce_float(value: Any) -> float | None:
+    """Try converting a value to float; return None on failure."""
     try:
         return float(value)
-    except Exception:
+    except (ValueError, TypeError):
         return None
 
 
 def _read_pyproject_version(pyproject_path: Path) -> str | None:
+    """Read the project version from pyproject.toml (PEP 621 [project] version)."""
     try:
         content = pyproject_path.read_text(encoding="utf-8")
     except OSError:
@@ -263,10 +287,16 @@ def _read_pyproject_version(pyproject_path: Path) -> str | None:
 
 
 class Terminal(QMainWindow):
+    """Main trading terminal UI window.
+
+    Contains broker controls, charts, orders, positions, and autoscaling status.
+    """
     logout_requested = Signal()
     ai_signal = Signal(dict)
     autotrade_toggle = Signal(bool)
+
     def __init__(self, controller):
+        """Initialize terminal state and start refresh timers."""
 
         super().__init__(controller)
 
@@ -318,6 +348,9 @@ class Terminal(QMainWindow):
 
         self.candle_up_color = str(self.settings.value("chart/candle_up_color", "#26a69a") or "#26a69a")
         self.candle_down_color = str(self.settings.value("chart/candle_down_color", "#ef5350") or "#ef5350")
+        self.chart_background_color = str(self.settings.value("chart/background_color", "#11161f") or "#11161f")
+        self.chart_grid_color = str(self.settings.value("chart/grid_color", "#8290a0") or "#8290a0")
+        self.chart_axis_color = str(self.settings.value("chart/axis_color", "#9aa4b2") or "#9aa4b2")
 
         self.heartbeat = QLabel("●")
         self.heartbeat.setStyleSheet("color: green")
@@ -348,6 +381,7 @@ class Terminal(QMainWindow):
 
 
     def _setup_core(self):
+        """Configure core terminal window settings and initialize state holders."""
 
         self.order_type = self.controller.order_type
         self.setWindowTitle("Sopotek AI Trading Terminal")
@@ -399,10 +433,11 @@ class Terminal(QMainWindow):
         self.language_actions = {}
 
     def _history_request_limit(self, fallback=None):
+        """Compute effective OHLCV history limit using app, runtime, and broker caps."""
         value = fallback if fallback is not None else getattr(self.controller, "limit", 50000)
         try:
             resolved = max(100, int(value))
-        except Exception:
+        except (TypeError, ValueError):
             resolved = 50000
 
         runtime_cap = getattr(self.controller, "runtime_history_limit", None)
@@ -410,7 +445,7 @@ class Terminal(QMainWindow):
             runtime_cap = 1000
         try:
             resolved = min(resolved, max(100, int(runtime_cap)))
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
         broker = getattr(self.controller, "broker", None)
@@ -418,17 +453,19 @@ class Terminal(QMainWindow):
         try:
             if broker_cap is not None:
                 resolved = min(resolved, max(100, int(broker_cap)))
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
         return resolved
 
     def _tr(self, key, **kwargs):
+        """Translate UI key using controller translation system."""
         if hasattr(self.controller, "tr"):
             return self.controller.tr(key, **kwargs)
         return key
 
     def _active_exchange_name(self):
+        """Determine current active exchange name from broker or settings."""
         broker = getattr(self.controller, "broker", None)
         if broker is not None:
             name = getattr(broker, "exchange_name", None)
@@ -450,9 +487,11 @@ class Terminal(QMainWindow):
         return ""
 
     def _is_stellar_market_watch(self):
+        """Return whether the current market watch should include Stellar column behavior."""
         return self._active_exchange_name() == "stellar"
 
     def _market_watch_headers(self):
+        """Return headers for the market watch table based on exchange type."""
         if self._is_stellar_market_watch():
             return ["Watch", "Symbol", "Bid", "Ask", "USD Value", "AI Training"]
         return ["Watch", "Symbol", "Bid", "Ask", "AI Training"]
@@ -476,6 +515,7 @@ class Terminal(QMainWindow):
         return 4 if self._is_stellar_market_watch() else None
 
     def _configure_market_watch_table(self):
+        """Initialize the watchlist table structure and header labels."""
         if not hasattr(self, "symbols_table") or self.symbols_table is None:
             return
         headers = self._market_watch_headers()
@@ -483,9 +523,11 @@ class Terminal(QMainWindow):
         self.symbols_table.setHorizontalHeaderLabels(headers)
 
     def _normalized_symbol(self, symbol):
+        """Normalize symbol text to uppercase trimmed value."""
         return str(symbol or "").upper().strip()
 
     def _find_market_watch_row(self, symbol):
+        """Find the row index for a symbol in the watchlist table."""
         target = self._normalized_symbol(symbol)
         symbol_column = self._market_watch_symbol_column()
         for row in range(self.symbols_table.rowCount()):
@@ -495,6 +537,7 @@ class Terminal(QMainWindow):
         return None
 
     def _market_watch_check_item(self, symbol, checked=False):
+        """Create a checkable table cell for market watch symbol inclusion."""
         item = QTableWidgetItem("")
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled
@@ -506,6 +549,7 @@ class Terminal(QMainWindow):
         return item
 
     def _set_market_watch_row(self, row, symbol, bid="-", ask="-", status="⏳", usd_value="-"):
+        """Update or insert a market watch row with latest quote and state values."""
         normalized_symbol = self._normalized_symbol(symbol)
         checked = normalized_symbol in self.autotrade_watchlist
         watch_column = self._market_watch_watch_column()
@@ -533,6 +577,7 @@ class Terminal(QMainWindow):
         self.symbols_table.setItem(row, self._market_watch_status_column(), QTableWidgetItem(str(status)))
 
     def _sync_watchlist_from_table(self):
+        """Extract selected watchlist symbols from the table and persist to controller."""
         watchlist = set()
         watch_column = self._market_watch_watch_column()
         symbol_column = self._market_watch_symbol_column()
@@ -550,6 +595,7 @@ class Terminal(QMainWindow):
             self.controller.set_autotrade_watchlist(sorted(watchlist))
 
     def _handle_market_watch_item_changed(self, item):
+        """Handle a check state change for the market watch table."""
         if item is None or item.column() != self._market_watch_watch_column():
             return
         self._sync_watchlist_from_table()
@@ -687,7 +733,7 @@ class Terminal(QMainWindow):
             bid = float(ticker.get("bid") or ticker.get("bidPrice") or ticker.get("bp") or 0)
             ask = float(ticker.get("ask") or ticker.get("askPrice") or ticker.get("ap") or 0)
             last = float(ticker.get("last") or ticker.get("price") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
         if bid > 0 and ask > 0:
@@ -733,7 +779,7 @@ class Terminal(QMainWindow):
 
         try:
             mid = (float(bid) + float(ask)) / 2.0
-        except Exception:
+        except (TypeError, ValueError):
             return None
         if mid <= 0:
             return None
@@ -749,7 +795,7 @@ class Terminal(QMainWindow):
             return "-"
         try:
             numeric = float(value)
-        except Exception:
+        except (TypeError, ValueError):
             return "-"
         if numeric >= 1000:
             return f"{numeric:,.2f}"
@@ -762,7 +808,7 @@ class Terminal(QMainWindow):
             return "-"
         try:
             numeric = float(value)
-        except Exception:
+        except (TypeError, ValueError):
             return "-"
         if numeric >= 1000:
             return f"${numeric:,.2f}"
@@ -776,7 +822,7 @@ class Terminal(QMainWindow):
             if obj is None:
                 return False
             return bool(validator(obj))
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError):
             return False
 
     def _chart_tabs_ready(self):
@@ -797,7 +843,7 @@ class Terminal(QMainWindow):
                 continue
             try:
                 page = window.centralWidget()
-            except Exception:
+            except (AttributeError, RuntimeError):
                 page = None
             if page is not None:
                 pages.append(page)
@@ -808,24 +854,29 @@ class Terminal(QMainWindow):
         return pages
 
     def _chart_widgets_in_page(self, page):
+        """Return all ChartWidget instances inside a page or window UI element."""
         if page is None:
             return []
         if isinstance(page, ChartWidget):
             return [page]
         try:
             return list(page.findChildren(ChartWidget))
-        except Exception:
+        except Exception as e:
+            self.logger.error(f"Error finding chart widgets in page: {e}")
             return []
 
     def _is_multi_chart_page(self, page):
+        """Return True when the page is a grouped multi-chart layout."""
         if page is None:
             return False
         try:
             return str(page.objectName() or "") == "multi_chart_page"
-        except Exception:
+        except Exception as e:
+            self.logger.error(f"Error checking multi-chart page: {e}")
             return False
 
     def _normalized_chart_symbols(self, symbols, max_count=4):
+        """Normalize a list of chart symbols uppercase, trimming duplicates and capping the count."""
         normalized = []
         for symbol in symbols or []:
             value = str(symbol or "").strip().upper()
@@ -837,6 +888,7 @@ class Terminal(QMainWindow):
         return normalized
 
     def _multi_chart_symbols(self, max_count=4):
+        """Generate a prioritized set of chart symbols used for multi-chart layout creation."""
         candidates = []
 
         current_symbol = self._current_chart_symbol() or getattr(self, "symbol", "")
@@ -855,6 +907,7 @@ class Terminal(QMainWindow):
         return self._normalized_chart_symbols(candidates, max_count=max_count)
 
     def _multi_chart_window_key(self, symbols, timeframe):
+        """Create a working key for multi-chart windows to remember layout/restoration state."""
         safe_symbols = "_".join(
             symbol.replace("/", "_").replace(":", "_")
             for symbol in self._normalized_chart_symbols(symbols, max_count=4)
@@ -863,6 +916,7 @@ class Terminal(QMainWindow):
         return f"multi_chart_{safe_timeframe}_{safe_symbols or 'group'}"
 
     def _find_multi_chart_tab(self, symbols, timeframe):
+        """Find the index of an existing multi-chart tab matching target symbols and timeframe."""
         if not self._chart_tabs_ready():
             return -1
 
@@ -884,12 +938,12 @@ class Terminal(QMainWindow):
             if not self._is_multi_chart_page(page):
                 continue
             page_symbols = self._normalized_chart_symbols(
-                getattr(page, "_multi_chart_symbols", None)
+                getattr(page, "_terminal_multi_chart_symbols", None)
                 or [getattr(chart, "symbol", "") for chart in self._chart_widgets_in_page(page)],
                 max_count=4,
             )
             page_timeframe = str(
-                getattr(page, "_multi_chart_timeframe", None)
+                getattr(page, "_terminal_multi_chart_timeframe", None)
                 or target_timeframe
             ).strip().lower() or target_timeframe
             if page_symbols == target_symbols and page_timeframe == target_timeframe:
@@ -897,16 +951,17 @@ class Terminal(QMainWindow):
         return -1
 
     def _build_multi_chart_page(self, symbols, timeframe):
+        """Create and return a QWidget containing up to four linked ChartWidgets."""
         normalized_symbols = self._normalized_chart_symbols(symbols, max_count=4)
         if not normalized_symbols:
             return None
 
         normalized_tf = str(timeframe or self.current_timeframe or "1h").strip().lower() or "1h"
-        page = QWidget()
+        page = _MultiChartPage()
         page.setObjectName("multi_chart_page")
-        page._detach_window_key = self._multi_chart_window_key(normalized_symbols, normalized_tf)
-        page._multi_chart_symbols = list(normalized_symbols)
-        page._multi_chart_timeframe = normalized_tf
+        setattr(page, "_detach_window_key", self._multi_chart_window_key(normalized_symbols, normalized_tf))
+        setattr(page, "_terminal_multi_chart_symbols", list(normalized_symbols))
+        setattr(page, "_terminal_multi_chart_timeframe", normalized_tf)
 
         layout = QGridLayout(page)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -928,6 +983,9 @@ class Terminal(QMainWindow):
                 candle_up_color=self.candle_up_color,
                 candle_down_color=self.candle_down_color,
                 show_volume_panel=getattr(self, "show_chart_volume", False),
+                chart_background=self.chart_background_color,
+                grid_color=self.chart_grid_color,
+                axis_color=self.chart_axis_color,
             )
             self._configure_chart_widget(chart)
             chart.setMinimumHeight(300)
@@ -938,6 +996,7 @@ class Terminal(QMainWindow):
         return page
 
     def _close_multi_chart_pages(self):
+        """Close and clean up all multi-chart tabs and detached windows."""
         if self._chart_tabs_ready():
             for index in reversed(range(self.chart_tabs.count())):
                 page = self.chart_tabs.widget(index)
@@ -957,14 +1016,15 @@ class Terminal(QMainWindow):
             window._contains_chart_page = False
             try:
                 window.close()
-            except Exception:
+            except (RuntimeError, AttributeError):
                 pass
             try:
                 window.deleteLater()
-            except Exception:
+            except (RuntimeError, AttributeError):
                 pass
 
     def _set_active_chart_widget(self, chart, refresh_orderbook=False):
+        """Mark a specific ChartWidget as active and update UI state accordingly."""
         if not isinstance(chart, ChartWidget) or not self._is_qt_object_alive(chart):
             return
 
@@ -992,6 +1052,7 @@ class Terminal(QMainWindow):
             self._request_active_orderbook()
 
     def _preferred_chart_in_page(self, page):
+        """Return the currently active chart in a page or the first chart as fallback."""
         charts = self._chart_widgets_in_page(page)
         if not charts:
             return None
@@ -1004,6 +1065,7 @@ class Terminal(QMainWindow):
         return charts[0]
 
     def _chart_page_for_widget(self, target_chart):
+        """Find the parent page or tab that contains the given ChartWidget."""
         if target_chart is None:
             return None
         if isinstance(target_chart, ChartWidget):
@@ -1026,6 +1088,7 @@ class Terminal(QMainWindow):
         return None
 
     def _all_chart_widgets(self):
+        """Collect all active ChartWidget objects from tabs and detached windows."""
         charts = []
         if self._chart_tabs_ready():
             try:
@@ -1045,11 +1108,13 @@ class Terminal(QMainWindow):
         return charts
 
     def _single_chart_window_key(self, symbol, timeframe):
+        """Generate a stable key for a single chart window state based on symbol/timeframe."""
         safe_symbol = str(symbol or "").upper().replace("/", "_").replace(":", "_")
         safe_timeframe = str(timeframe or "").lower().replace("/", "_")
         return f"chart_{safe_symbol}_{safe_timeframe}"
 
     def _detached_chart_windows(self):
+        """List all currently detached chart windows that are still valid."""
         windows = []
         for window in self.detached_tool_windows.values():
             if not self._is_qt_object_alive(window):
@@ -1059,6 +1124,7 @@ class Terminal(QMainWindow):
         return windows
 
     def _find_detached_chart_window(self, symbol=None, timeframe=None) -> Any | None:
+        """Find a detached chart window matching symbol/timeframe if present."""
         target_symbol = str(symbol or "").upper().strip() if symbol else None
         target_timeframe = str(timeframe or "").strip() if timeframe else None
         for window in self._detached_chart_windows():
@@ -1074,6 +1140,7 @@ class Terminal(QMainWindow):
         return None
 
     def _active_detached_chart_window(self):
+        """Return the active detached chart window, if there is exactly one or the active window."""
         active_window = QApplication.activeWindow()
         if active_window is not None and getattr(active_window, "_contains_chart_page", False):
             return active_window
@@ -1083,6 +1150,7 @@ class Terminal(QMainWindow):
         return None
 
     def _install_chart_window_actions(self, window):
+        """Install the terminal action shortcuts to a detached window context."""
         if window is None or not self._is_qt_object_alive(window):
             return
         if getattr(window, "_chart_actions_installed", False):
@@ -1102,6 +1170,7 @@ class Terminal(QMainWindow):
         window._chart_actions_installed = True
 
     def _detached_chart_layouts(self):
+        """Serialize geometry and symbol data for detached chart windows."""
         layouts = []
         for window in self._detached_chart_windows():
             page = getattr(window, "centralWidget", lambda: None)()
@@ -1125,16 +1194,18 @@ class Terminal(QMainWindow):
         return layouts
 
     def _save_detached_chart_layouts(self):
+        """Persist the current detached chart window geometries to settings."""
         try:
             self.settings.setValue("charts/detached_layouts", json.dumps(self._detached_chart_layouts()))
-        except Exception as exc:
+        except (TypeError, ValueError, OSError) as exc:
             self.logger.debug("Unable to save detached chart layouts: %s", exc)
 
     def _restore_detached_chart_layouts(self):
+        """Restore detached chart windows from saved geometry and layout data."""
         raw_value = self.settings.value("charts/detached_layouts", "[]")
         try:
             layouts = json.loads(_json_text(raw_value, "[]"))
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             layouts = []
 
         if not isinstance(layouts, list):
@@ -1153,7 +1224,8 @@ class Terminal(QMainWindow):
                 y = int(entry.get("y", 0))
                 width = max(360, int(entry.get("width", 1200)))
                 height = max(260, int(entry.get("height", 780)))
-            except Exception:
+            except Exception as exc:
+                self.logger.debug("Invalid geometry in detached chart layout entry: %s", exc)
                 x, y, width, height = 0, 0, 1200, 780
             geometry = QRect(x, y, width, height)
             if str(entry.get("kind") or "").strip().lower() == "group" and symbols:
@@ -1162,6 +1234,7 @@ class Terminal(QMainWindow):
                 self._open_or_focus_detached_chart(symbol, timeframe, geometry=geometry)
 
     def _reattach_chart_window(self, window):
+        """Move a detached chart window back into the main chart tab view."""
         if window is None or not self._is_qt_object_alive(window):
             return
         if not getattr(window, "_contains_chart_page", False):
@@ -1413,7 +1486,7 @@ class Terminal(QMainWindow):
         if hasattr(self.controller, "get_license_status"):
             try:
                 status = self.controller.get_license_status()
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 status = {}
         tier = str(status.get("tier", "community") or "community").lower()
         badge_text = str(status.get("badge", "FREE") or "FREE").upper()
@@ -1435,6 +1508,11 @@ class Terminal(QMainWindow):
             f"{status.get('plan_name', 'License')} | {status.get('summary', 'Status unavailable')}\n"
             f"{status.get('description', '')}"
         )
+
+    def _open_stellar_asset_explorer_window(self) -> None:
+        """Placeholder for dynamically patched Stellar explorer method."""
+        # This method is set via module-level hotfix patching later in the file.
+        pass
 
     def _handle_license_status_change(self):
         self._update_license_badge()
@@ -2171,7 +2249,7 @@ class Terminal(QMainWindow):
             if hasattr(self.controller, "get_active_autotrade_symbols"):
                 try:
                     active_symbols = self.controller.get_active_autotrade_symbols()
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     active_symbols = []
             if not active_symbols:
                 message = "No symbols are available for the chosen AI scope."
@@ -2251,11 +2329,11 @@ class Terminal(QMainWindow):
         self.system_console.log("Emergency kill switch engaged. Canceling open orders and closing tracked positions.", "WARN")
         try:
             await self._cancel_all_orders_async(show_dialog=False)
-        except Exception:
+        except (asyncio.CancelledError, RuntimeError, AttributeError):
             pass
         try:
             await self._close_all_positions_async(show_dialog=False)
-        except Exception:
+        except (asyncio.CancelledError, RuntimeError, AttributeError):
             pass
         self._refresh_terminal()
         self._show_async_message(
@@ -2275,6 +2353,9 @@ class Terminal(QMainWindow):
             self.controller,
             candle_up_color=self.candle_up_color,
             candle_down_color=self.candle_down_color,
+            chart_background=self.chart_background_color,
+            grid_color=self.chart_grid_color,
+            axis_color=self.chart_axis_color,
         )
         self._configure_chart_widget(chart)
 
@@ -2308,26 +2389,26 @@ class Terminal(QMainWindow):
         for chart in self._chart_widgets_in_page(page):
             try:
                 chart.refresh_context_display()
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
             last_df = getattr(chart, "_last_df", None)
             if last_df is not None and hasattr(last_df, "empty") and not last_df.empty:
                 try:
                     chart.update_candles(last_df.copy())
-                except Exception:
+                except (RuntimeError, AttributeError, TypeError, ValueError):
                     self._schedule_chart_data_refresh(chart)
             else:
                 self._schedule_chart_data_refresh(chart)
             try:
                 chart.updateGeometry()
                 chart.repaint()
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
 
         try:
             window.centralWidget().updateGeometry()
             window.centralWidget().repaint()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError):
             pass
         if not getattr(window, "_chart_layout_save_hook_installed", False):
             window.destroyed.connect(lambda *_: self._save_detached_chart_layouts())
@@ -2340,16 +2421,91 @@ class Terminal(QMainWindow):
 
         if hasattr(self.controller, "request_candle_data"):
             asyncio.get_event_loop().create_task(
-                self.controller.request_candle_data(
-                    symbol=chart.symbol,
-                    timeframe=chart.timeframe,
+                self._request_chart_data_for_widget(
+                    chart,
                     limit=self._history_request_limit(),
                 )
             )
+        else:
+            asyncio.get_event_loop().create_task(
+                self._reload_chart_data(chart.symbol, chart.timeframe)
+            )
 
-        asyncio.get_event_loop().create_task(
-            self._reload_chart_data(chart.symbol, chart.timeframe)
-        )
+    def _register_chart_request_token(self, chart):
+        tokens = getattr(self, "_chart_request_tokens", None)
+        if not isinstance(tokens, dict):
+            tokens = {}
+            self._chart_request_tokens = tokens
+        token = object()
+        tokens[id(chart)] = token
+        return token
+
+    def _is_chart_request_current(self, chart, token):
+        if not isinstance(chart, ChartWidget):
+            return False
+        if not self._is_qt_object_alive(chart):
+            return False
+        tokens = getattr(self, "_chart_request_tokens", None)
+        if not isinstance(tokens, dict):
+            return False
+        return tokens.get(id(chart)) is token
+
+    async def _request_chart_data_for_widget(self, chart, limit=None):
+        if not isinstance(chart, ChartWidget):
+            return None
+        if not self._is_qt_object_alive(chart):
+            return None
+        if not hasattr(self.controller, "request_candle_data"):
+            return None
+
+        symbol = str(getattr(chart, "symbol", "") or "").strip()
+        timeframe = str(getattr(chart, "timeframe", getattr(self, "current_timeframe", "1h")) or "1h").strip() or "1h"
+        if not symbol:
+            return None
+
+        try:
+            requested_limit = int(limit if limit is not None else self._history_request_limit())
+        except Exception:
+            requested_limit = int(self._history_request_limit())
+        requested_limit = max(requested_limit, 1)
+
+        token = self._register_chart_request_token(chart)
+        if hasattr(chart, "set_loading_state"):
+            chart.set_loading_state(True, requested_bars=requested_limit)
+
+        try:
+            frame = await self.controller.request_candle_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=requested_limit,
+            )
+        except Exception as exc:
+            if self._is_chart_request_current(chart, token) and hasattr(chart, "set_no_data_state"):
+                chart.set_no_data_state(str(exc))
+            raise
+
+        if not self._is_chart_request_current(chart, token):
+            return frame
+
+        frame = candles_to_df(frame)
+        if frame is None or getattr(frame, "empty", False):
+            if hasattr(chart, "set_no_data_state"):
+                chart.set_no_data_state()
+            return None
+
+        self._update_chart(symbol, frame)
+
+        try:
+            received_count = int(len(frame.index))
+        except Exception:
+            received_count = int(len(frame))
+
+        if requested_limit > 0 and received_count < requested_limit:
+            if hasattr(chart, "set_history_notice"):
+                chart.set_history_notice(received_count, requested_limit)
+        elif hasattr(chart, "clear_data_status"):
+            chart.clear_data_status()
+        return frame
 
     def _chart_page_title(self, page, fallback_index=None):
         charts = self._chart_widgets_in_page(page)
@@ -2364,7 +2520,7 @@ class Terminal(QMainWindow):
         if fallback_index is not None and self._chart_tabs_ready():
             try:
                 return self.chart_tabs.tabText(fallback_index)
-            except Exception:
+            except (IndexError, RuntimeError):
                 pass
         return "Detached Chart"
 
@@ -2537,6 +2693,9 @@ class Terminal(QMainWindow):
             self.controller,
             candle_up_color=self.candle_up_color,
             candle_down_color=self.candle_down_color,
+            chart_background=self.chart_background_color,
+            grid_color=self.chart_grid_color,
+            axis_color=self.chart_axis_color,
         )
         self._configure_chart_widget(chart)
         if hasattr(chart, "set_compact_view_mode"):
@@ -2985,14 +3144,14 @@ class Terminal(QMainWindow):
         if ticker_buffer is not None and hasattr(ticker_buffer, "get"):
             try:
                 ticker = ticker_buffer.get(symbol)
-            except Exception:
+            except (AttributeError, KeyError, TypeError, RuntimeError):
                 ticker = None
         if not isinstance(ticker, dict):
             ticker_stream = getattr(self.controller, "ticker_stream", None)
             if ticker_stream is not None and hasattr(ticker_stream, "get"):
                 try:
                     ticker = ticker_stream.get(symbol)
-                except Exception:
+                except (AttributeError, KeyError, TypeError, RuntimeError):
                     ticker = None
         if not isinstance(ticker, dict):
             return None
@@ -3027,7 +3186,7 @@ class Terminal(QMainWindow):
         if callable(get_positions):
             try:
                 raw_positions = get_positions() or []
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 raw_positions = []
         if isinstance(raw_positions, dict):
             raw_positions = list(raw_positions.values())
@@ -3896,7 +4055,7 @@ class Terminal(QMainWindow):
                 self._refresh_quant_pm_async(window)
             )
         except Exception as exc:
-            self.logger.debug("Unable to schedule Quant PM refresh: %s", exc)
+            self.logger.error("Unable to schedule Quant PM refresh: %s", exc)
 
     async def _refresh_quant_pm_async(self, window):
         if window is None or not self._is_qt_object_alive(window):
@@ -4523,9 +4682,10 @@ class Terminal(QMainWindow):
         return _hotfix_refresh_strategy_assignment_window(self, window=window, message=message)
 
     def _refresh_agent_timeline_window(self, window=None):
+        _ = window
         return None
 
-    def _push_notification(self, *args, **kwargs):
+    def _push_notification(self, *_args, **_kwargs):
         return None
 
 
@@ -4674,6 +4834,19 @@ class Terminal(QMainWindow):
     def _apply_candle_colors_to_all_charts(self):
         for chart in self._iter_chart_widgets():
             chart.set_candle_colors(self.candle_up_color, self.candle_down_color)
+
+    def _chart_theme_kwargs(self):
+        return {
+            "chart_background": getattr(self, "chart_background_color", "#11161f"),
+            "grid_color": getattr(self, "chart_grid_color", "#8290a0"),
+            "axis_color": getattr(self, "chart_axis_color", "#9aa4b2"),
+        }
+
+    def _apply_chart_theme_to_all_charts(self):
+        theme_kwargs = self._chart_theme_kwargs()
+        for chart in self._iter_chart_widgets():
+            if hasattr(chart, "set_visual_theme"):
+                chart.set_visual_theme(**theme_kwargs)
 
     def _choose_candle_colors(self):
         up = QColorDialog.getColor(QColor(self.candle_up_color), self, "Select Bullish Candle Color")
@@ -4974,36 +5147,34 @@ class Terminal(QMainWindow):
                 break
 
     def _rotate_spinner(self):
+        try:
+            self._spinner_index += 1
+            self._update_trading_activity_indicator()
+            self._update_autotrade_button()
 
-     try:
-        self._spinner_index += 1
-        self._update_trading_activity_indicator()
-        self._update_autotrade_button()
+            # Lightweight spinner update: only touch existing rows that are in training state.
+            if not hasattr(self, "symbols_table") or self.symbols_table is None:
+                return
 
-        # Lightweight spinner update: only touch existing rows that are in training state.
-        if not hasattr(self, "symbols_table") or self.symbols_table is None:
-            return
+            icon = self._spinner_frames[self._spinner_index % len(self._spinner_frames)]
 
-        icon = self._spinner_frames[self._spinner_index % len(self._spinner_frames)]
+            rows = self.symbols_table.rowCount()
+            status_column = self._market_watch_status_column()
 
-        rows = self.symbols_table.rowCount()
-        status_column = self._market_watch_status_column()
+            for row in range(rows):
+                status_item = self.symbols_table.item(row, status_column)
 
-        for row in range(rows):
-            status_item = self.symbols_table.item(row, status_column)
+                if not status_item:
+                    continue
 
-            if not status_item:
-                continue
+                text = status_item.text() or ""
 
-            text = status_item.text() or ""
+                if "Training" in text or "?" in text or "?" in text:
+                    status_item.setText(f"{icon} Training...")
+                    status_item.setForeground(QColor("yellow"))
 
-            if "Training" in text or "?" in text or "?" in text:
-                status_item.setText(f"{icon} Training...")
-                status_item.setForeground(QColor("yellow"))
-
-     except Exception as e:
-
-        self.logger.error(e)
+        except Exception as e:
+            self.logger.error(e)
 
     def _connect_signals(self):
 
@@ -7291,7 +7462,7 @@ class Terminal(QMainWindow):
             return None
         try:
             return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
-        except Exception:
+        except Exception :
             return None
 
     def _journal_review_bounds(self, mode):
@@ -7808,7 +7979,8 @@ class Terminal(QMainWindow):
 
         try:
             numeric = float(value)
-        except Exception:
+        except Exception as ex:
+            self.logger.debug(f"Performance value formatting error for {value}: {ex}")
             return str(value)
 
         if percent:
@@ -7985,22 +8157,19 @@ class Terminal(QMainWindow):
 
             balance = getattr(controller, "balances", {})
             balance_equity = None
-            if isinstance(balance, dict):
-                balance_equity = balance.get("equity")
-                if balance_equity is None:
-                    total_balance = balance.get("total")
-                    if isinstance(total_balance, dict) and len(total_balance) == 1:
-                        try:
-                            balance_equity = float(next(iter(total_balance.values())))
-                        except Exception:
-                            balance_equity = None
+            resolve_equity = getattr(controller, "_extract_balance_equity_value", None)
+            if callable(resolve_equity):
+                try:
+                    balance_equity = resolve_equity(balance)
+                except Exception:
+                    balance_equity = None
 
             if balance_equity is None:
                 equity = getattr(controller.portfolio, "get_equity", lambda: 0)()
             else:
                 equity = float(balance_equity)
             spread = getattr(controller, "spread_pct", 0)
-            positions = getattr(controller.portfolio, "positions", {})
+            positions = list(self._active_positions_snapshot() or [])
             symbols = getattr(controller, "symbols", [])
             exchange_display, exchange_tooltip = self._system_status_exchange_display()
 
@@ -8637,6 +8806,7 @@ class Terminal(QMainWindow):
         return ""
 
     def _market_chat_voice_state_text(self, window=None):
+        _ = window
         snapshot = getattr(self.controller, "market_chat_voice_state", lambda: {})() or {}
         provider = str(snapshot.get("recognition_provider") or snapshot.get("provider") or "windows").strip().lower()
         provider_label = "Google" if provider == "google" else "Windows"
@@ -9796,8 +9966,8 @@ async def _hotfix_load_backtest_history(self, window=None, force=False):
     symbol_picker = getattr(window, "_backtest_symbol_picker", None)
     timeframe_picker = getattr(window, "_backtest_timeframe_picker", None)
     strategy_picker = getattr(window, "_backtest_strategy_picker", None)
-    start_date_edit = getattr(window, "_backtest_start_date", None)
-    end_date_edit = getattr(window, "_backtest_end_date", None)
+    start_date_edit = getattr(window, "_backtest_start_date", 0)
+    end_date_edit = getattr(window, "_backtest_end_date", datetime.now())
     history_limit_widget = getattr(window, "_backtest_history_limit", None)
 
     symbol = str(symbol_picker.currentText()).strip() if symbol_picker is not None else ""
@@ -10187,7 +10357,7 @@ def _hotfix_show_optimization_window(self):
     return show_optimization_window(self)
 
 
-def _hotfix_stellar_expert_asset_url(self, code, issuer=None):
+def _hotfix_stellar_expert_asset_url(_self, code, issuer=None):
     base_url = "https://stellar.expert/explorer/public/asset"
     normalized_code = str(code or "").upper().strip()
     normalized_issuer = str(issuer or "").strip()
@@ -10200,7 +10370,7 @@ def _hotfix_stellar_expert_asset_url(self, code, issuer=None):
     return f"{base_url}/{normalized_code}-{normalized_issuer}"
 
 
-def _hotfix_stellar_asset_identifier(self, code, issuer=None):
+def _hotfix_stellar_asset_identifier(_self, code, issuer=None):
     normalized_code = str(code or "").upper().strip()
     normalized_issuer = str(issuer or "").strip()
     if not normalized_code:
@@ -10249,16 +10419,55 @@ def _hotfix_selected_stellar_asset_row(self, window=None):
     if window is None:
         return None
     asset_picker = getattr(window, "_stellar_asset_picker", None)
+    asset_table = getattr(window, "_stellar_asset_table", None)
     rows = list(getattr(window, "_stellar_asset_rows", []) or [])
-    if asset_picker is None:
+    if asset_picker is None and asset_table is None:
         return None
-    selected_identifier = str(asset_picker.currentData() or "").strip()
-    if not selected_identifier and asset_picker.currentText():
-        selected_identifier = str(asset_picker.currentText() or "").strip()
+    selected_identifier = ""
+    if asset_table is not None and asset_table.currentRow() >= 0:
+        item = asset_table.item(asset_table.currentRow(), 0)
+        if item is not None:
+            selected_identifier = str(item.data(Qt.UserRole) or item.text() or "").strip()
+    if not selected_identifier and asset_picker is not None:
+        selected_identifier = str(asset_picker.currentData() or "").strip()
+        if not selected_identifier and asset_picker.currentText():
+            selected_identifier = str(asset_picker.currentText() or "").strip()
     for row in rows:
         if str(row.get("id") or "") == selected_identifier:
             return row
     return rows[0] if rows else None
+
+
+def _hotfix_is_stellar_asset_blocked(self, row):
+    if not isinstance(row, dict):
+        return False
+    if bool(row.get("blocked")):
+        return True
+
+    risk_fragments = [
+        str(row.get("risk_label") or ""),
+        str(row.get("warning") or ""),
+        str(row.get("status") or ""),
+        str(row.get("tag") or ""),
+        str(row.get("tags") or ""),
+        str(row.get("labels") or ""),
+    ]
+    combined_risk_text = " ".join(fragment.strip().lower() for fragment in risk_fragments if str(fragment or "").strip())
+    if any(marker in combined_risk_text for marker in ("scam", "spam", "fraud", "phishing", "banned", "blacklist", "blacklisted", "blocked")):
+        return True
+
+    broker = getattr(self.controller, "broker", None)
+    blocked_checker = getattr(broker, "is_asset_blocked", None)
+    if not callable(blocked_checker):
+        return False
+
+    code = str(row.get("code") or "").upper().strip()
+    issuer = str(row.get("issuer") or "").strip() or None
+    try:
+        return bool(blocked_checker(code, issuer))
+    except TypeError:
+        identifier = self._stellar_asset_identifier(code, issuer)
+        return bool(blocked_checker(identifier))
 
 
 def _hotfix_stellar_asset_explorer_rows(self):
@@ -10314,6 +10523,10 @@ def _hotfix_stellar_asset_explorer_rows(self):
     if not rows and exchange_name == "stellar":
         upsert("XLM", None, "Network")
 
+    is_blocked = getattr(self, "_is_stellar_asset_blocked", None)
+    if not callable(is_blocked):
+        is_blocked = lambda row: _hotfix_is_stellar_asset_blocked(self, row)
+
     ordered_rows = []
     for row in rows.values():
         sources = sorted(set(row.get("sources") or []))
@@ -10321,19 +10534,20 @@ def _hotfix_stellar_asset_explorer_rows(self):
         issuer = str(row.get("issuer") or "")
         screened = code == "XLM" or code in network_codes
         trusted = code == "XLM" or code in account_codes
-        ordered_rows.append(
-            {
-                "id": self._stellar_asset_identifier(code, issuer),
-                "code": code,
-                "issuer": issuer,
-                "source": ", ".join(sources) if sources else "Known",
-                "url": self._stellar_expert_asset_url(code, issuer),
-                "screened": screened,
-                "trusted": trusted,
-                "needs_trustline": bool(code and code != "XLM" and not trusted),
-                "risk_label": "Screened" if screened else "Unscreened",
-            }
-        )
+        row_payload = {
+            "id": self._stellar_asset_identifier(code, issuer),
+            "code": code,
+            "issuer": issuer,
+            "source": ", ".join(sources) if sources else "Known",
+            "url": self._stellar_expert_asset_url(code, issuer),
+            "screened": screened,
+            "trusted": trusted,
+            "needs_trustline": bool(code and code != "XLM" and not trusted),
+            "risk_label": "Screened" if screened else "Unscreened",
+        }
+        if is_blocked(row_payload):
+            continue
+        ordered_rows.append(row_payload)
 
     ordered_rows.sort(
         key=lambda item: (
@@ -10347,6 +10561,208 @@ def _hotfix_stellar_asset_explorer_rows(self):
     return ordered_rows
 
 
+def _hotfix_merge_stellar_asset_rows(self, base_rows, extra_rows=None):
+    is_blocked = getattr(self, "_is_stellar_asset_blocked", None)
+    if not callable(is_blocked):
+        is_blocked = lambda row: _hotfix_is_stellar_asset_blocked(self, row)
+    merged_rows = {}
+    for raw_row in list(base_rows or []) + list(extra_rows or []):
+        if not isinstance(raw_row, dict):
+            continue
+        if is_blocked(raw_row):
+            continue
+        identifier = str(raw_row.get("id") or "").strip()
+        if not identifier:
+            continue
+        existing = dict(merged_rows.get(identifier) or {})
+        row = dict(raw_row)
+        source_parts = [
+            str(existing.get("source") or "").strip(),
+            str(row.get("source") or "").strip(),
+        ]
+        merged = dict(existing)
+        merged.update(row)
+        merged["source"] = ", ".join(part for part in dict.fromkeys(part for part in source_parts if part) if part)
+        merged["screened"] = bool(existing.get("screened")) or bool(row.get("screened"))
+        merged["trusted"] = bool(existing.get("trusted")) or bool(row.get("trusted"))
+        merged["needs_trustline"] = bool(
+            str(merged.get("code") or "").upper() != "XLM" and not bool(merged.get("trusted"))
+        )
+        score_value = row.get("score", existing.get("score"))
+        merged["score"] = float(score_value) if score_value not in (None, "") else None
+        roi_value = row.get("roi_pct", existing.get("roi_pct"))
+        merged["roi_pct"] = float(roi_value) if roi_value not in (None, "") else None
+        merged["roi_symbol"] = str(row.get("roi_symbol") or existing.get("roi_symbol") or "").strip()
+        merged_rows[identifier] = merged
+
+    ordered_rows = list(merged_rows.values())
+    ordered_rows.sort(
+        key=lambda item: (
+            0 if bool(item.get("screened")) else 1,
+            0 if bool(item.get("trusted")) else 1,
+            0 if "Directory" in str(item.get("source") or "") else 1,
+            -(float(item.get("roi_pct")) if item.get("roi_pct") not in (None, "") else -999999.0),
+            -(float(item.get("score")) if item.get("score") not in (None, "") else 0.0),
+            str(item.get("code") or ""),
+            str(item.get("issuer") or ""),
+        )
+    )
+    return ordered_rows
+
+
+async def _hotfix_load_stellar_asset_directory_page_async(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return
+
+    status = getattr(window, "_stellar_asset_status", None)
+    cursor_input = getattr(window, "_stellar_asset_directory_cursor", None)
+    broker = getattr(self.controller, "broker", None)
+    exchange_name = str(getattr(self.controller, "exchange", "") or "").strip().lower()
+    if broker is None or exchange_name != "stellar":
+        raise RuntimeError("Connect a Stellar broker before loading the asset directory.")
+    if not hasattr(broker, "fetch_asset_directory_page"):
+        raise RuntimeError("The connected broker does not support Stellar asset directory pages.")
+
+    cursor = str(cursor_input.text() or "").strip() if cursor_input is not None else ""
+    if status is not None:
+        status.setText(
+            "Loading Stellar asset directory page..."
+            + (f" cursor {cursor}." if cursor else "")
+        )
+
+    payload = await broker.fetch_asset_directory_page(cursor=cursor or None, limit=60)
+    page_rows = [dict(item) for item in list(payload.get("rows") or []) if isinstance(item, dict)]
+    existing_rows = {
+        str(row.get("id") or "").strip(): dict(row)
+        for row in list(getattr(window, "_stellar_asset_directory_rows", []) or [])
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    for row in page_rows:
+        existing_rows[str(row.get("id") or "").strip()] = dict(row)
+    window._stellar_asset_directory_rows = list(existing_rows.values())
+    window._stellar_asset_next_cursor = str(payload.get("next_cursor") or "").strip()
+
+    next_cursor = str(payload.get("next_cursor") or "").strip()
+    status_message = (
+        f"Loaded {len(page_rows)} Stellar directory assets."
+        + (f" Next cursor: {next_cursor}" if next_cursor else " Reached the end of the directory page chain.")
+    )
+    self._refresh_stellar_asset_explorer_window(window, message=status_message)
+
+
+def _hotfix_load_stellar_asset_directory_page(self, window=None):
+    async def runner():
+        try:
+            await self._load_stellar_asset_directory_page_async(window)
+        except Exception as exc:
+            if hasattr(self, "logger"):
+                self.logger.exception("Stellar asset directory load failed")
+            if hasattr(self, "system_console"):
+                self.system_console.log(f"Stellar asset directory load failed: {exc}", "ERROR")
+            self._refresh_stellar_asset_explorer_window(window, message=str(exc))
+            self._show_async_message("Stellar Asset Directory Failed", str(exc), QMessageBox.Icon.Critical)
+
+    asyncio.get_event_loop().create_task(runner())
+
+
+async def _hotfix_auto_trust_stellar_asset_by_roi_async(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return
+
+    status = getattr(window, "_stellar_asset_status", None)
+    broker = getattr(self.controller, "broker", None)
+    exchange_name = str(getattr(self.controller, "exchange", "") or "").strip().lower()
+    if broker is None or exchange_name != "stellar":
+        raise RuntimeError("Connect a Stellar broker before auto-trusting a Stellar asset.")
+    if not hasattr(broker, "create_trustline") or not hasattr(broker, "estimate_asset_roi"):
+        raise RuntimeError("The connected broker does not support ROI-based trustline selection.")
+
+    visible_rows = [dict(row) for row in list(getattr(window, "_stellar_asset_rows", []) or []) if isinstance(row, dict)]
+    is_blocked = getattr(self, "_is_stellar_asset_blocked", None)
+    if not callable(is_blocked):
+        is_blocked = lambda row: _hotfix_is_stellar_asset_blocked(self, row)
+    candidates = [
+        row
+        for row in visible_rows
+        if str(row.get("code") or "").upper() != "XLM"
+        and bool(row.get("needs_trustline"))
+        and bool(row.get("screened"))
+        and not is_blocked(row)
+    ]
+    if not candidates:
+        raise ValueError("No visible screened Stellar assets need trustlines right now.")
+
+    ranked_candidates = sorted(
+        candidates,
+        key=lambda row: (
+            -(float(row.get("score")) if row.get("score") not in (None, "") else 0.0),
+            str(row.get("code") or ""),
+        ),
+    )[:12]
+
+    if status is not None:
+        status.setText(f"Scoring {len(ranked_candidates)} Stellar assets by recent ROI...")
+
+    best_row = None
+    best_snapshot = None
+    for row in ranked_candidates:
+        identifier = self._stellar_asset_identifier(row.get("code"), row.get("issuer"))
+        snapshot = await broker.estimate_asset_roi(identifier, timeframe="1h", limit=48)
+        if not isinstance(snapshot, dict) or snapshot.get("roi_pct") is None:
+            continue
+        roi_value = float(snapshot.get("roi_pct") or 0.0)
+        row["roi_pct"] = roi_value
+        row["roi_symbol"] = str(snapshot.get("symbol") or "").strip()
+        if best_snapshot is None or roi_value > float(best_snapshot.get("roi_pct") or 0.0):
+            best_row = row
+            best_snapshot = snapshot
+
+    if best_row is None or best_snapshot is None:
+        raise RuntimeError("Unable to compute ROI for the visible Stellar assets. Load a different page or adjust the filters.")
+
+    best_roi = float(best_snapshot.get("roi_pct") or 0.0)
+    if best_roi <= 0.0:
+        raise RuntimeError("No positive-ROI Stellar asset was found among the visible screened candidates.")
+
+    identifier = self._stellar_asset_identifier(best_row.get("code"), best_row.get("issuer"))
+    if status is not None:
+        status.setText(f"Submitting trustline for best ROI asset {identifier} ({best_roi:.2f}% )...")
+
+    result = await broker.create_trustline(identifier)
+    for row in list(getattr(window, "_stellar_asset_directory_rows", []) or []):
+        if str(row.get("id") or "").strip() == identifier:
+            row["trusted"] = True
+            row["needs_trustline"] = False
+            row["roi_pct"] = best_roi
+            row["roi_symbol"] = str(best_snapshot.get("symbol") or "").strip()
+    if hasattr(self, "_refresh_markets"):
+        self._refresh_markets()
+    message = (
+        str(result.get("message") or f"Trustline submitted for {identifier}.")
+        + f" Auto-selected from ROI {best_roi:.2f}% via {str(best_snapshot.get('symbol') or identifier)}."
+    )
+    self._refresh_stellar_asset_explorer_window(window, message=message)
+    if hasattr(self, "system_console"):
+        self.system_console.log(message, "INFO")
+
+
+def _hotfix_auto_trust_stellar_asset_by_roi(self, window=None):
+    async def runner():
+        try:
+            await self._auto_trust_stellar_asset_by_roi_async(window)
+        except Exception as exc:
+            if hasattr(self, "logger"):
+                self.logger.exception("Stellar ROI trustline selection failed")
+            if hasattr(self, "system_console"):
+                self.system_console.log(f"Stellar ROI trustline selection failed: {exc}", "ERROR")
+            self._refresh_stellar_asset_explorer_window(window, message=str(exc))
+            self._show_async_message("Stellar ROI Trustline Failed", str(exc), QMessageBox.Icon.Critical)
+
+    asyncio.get_event_loop().create_task(runner())
+
+
 def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=None):
     window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
     if window is None:
@@ -10354,18 +10770,32 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
 
     status = getattr(window, "_stellar_asset_status", None)
     asset_picker = getattr(window, "_stellar_asset_picker", None)
+    asset_table = getattr(window, "_stellar_asset_table", None)
     manual_input = getattr(window, "_stellar_asset_input", None)
+    directory_cursor_input = getattr(window, "_stellar_asset_directory_cursor", None)
     details = getattr(window, "_stellar_asset_details", None)
     safe_filter = getattr(window, "_stellar_asset_filter_safe", None)
     trustline_filter = getattr(window, "_stellar_asset_filter_untrusted", None)
     trustline_btn = getattr(window, "_stellar_asset_trustline_btn", None)
+    load_directory_btn = getattr(window, "_stellar_asset_load_directory_btn", None)
+    auto_trust_btn = getattr(window, "_stellar_asset_auto_trust_btn", None)
     if status is None or asset_picker is None or manual_input is None or details is None:
         return
 
-    rows = self._stellar_asset_explorer_rows()
+    merge_rows = getattr(self, "_merge_stellar_asset_rows", None)
+    if not callable(merge_rows):
+        merge_rows = lambda base_rows, extra_rows=None: _hotfix_merge_stellar_asset_rows(self, base_rows, extra_rows)
+    rows = merge_rows(
+        self._stellar_asset_explorer_rows(),
+        getattr(window, "_stellar_asset_directory_rows", []),
+    )
     broker = getattr(self.controller, "broker", None)
     broker_name = str(getattr(self.controller, "exchange", "") or "Broker").strip() or "Broker"
     selected_value = str(asset_picker.currentData() or "").strip()
+    if asset_table is not None and asset_table.currentRow() >= 0:
+        selected_item = asset_table.item(asset_table.currentRow(), 0)
+        if selected_item is not None:
+            selected_value = str(selected_item.data(Qt.UserRole) or selected_item.text() or "").strip() or selected_value
     show_screened_only = bool(safe_filter.isChecked()) if safe_filter is not None else False
     show_needs_trustline_only = bool(trustline_filter.isChecked()) if trustline_filter is not None else False
     filtered_rows = []
@@ -10378,15 +10808,20 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
 
     blocked = asset_picker.blockSignals(True)
     asset_picker.clear()
+    selected_index = 0
     for row in filtered_rows:
         label = str(row.get("code") or "")
         issuer = str(row.get("issuer") or "").strip()
         source = str(row.get("source") or "").strip()
         risk_label = str(row.get("risk_label") or "").strip()
+        roi_value = row.get("roi_pct")
+        roi_label = f"{float(roi_value):+.2f}%" if roi_value not in (None, "") else ""
         if issuer:
             label = f"{label} | {issuer[:12]}..."
         if risk_label:
             label = f"{label} [{risk_label}]"
+        if roi_label:
+            label = f"{label} ROI {roi_label}"
         if source:
             label = f"{label} {{{source}}}"
         asset_picker.addItem(label, row.get("id"))
@@ -10394,12 +10829,50 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
         for index in range(asset_picker.count()):
             if str(asset_picker.itemData(index) or "").strip() == selected_value:
                 asset_picker.setCurrentIndex(index)
+                selected_index = index
                 break
     elif asset_picker.count():
         asset_picker.setCurrentIndex(0)
     asset_picker.blockSignals(blocked)
     window._stellar_asset_all_rows = list(rows)
     window._stellar_asset_rows = list(filtered_rows)
+    if asset_table is not None:
+        table_blocked = asset_table.blockSignals(True)
+        asset_table.setColumnCount(7)
+        asset_table.setHorizontalHeaderLabels(
+            ["Asset", "Issuer", "Trust", "Safety", "ROI 24h", "Score", "Source"]
+        )
+        asset_table.setRowCount(len(filtered_rows))
+        selected_table_row = -1
+        for row_index, row in enumerate(filtered_rows):
+            trust_state = "Trusted" if row.get("trusted") else ("Needs trustline" if row.get("needs_trustline") else "Native")
+            roi_value = row.get("roi_pct")
+            roi_text = f"{float(roi_value):+.2f}%" if roi_value not in (None, "") else "-"
+            score_value = row.get("score")
+            score_text = f"{float(score_value):.0f}" if score_value not in (None, "") else "-"
+            values = [
+                str(row.get("code") or ""),
+                str(row.get("issuer") or ""),
+                trust_state,
+                str(row.get("risk_label") or ""),
+                roi_text,
+                score_text,
+                str(row.get("source") or ""),
+            ]
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column_index == 0:
+                    item.setData(Qt.UserRole, str(row.get("id") or ""))
+                asset_table.setItem(row_index, column_index, item)
+            if str(row.get("id") or "") == str(asset_picker.currentData() or ""):
+                selected_table_row = row_index
+        asset_table.resizeColumnsToContents()
+        asset_table.horizontalHeader().setStretchLastSection(True)
+        if selected_table_row >= 0:
+            asset_table.selectRow(selected_table_row)
+        elif filtered_rows:
+            asset_table.selectRow(0)
+        asset_table.blockSignals(table_blocked)
 
     current_row = self._selected_stellar_asset_row(window)
     if not str(manual_input.text() or "").strip() and current_row is not None:
@@ -10410,9 +10883,17 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
     if message:
         status.setText(message)
     elif filtered_rows:
+        imported_count = len(
+            [
+                row
+                for row in filtered_rows
+                if "Directory" in str(row.get("source") or "")
+            ]
+        )
         status.setText(
             f"Loaded {len(filtered_rows)} Stellar assets"
             + (f" ({len(rows)} total)" if len(filtered_rows) != len(rows) else "")
+            + (f" | Directory imports: {imported_count}" if imported_count else "")
             + ". Screened assets passed the app's Horizon liquidity/account heuristics; review issuers before trusting them."
         )
     else:
@@ -10427,10 +10908,23 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
         source = html.escape(str(row.get("source") or "Known"))
         trust_state = "Trusted" if row.get("trusted") else ("Needs trustline" if row.get("needs_trustline") else "Native")
         risk_label = html.escape(str(row.get("risk_label") or "Known"))
+        score_value = row.get("score")
+        roi_value = row.get("roi_pct")
+        roi_symbol = html.escape(str(row.get("roi_symbol") or "").strip())
+        metric_parts = []
+        if score_value not in (None, ""):
+            metric_parts.append(f"Score {float(score_value):.0f}")
+        if roi_value not in (None, ""):
+            roi_text = f"ROI {float(roi_value):+.2f}%"
+            if roi_symbol:
+                roi_text = f"{roi_text} via {roi_symbol}"
+            metric_parts.append(roi_text)
         asset_label = code if not issuer else f"{code}:{html.escape(issuer)}"
         quick_links.append(
             f"<li><a href=\"{html.escape(str(row.get('url') or ''))}\">{asset_label}</a> "
-            f"<span style='color:#8ea3bf;'>({source} | {risk_label} | {html.escape(trust_state)})</span></li>"
+            f"<span style='color:#8ea3bf;'>({source} | {risk_label} | {html.escape(trust_state)}"
+            + (f" | {' | '.join(metric_parts)}" if metric_parts else "")
+            + ")</span></li>"
         )
 
     broker_hint = (
@@ -10438,17 +10932,33 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
         if getattr(broker, "asset_registry", None)
         else "Explorer shortcuts available even without a live Stellar broker."
     )
+    directory_cursor = html.escape(str(directory_cursor_input.text() or "").strip()) if directory_cursor_input is not None else ""
+    next_cursor = html.escape(str(getattr(window, "_stellar_asset_next_cursor", "") or "").strip())
     selected_asset_html = "<p>No asset is selected.</p>"
     if current_row is not None:
         selected_identifier = html.escape(str(current_row.get("id") or ""))
         selected_source = html.escape(str(current_row.get("source") or "Known"))
         selected_risk = html.escape(str(current_row.get("risk_label") or "Known"))
         selected_trust = "Trusted" if current_row.get("trusted") else ("Needs trustline" if current_row.get("needs_trustline") else "Native")
-        selected_asset_html = (
-            "<div style='padding:10px; border:1px solid #24344f; border-radius:8px; background:#101a2d;'>"
-            f"<b>{selected_identifier}</b><br/>"
-            f"<span style='color:#8ea3bf;'>Source: {selected_source} | Safety: {selected_risk} | Trust: {html.escape(selected_trust)}</span>"
-            "</div>"
+        selected_score = current_row.get("score")
+        selected_roi = current_row.get("roi_pct")
+        selected_roi_symbol = html.escape(str(current_row.get("roi_symbol") or "").strip())
+        selected_metrics = []
+        if selected_score not in (None, ""):
+            selected_metrics.append(f"Score: {float(selected_score):.0f}")
+        if selected_roi not in (None, ""):
+            selected_roi_text = f"ROI 24h: {float(selected_roi):+.2f}%"
+            if selected_roi_symbol:
+                selected_roi_text = f"{selected_roi_text} via {selected_roi_symbol}"
+            selected_metrics.append(selected_roi_text)
+        selected_asset_html = "".join(
+            [
+                "<div style='padding:10px; border:1px solid #24344f; border-radius:8px; background:#101a2d;'>",
+                f"<b>{selected_identifier}</b><br/>",
+                f"<span style='color:#8ea3bf;'>Source: {selected_source} | Safety: {selected_risk} | Trust: {html.escape(selected_trust)}</span>",
+                f"<br/><span style='color:#8ea3bf;'>{' | '.join(selected_metrics)}</span>" if selected_metrics else "",
+                "</div>",
+            ]
         )
     typed_asset_html = ""
     if typed_row is not None and not bool(typed_row.get("screened")):
@@ -10456,24 +10966,33 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
             "<p style='color:#f6c177;'><b>Manual asset:</b> typed assets are unverified by the app. "
             "Confirm the issuer before opening a trustline.</p>"
         )
-    details.setHtml(
-        (
-            "<h2>Stellar Asset Explorer</h2>"
-            "<p>Filter for screened assets, review trust status, open public asset pages from <b>stellar.expert</b>, and add trustlines before trading.</p>"
-            "<p><a href=\"https://stellar.expert/explorer/public/asset\">Open Asset Directory</a></p>"
-            f"<p>{html.escape(broker_hint)} Broker: <b>{html.escape(broker_name.upper())}</b></p>"
-            "<p style='color:#8ea3bf;'>Screened means the asset passed the app's Horizon-based activity and liquidity checks. It is safer than unverified listings, but not a guarantee.</p>"
-            "<h3>Selected Asset</h3>"
-            f"{selected_asset_html}"
-            f"{typed_asset_html}"
-            "<h3>Quick Links</h3>"
-            + (
+    details_sections = [
+        "<h2>Stellar Asset Explorer</h2>",
+        "<p>Filter for screened assets, review trust status, open public asset pages from <b>stellar.expert</b>, and add trustlines before trading.</p>",
+        "<p><a href=\"https://stellar.expert/explorer/public/asset\">Open Asset Directory</a></p>",
+        f"<p>{html.escape(broker_hint)} Broker: <b>{html.escape(broker_name.upper())}</b></p>",
+    ]
+    if directory_cursor or next_cursor:
+        details_sections.append(
+            f"<p style='color:#8ea3bf;'>Directory cursor: <code>{directory_cursor or 'first page'}</code>"
+            + (f" | Next cursor: <code>{next_cursor}</code>" if next_cursor else "")
+            + "</p>"
+        )
+    details_sections.extend(
+        [
+            "<p style='color:#8ea3bf;'>Screened means the asset passed the app's Horizon-based activity and liquidity checks. It is safer than unverified listings, but not a guarantee.</p>",
+            "<h3>Selected Asset</h3>",
+            selected_asset_html,
+            typed_asset_html,
+            "<h3>Quick Links</h3>",
+            (
                 f"<ul>{''.join(quick_links)}</ul>"
                 if quick_links
                 else "<p>No broker asset registry is available yet. Use the text field above with values like <code>XLM</code> or <code>USDC:G...</code>.</p>"
-            )
-        )
+            ),
+        ]
     )
+    details.setHtml("".join(details_sections))
     if trustline_btn is not None:
         broker_ready = str(getattr(self.controller, "exchange", "") or "").strip().lower() == "stellar" and hasattr(broker, "create_trustline")
         trust_target = typed_row if typed_row is not None else current_row
@@ -10494,16 +11013,45 @@ def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=Non
             trustline_btn.setToolTip("This asset already has a trustline.")
         else:
             trustline_btn.setToolTip("Submit a Stellar trustline transaction for the selected asset.")
+    if load_directory_btn is not None:
+        can_load_directory = str(getattr(self.controller, "exchange", "") or "").strip().lower() == "stellar" and hasattr(broker, "fetch_asset_directory_page")
+        load_directory_btn.setEnabled(can_load_directory)
+        if not can_load_directory:
+            load_directory_btn.setToolTip("Connect a Stellar broker to load an asset directory page.")
+        else:
+            load_directory_btn.setToolTip("Load a page of additional Stellar assets from the directory feed.")
+    if auto_trust_btn is not None:
+        can_auto_trust = bool(
+            str(getattr(self.controller, "exchange", "") or "").strip().lower() == "stellar"
+            and hasattr(broker, "create_trustline")
+            and hasattr(broker, "estimate_asset_roi")
+            and any(
+                str(row.get("code") or "").upper() != "XLM"
+                and bool(row.get("needs_trustline"))
+                and bool(row.get("screened"))
+                for row in filtered_rows
+            )
+        )
+        auto_trust_btn.setEnabled(can_auto_trust)
+        if not can_auto_trust:
+            auto_trust_btn.setToolTip("Show at least one screened Stellar asset that still needs a trustline to auto-select by ROI.")
+        else:
+            auto_trust_btn.setToolTip("Compute recent ROI for the visible screened assets and trust the best positive candidate automatically.")
 
 
 def _hotfix_open_selected_stellar_asset(self, window=None, typed=False):
+    """Open selected or typed Stellar asset in external explorer.
+
+    window: Stellar asset explorer dock window instance.
+    typed: If True, use typed code/issuer in input box instead of row selection.
+    """
     window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
     if window is None:
         return
 
-    status = getattr(window, "_stellar_asset_status", None)
-    asset_picker = getattr(window, "_stellar_asset_picker", None)
-    manual_input = getattr(window, "_stellar_asset_input", None)
+    status = cast(Optional[QLabel], getattr(window, "_stellar_asset_status", None))
+    asset_picker = cast(Optional[QComboBox], getattr(window, "_stellar_asset_picker", None))
+    manual_input = cast(Optional[QLineEdit], getattr(window, "_stellar_asset_input", None))
 
     url = "https://stellar.expert/explorer/public/asset"
     if typed:
@@ -10524,12 +11072,13 @@ def _hotfix_open_selected_stellar_asset(self, window=None, typed=False):
 
 
 async def _hotfix_open_stellar_asset_trustline_async(self, window=None):
+    """Request a Stellar trustline for selected or typed asset from explorer."""
     window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
     if window is None:
         return
 
-    status = getattr(window, "_stellar_asset_status", None)
-    manual_input = getattr(window, "_stellar_asset_input", None)
+    status = cast(Optional[QLabel], getattr(window, "_stellar_asset_status", None))
+    manual_input = cast(Optional[QLineEdit], getattr(window, "_stellar_asset_input", None))
     broker = getattr(self.controller, "broker", None)
     if broker is None or str(getattr(self.controller, "exchange", "") or "").strip().lower() != "stellar":
         raise RuntimeError("Connect a Stellar broker before opening a trustline.")
@@ -10564,6 +11113,7 @@ async def _hotfix_open_stellar_asset_trustline_async(self, window=None):
 
 
 def _hotfix_open_stellar_asset_trustline(self, window=None):
+    """Fire-and-forget wrapper for async Stellar trustline request with error handling."""
     async def runner():
         try:
             await self._open_stellar_asset_trustline_async(window)
@@ -10613,6 +11163,8 @@ def _hotfix_open_stellar_asset_explorer_window(self):
         asset_picker = QComboBox()
         manual_input = QLineEdit()
         manual_input.setPlaceholderText("XLM or CODE:ISSUER")
+        directory_cursor_input = QLineEdit()
+        directory_cursor_input.setPlaceholderText("Directory cursor (optional)")
         safe_filter = QCheckBox("Show only screened assets")
         safe_filter.setChecked(True)
         trustline_filter = QCheckBox("Only assets that need trustlines")
@@ -10620,6 +11172,8 @@ def _hotfix_open_stellar_asset_explorer_window(self):
         open_typed_btn = QPushButton("Open Typed Asset")
         open_trustline_btn = QPushButton("Open Trustline")
         open_directory_btn = QPushButton("Open Asset Directory")
+        load_directory_btn = QPushButton("Load Directory Page")
+        auto_trust_btn = QPushButton("Trust Best ROI")
         refresh_btn = QPushButton("Refresh Asset List")
 
         open_selected_btn.clicked.connect(lambda: self._open_selected_stellar_asset(window))
@@ -10628,20 +11182,34 @@ def _hotfix_open_stellar_asset_explorer_window(self):
         open_directory_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl("https://stellar.expert/explorer/public/asset"))
         )
+        load_directory_btn.clicked.connect(lambda: self._load_stellar_asset_directory_page(window))
+        auto_trust_btn.clicked.connect(lambda: self._auto_trust_stellar_asset_by_roi(window))
         refresh_btn.clicked.connect(lambda: self._refresh_stellar_asset_explorer_window(window))
 
         controls_layout.addWidget(QLabel("Known Asset"), 0, 0)
         controls_layout.addWidget(asset_picker, 0, 1, 1, 3)
         controls_layout.addWidget(QLabel("Manual Asset"), 1, 0)
         controls_layout.addWidget(manual_input, 1, 1, 1, 3)
-        controls_layout.addWidget(safe_filter, 2, 0, 1, 2)
-        controls_layout.addWidget(trustline_filter, 2, 2, 1, 2)
-        controls_layout.addWidget(open_selected_btn, 3, 0)
-        controls_layout.addWidget(open_typed_btn, 3, 1)
-        controls_layout.addWidget(open_trustline_btn, 3, 2)
-        controls_layout.addWidget(open_directory_btn, 4, 0, 1, 2)
-        controls_layout.addWidget(refresh_btn, 4, 2, 1, 2)
+        controls_layout.addWidget(QLabel("Directory Cursor"), 2, 0)
+        controls_layout.addWidget(directory_cursor_input, 2, 1, 1, 2)
+        controls_layout.addWidget(load_directory_btn, 2, 3)
+        controls_layout.addWidget(safe_filter, 3, 0, 1, 2)
+        controls_layout.addWidget(trustline_filter, 3, 2, 1, 2)
+        controls_layout.addWidget(open_selected_btn, 4, 0)
+        controls_layout.addWidget(open_typed_btn, 4, 1)
+        controls_layout.addWidget(open_trustline_btn, 4, 2)
+        controls_layout.addWidget(auto_trust_btn, 4, 3)
+        controls_layout.addWidget(open_directory_btn, 5, 0, 1, 2)
+        controls_layout.addWidget(refresh_btn, 5, 2, 1, 2)
         layout.addWidget(controls)
+
+        asset_table = QTableWidget()
+        asset_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        asset_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        asset_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        asset_table.verticalHeader().setVisible(False)
+        asset_table.setAlternatingRowColors(True)
+        layout.addWidget(asset_table)
 
         details = QTextBrowser()
         details.setOpenExternalLinks(True)
@@ -10655,15 +11223,22 @@ def _hotfix_open_stellar_asset_explorer_window(self):
         window._stellar_asset_status = status
         window._stellar_asset_picker = asset_picker
         window._stellar_asset_input = manual_input
+        window._stellar_asset_directory_cursor = directory_cursor_input
+        window._stellar_asset_table = asset_table
         window._stellar_asset_details = details
         window._stellar_asset_filter_safe = safe_filter
         window._stellar_asset_filter_untrusted = trustline_filter
         window._stellar_asset_trustline_btn = open_trustline_btn
+        window._stellar_asset_load_directory_btn = load_directory_btn
+        window._stellar_asset_auto_trust_btn = auto_trust_btn
+        window._stellar_asset_directory_rows = []
+        window._stellar_asset_next_cursor = ""
         window._stellar_asset_rows = []
 
         asset_picker.currentIndexChanged.connect(
             lambda _idx: self._refresh_stellar_asset_explorer_window(window)
         )
+        asset_table.itemSelectionChanged.connect(lambda: self._refresh_stellar_asset_explorer_window(window))
         manual_input.textChanged.connect(lambda _text: self._refresh_stellar_asset_explorer_window(window))
         safe_filter.toggled.connect(lambda _checked: self._refresh_stellar_asset_explorer_window(window))
         trustline_filter.toggled.connect(lambda _checked: self._refresh_stellar_asset_explorer_window(window))
@@ -11897,7 +12472,7 @@ async def _hotfix_prepare_ml_research_context(self):
     }
 
 
-def _hotfix_populate_ml_experiments_table(self, table, results_frame):
+def _hotfix_populate_ml_experiments_table(_self, table, results_frame):
     if table is None:
         return
     frame = results_frame if isinstance(results_frame, pd.DataFrame) else pd.DataFrame()
@@ -11930,7 +12505,7 @@ def _hotfix_populate_ml_experiments_table(self, table, results_frame):
     table.resizeColumnsToContents()
 
 
-def _hotfix_populate_ml_walk_table(self, table, frame):
+def _hotfix_populate_ml_walk_table(_self, table, frame):
     if table is None:
         return
     frame = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
@@ -11959,7 +12534,7 @@ def _hotfix_populate_ml_walk_table(self, table, frame):
     table.resizeColumnsToContents()
 
 
-def _hotfix_build_ml_research_details(self, context, result=None, walk_summary=None):
+def _hotfix_build_ml_research_details(_self, context, result=None, walk_summary=None):
     lines = ["<h3 style='margin-top:0;'>ML Research Lab</h3>"]
     if context:
         lines.append(
@@ -12445,19 +13020,21 @@ def _hotfix_build_strategy_params(values, controller):
 def _hotfix_update_color_button(button, color):
     if button is None:
         return
+    qcolor = QColor(str(color or "#1f2937"))
+    text_color = "#11161f" if qcolor.lightnessF() >= 0.62 else "#ffffff"
     button.setText(color)
     button.setStyleSheet(
         """
         QPushButton {
             background-color: %s;
-            color: white;
+            color: %s;
             border: 1px solid #31415f;
             border-radius: 8px;
             padding: 6px 10px;
             font-weight: 700;
         }
         """
-        % color
+        % (color, text_color)
     )
 
 
@@ -12490,6 +13067,9 @@ def _hotfix_collect_settings_values(self, window=None):
         "orderbook_interval_ms": int(window._settings_orderbook_ms.value()),
         "forex_candle_price_component": window._settings_forex_candle_source.currentData(),
         "show_bid_ask_lines": window._settings_bid_ask_mode.currentData(),
+        "chart_background_color": getattr(window, "_settings_chart_background_color", self.chart_background_color),
+        "chart_grid_color": getattr(window, "_settings_chart_grid_color", self.chart_grid_color),
+        "chart_axis_color": getattr(window, "_settings_chart_axis_color", self.chart_axis_color),
         "candle_up_color": getattr(window, "_settings_up_color", self.candle_up_color),
         "candle_down_color": getattr(window, "_settings_down_color", self.candle_down_color),
         "risk_profile_name": _hotfix_detect_risk_profile_name(
@@ -12595,6 +13175,11 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
         or "bid"
     ).strip().lower()
     show_bid_ask_lines = bool(values.get("show_bid_ask_lines", getattr(self, "show_bid_ask_lines", True)))
+    chart_background_color = str(
+        values.get("chart_background_color", getattr(self, "chart_background_color", "#11161f")) or "#11161f"
+    )
+    chart_grid_color = str(values.get("chart_grid_color", getattr(self, "chart_grid_color", "#8290a0")) or "#8290a0")
+    chart_axis_color = str(values.get("chart_axis_color", getattr(self, "chart_axis_color", "#9aa4b2")) or "#9aa4b2")
     candle_up_color = values.get("candle_up_color", getattr(self, "candle_up_color", "#26a69a"))
     candle_down_color = values.get("candle_down_color", getattr(self, "candle_down_color", "#ef5350"))
     strategy_name = Strategy.normalize_strategy_name(
@@ -12697,6 +13282,9 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
             news_feed_url=values.get("news_feed_url", getattr(self.controller, "news_feed_url", "")),
         )
 
+    self.chart_background_color = chart_background_color
+    self.chart_grid_color = chart_grid_color
+    self.chart_axis_color = chart_axis_color
     self.candle_up_color = candle_up_color
     self.candle_down_color = candle_down_color
     self.show_bid_ask_lines = show_bid_ask_lines
@@ -12746,6 +13334,8 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
         toggle_action.blockSignals(blocked)
 
     for chart in self._iter_chart_widgets():
+        if hasattr(chart, "set_visual_theme"):
+            chart.set_visual_theme(**self._chart_theme_kwargs())
         chart.set_candle_colors(candle_up_color, candle_down_color)
         chart.set_bid_ask_lines_visible(show_bid_ask_lines)
 
@@ -12767,20 +13357,23 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
                 self.chart_tabs.setTabText(current_index, f"{current_chart.symbol} ({timeframe})")
         if reload_chart and hasattr(self.controller, "request_candle_data"):
             asyncio.get_event_loop().create_task(
-                self.controller.request_candle_data(
-                    symbol=current_chart.symbol,
-                    timeframe=timeframe,
+                self._request_chart_data_for_widget(
+                    current_chart,
                     limit=history_limit,
                 )
             )
-        asyncio.get_event_loop().create_task(
-            self._reload_chart_data(current_chart.symbol, timeframe)
-        )
+        else:
+            asyncio.get_event_loop().create_task(
+                self._reload_chart_data(current_chart.symbol, timeframe)
+            )
         self._request_active_orderbook()
 
     if persist:
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("windowState", self.saveState())
+        self.settings.setValue("chart/background_color", chart_background_color)
+        self.settings.setValue("chart/grid_color", chart_grid_color)
+        self.settings.setValue("chart/axis_color", chart_axis_color)
         self.settings.setValue("chart/candle_up_color", candle_up_color)
         self.settings.setValue("chart/candle_down_color", candle_down_color)
         self.settings.setValue("storage/database_mode", getattr(self.controller, "database_mode", database_mode))
@@ -12921,8 +13514,39 @@ def _hotfix_show_settings_window(self):
         forex_candle_source.addItem("Ask", "ask")
         forex_candle_source.setToolTip("MT4-style forex charts typically use bid candles.")
 
+        display_hint = QLabel("MT4-style chart colors let you tune the plot background, foreground, grid, and candles.")
+        display_hint.setWordWrap(True)
+        display_hint.setStyleSheet("color: #8fa7c6; padding-top: 2px;")
+
+        chart_background_btn = QPushButton()
+        chart_grid_btn = QPushButton()
+        chart_axis_btn = QPushButton()
         up_color_btn = QPushButton()
         down_color_btn = QPushButton()
+        chart_background_btn.clicked.connect(
+            lambda: _hotfix_pick_settings_color(
+                window,
+                "_settings_chart_background_color",
+                chart_background_btn,
+                "Select Chart Background Color",
+            )
+        )
+        chart_grid_btn.clicked.connect(
+            lambda: _hotfix_pick_settings_color(
+                window,
+                "_settings_chart_grid_color",
+                chart_grid_btn,
+                "Select Chart Grid Color",
+            )
+        )
+        chart_axis_btn.clicked.connect(
+            lambda: _hotfix_pick_settings_color(
+                window,
+                "_settings_chart_axis_color",
+                chart_axis_btn,
+                "Select Chart Foreground Color",
+            )
+        )
         up_color_btn.clicked.connect(
             lambda: _hotfix_pick_settings_color(
                 window,
@@ -12942,6 +13566,10 @@ def _hotfix_show_settings_window(self):
 
         display_form.addRow("Forex candle source", forex_candle_source)
         display_form.addRow("Bid/ask guide lines", bid_ask_mode)
+        display_form.addRow("", display_hint)
+        display_form.addRow("Chart background", chart_background_btn)
+        display_form.addRow("Chart foreground", chart_axis_btn)
+        display_form.addRow("Grid color", chart_grid_btn)
         display_form.addRow("Bullish candle color", up_color_btn)
         display_form.addRow("Bearish candle color", down_color_btn)
         tabs.addTab(display_tab, "Display")
@@ -13154,6 +13782,9 @@ def _hotfix_show_settings_window(self):
         window._settings_orderbook_ms = orderbook_ms
         window._settings_forex_candle_source = forex_candle_source
         window._settings_bid_ask_mode = bid_ask_mode
+        window._settings_chart_background_button = chart_background_btn
+        window._settings_chart_axis_button = chart_axis_btn
+        window._settings_chart_grid_button = chart_grid_btn
         window._settings_up_button = up_color_btn
         window._settings_down_button = down_color_btn
         window._settings_risk_profile = risk_profile
@@ -13225,8 +13856,23 @@ def _hotfix_show_settings_window(self):
     )
     window._settings_bid_ask_mode.setCurrentIndex(0 if getattr(self, "show_bid_ask_lines", True) else 1)
 
+    window._settings_chart_background_color = getattr(self, "chart_background_color", "#11161f")
+    window._settings_chart_grid_color = getattr(self, "chart_grid_color", "#8290a0")
+    window._settings_chart_axis_color = getattr(self, "chart_axis_color", "#9aa4b2")
     window._settings_up_color = getattr(self, "candle_up_color", "#26a69a")
     window._settings_down_color = getattr(self, "candle_down_color", "#ef5350")
+    _hotfix_update_color_button(
+        window._settings_chart_background_button,
+        window._settings_chart_background_color,
+    )
+    _hotfix_update_color_button(
+        window._settings_chart_grid_button,
+        window._settings_chart_grid_color,
+    )
+    _hotfix_update_color_button(
+        window._settings_chart_axis_button,
+        window._settings_chart_axis_color,
+    )
     _hotfix_update_color_button(window._settings_up_button, window._settings_up_color)
     _hotfix_update_color_button(window._settings_down_button, window._settings_down_color)
 
@@ -13375,6 +14021,9 @@ def _hotfix_restore_settings(self):
             getattr(self.controller, "forex_candle_price_component", "bid"),
         ),
         "show_bid_ask_lines": _hotfix_settings_bool(self.settings.value("terminal/show_bid_ask_lines", getattr(self, "show_bid_ask_lines", True)), getattr(self, "show_bid_ask_lines", True)),
+        "chart_background_color": self.settings.value("chart/background_color", getattr(self, "chart_background_color", "#11161f")),
+        "chart_grid_color": self.settings.value("chart/grid_color", getattr(self, "chart_grid_color", "#8290a0")),
+        "chart_axis_color": self.settings.value("chart/axis_color", getattr(self, "chart_axis_color", "#9aa4b2")),
         "candle_up_color": self.settings.value("chart/candle_up_color", getattr(self, "candle_up_color", "#26a69a")),
         "candle_down_color": self.settings.value("chart/candle_down_color", getattr(self, "candle_down_color", "#ef5350")),
         "risk_profile_name": self.settings.value("risk/profile_name", getattr(self.controller, "risk_profile_name", "Balanced")),
@@ -13441,6 +14090,9 @@ def _hotfix_close_event(self, event):
         "refresh_interval_ms": self.refresh_timer.interval() if hasattr(self, "refresh_timer") and self.refresh_timer is not None else 1000,
         "orderbook_interval_ms": self.orderbook_timer.interval() if hasattr(self, "orderbook_timer") and self.orderbook_timer is not None else 1500,
         "show_bid_ask_lines": getattr(self, "show_bid_ask_lines", True),
+        "chart_background_color": getattr(self, "chart_background_color", "#11161f"),
+        "chart_grid_color": getattr(self, "chart_grid_color", "#8290a0"),
+        "chart_axis_color": getattr(self, "chart_axis_color", "#9aa4b2"),
         "candle_up_color": getattr(self, "candle_up_color", "#26a69a"),
         "candle_down_color": getattr(self, "candle_down_color", "#ef5350"),
         "risk_profile_name": getattr(self.controller, "risk_profile_name", "Balanced"),
@@ -13516,12 +14168,19 @@ async def _hotfix_refresh_markets_async(self):
 
     active_symbol = self._current_chart_symbol()
     if active_symbol and hasattr(self.controller, "request_candle_data"):
-        await self.controller.request_candle_data(
-            symbol=active_symbol,
-            timeframe=getattr(self, "current_timeframe", "1h"),
-            limit=self._history_request_limit(),
-        )
-        await self._reload_chart_data(active_symbol, getattr(self, "current_timeframe", "1h"))
+        active_chart = self._current_chart_widget()
+        if isinstance(active_chart, ChartWidget) and str(getattr(active_chart, "symbol", "") or "").strip() == str(active_symbol).strip():
+            await self._request_chart_data_for_widget(
+                active_chart,
+                limit=self._history_request_limit(),
+            )
+        else:
+            await self.controller.request_candle_data(
+                symbol=active_symbol,
+                timeframe=getattr(self, "current_timeframe", "1h"),
+                limit=self._history_request_limit(),
+            )
+            await self._reload_chart_data(active_symbol, getattr(self, "current_timeframe", "1h"))
 
     if active_symbol and hasattr(self.controller, "request_orderbook"):
         await self.controller.request_orderbook(symbol=active_symbol, limit=20)
@@ -13596,12 +14255,10 @@ def _hotfix_refresh_active_chart_data(self):
             if not hasattr(self.controller, "request_candle_data"):
                 raise RuntimeError("Chart refresh is not supported by this controller")
 
-            await self.controller.request_candle_data(
-                symbol=symbol,
-                timeframe=timeframe,
+            await self._request_chart_data_for_widget(
+                chart,
                 limit=self._history_request_limit(),
             )
-            await self._reload_chart_data(symbol, timeframe)
             self.system_console.log(f"Chart data refreshed for {symbol} ({timeframe}).", "INFO")
         except Exception as e:
             self.system_console.log(f"Chart refresh failed: {e}", "ERROR")
@@ -13645,11 +14302,17 @@ Terminal._stellar_expert_asset_url = _hotfix_stellar_expert_asset_url
 Terminal._stellar_asset_identifier = _hotfix_stellar_asset_identifier
 Terminal._parse_stellar_asset_entry = _hotfix_parse_stellar_asset_entry
 Terminal._selected_stellar_asset_row = _hotfix_selected_stellar_asset_row
+Terminal._is_stellar_asset_blocked = _hotfix_is_stellar_asset_blocked
 Terminal._stellar_asset_explorer_rows = _hotfix_stellar_asset_explorer_rows
+Terminal._merge_stellar_asset_rows = _hotfix_merge_stellar_asset_rows
 Terminal._refresh_stellar_asset_explorer_window = _hotfix_refresh_stellar_asset_explorer_window
 Terminal._open_selected_stellar_asset = _hotfix_open_selected_stellar_asset
+Terminal._load_stellar_asset_directory_page_async = _hotfix_load_stellar_asset_directory_page_async
+Terminal._load_stellar_asset_directory_page = _hotfix_load_stellar_asset_directory_page
 Terminal._open_stellar_asset_trustline_async = _hotfix_open_stellar_asset_trustline_async
 Terminal._open_stellar_asset_trustline = _hotfix_open_stellar_asset_trustline
+Terminal._auto_trust_stellar_asset_by_roi_async = _hotfix_auto_trust_stellar_asset_by_roi_async
+Terminal._auto_trust_stellar_asset_by_roi = _hotfix_auto_trust_stellar_asset_by_roi
 Terminal._open_stellar_asset_explorer_window = _hotfix_open_stellar_asset_explorer_window
 Terminal._open_ml_research_window = _hotfix_show_ml_research_window
 Terminal._show_ml_research_window = _hotfix_show_ml_research_window

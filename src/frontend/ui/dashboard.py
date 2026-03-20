@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from broker.coinbase_credentials import coinbase_validation_error, normalize_coinbase_credentials
 from config.config import AppConfig, BrokerConfig, RiskConfig, SystemConfig
 from config.credential_manager import CredentialManager
 from broker.market_venues import MARKET_VENUE_CHOICES, supported_market_venues_for_profile
@@ -77,7 +78,7 @@ BROKER_COPY = {
     "paper": "A zero-risk rehearsal mode that still feels like the real desk experience.",
 }
 
-
+"""The dashboard is the launchpad for trading sessions, where customers configure broker access and review session readiness before"""
 class Dashboard(QWidget):
     login_requested = Signal(object)
     LAST_PROFILE_SETTING = "dashboard/last_profile"
@@ -343,24 +344,32 @@ class Dashboard(QWidget):
         )
 
     def _tr(self, key, **kwargs):
+        """Translate a key using controller translation support.
+
+        Falls back to returning the key directly when no translation method exists.
+        """
         if hasattr(self.controller, "tr"):
             return self.controller.tr(key, **kwargs)
         return key
 
     def _language_box_current_code(self):
+        """Return currently selected language code from language dropdown."""
         if not hasattr(self, "language_box") or self.language_box is None:
             return None
         return self.language_box.currentData()
 
     def _selected_customer_region(self):
+        """Return selected customer region for crypto routing."""
         if not hasattr(self, "customer_region_box") or self.customer_region_box is None:
             return "us"
         return str(self.customer_region_box.currentData() or "us").strip().lower()
 
     def _crypto_exchange_options_for_region(self):
+        """Return available crypto exchange options based on selected region."""
         return list(CRYPTO_EXCHANGE_MAP.get(self._selected_customer_region(), CRYPTO_EXCHANGE_MAP["us"]))
 
     def _credential_field_schema(self):
+        """Generate labels/placeholders and input modes for broker credential fields."""
         broker_type = self.exchange_type_box.currentText() if hasattr(self, "exchange_type_box") else ""
         exchange = self.exchange_box.currentText() if hasattr(self, "exchange_box") else ""
 
@@ -387,10 +396,10 @@ class Dashboard(QWidget):
         elif exchange == "coinbase":
             schema.update(
                 {
-                    "api_label": "API Key Name",
-                    "api_placeholder": "organizations/.../apiKeys/...",
+                    "api_label": "Key Name or ID",
+                    "api_placeholder": "organizations/.../apiKeys/... or key id",
                     "secret_label": "Private Key",
-                    "secret_placeholder": "Paste the Coinbase privateKey value",
+                    "secret_placeholder": "Private key PEM or full Coinbase key JSON",
                     "secret_echo": QLineEdit.Password,
                 }
             )
@@ -408,6 +417,7 @@ class Dashboard(QWidget):
         return schema
 
     def _apply_credential_field_schema(self):
+        """Apply credential field schema to the current UI elements."""
         schema = self._credential_field_schema()
 
         api_block = self._field_blocks.get("api")
@@ -427,6 +437,7 @@ class Dashboard(QWidget):
         self.account_id_input.setPlaceholderText(schema["account_placeholder"])
 
     def _resolved_broker_inputs(self):
+        """Return normalized broker credential values from UI inputs."""
         broker_type = self.exchange_type_box.currentText()
         exchange = self.exchange_box.currentText()
         api_value = self.api_input.text().strip()
@@ -442,6 +453,19 @@ class Dashboard(QWidget):
                 "account_id": api_value or None,
             }
 
+        if exchange == "coinbase":
+            normalized_api, normalized_secret, normalized_password = normalize_coinbase_credentials(
+                api_value,
+                secret_value,
+                password_value,
+            )
+            return {
+                "api_key": normalized_api,
+                "secret": normalized_secret,
+                "password": normalized_password,
+                "account_id": account_value or None,
+            }
+
         return {
             "api_key": api_value or None,
             "secret": secret_value or None,
@@ -451,6 +475,7 @@ class Dashboard(QWidget):
 
     @staticmethod
     def _strip_wrapped_quotes(value):
+        """Remove surrounding single or double quotes from a string value."""
         text = str(value or "").strip()
         if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
             return text[1:-1].strip()
@@ -458,53 +483,11 @@ class Dashboard(QWidget):
 
     @classmethod
     def _coinbase_validation_error(cls, api_key, secret, password=None):
-        normalized_api = cls._strip_wrapped_quotes(api_key)
-        normalized_secret = cls._strip_wrapped_quotes(secret)
-        normalized_password = cls._strip_wrapped_quotes(password)
-
-        if normalized_password:
-            return (
-                "Coinbase Advanced Trade in Sopotek does not use the passphrase field. "
-                "Use the API key name in the first field and the privateKey PEM in the second field."
-            )
-
-        if not normalized_api.startswith("organizations/"):
-            return (
-                "Coinbase API Key Name must start with organizations/.../apiKeys/.... "
-                "This app expects a Coinbase Advanced Trade API key name, not a wallet address or another broker key."
-            )
-
-        if "\\n" in normalized_secret:
-            normalized_secret = normalized_secret.replace("\\r\\n", "\n").replace("\\n", "\n")
-
-        if "-----BEGIN" not in normalized_secret or "-----END" not in normalized_secret:
-            return (
-                "Coinbase Private Key is malformed. Paste the full privateKey value including the "
-                "BEGIN/END lines."
-            )
-
-        header_match = re.search(r"-----BEGIN [A-Z ]+-----", normalized_secret)
-        footer_match = re.search(r"-----END [A-Z ]+-----", normalized_secret)
-        if header_match is None or footer_match is None or header_match.start() >= footer_match.start():
-            return (
-                "Coinbase Private Key is malformed. Paste the full privateKey PEM exactly as Coinbase issued it."
-            )
-
-        body = normalized_secret[header_match.end():footer_match.start()]
-        body_lines = [line.strip() for line in body.splitlines() if line.strip()]
-        if not body_lines:
-            return (
-                "Coinbase Private Key is missing its encoded body. Paste the full privateKey PEM from Coinbase Advanced Trade."
-            )
-
-        if len("".join(body_lines)) < 32:
-            return (
-                "Coinbase Private Key looks truncated. Paste the complete privateKey PEM, not a shortened snippet."
-            )
-
-        return None
+        """Validate Coinbase credentials and return an error message if invalid."""
+        return coinbase_validation_error(api_key, secret, password=password)
 
     def _build_ui(self):
+        """Build the dashboard UI structure and layout."""
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -531,6 +514,7 @@ class Dashboard(QWidget):
         root_layout.addWidget(scroll)
 
     def _build_hero_panel(self):
+        """Build and return the dashboard hero status overview panel."""
         panel = QFrame()
         panel.setObjectName("heroPanel")
         panel_layout = QVBoxLayout(panel)
@@ -660,6 +644,7 @@ class Dashboard(QWidget):
         return panel
 
     def _build_connect_panel(self):
+        """Build and return the broker connection configuration panel."""
         panel = QFrame()
         panel.setObjectName("connectPanel")
         panel_layout = QVBoxLayout(panel)
@@ -864,6 +849,7 @@ class Dashboard(QWidget):
         return panel
 
     def _create_stat_pill(self, label, value, value_attr=None):
+        """Create a reusable stat pill widget for status display."""
         pill = QFrame()
         pill.setObjectName("statPill")
         pill.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -883,6 +869,7 @@ class Dashboard(QWidget):
         return pill
 
     def _create_market_strip(self, title, body):
+        """Create a reusable market status strip with title and description."""
         card = QFrame()
         card.setObjectName("marketStrip")
         layout = QVBoxLayout(card)
@@ -903,6 +890,7 @@ class Dashboard(QWidget):
         return card
 
     def _create_checklist_row(self, title, state):
+        """Create a checklist row widget for launch status indicators."""
         row = QFrame()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -922,12 +910,14 @@ class Dashboard(QWidget):
         return row
 
     def _create_preset_button(self, text):
+        """Create a styled preset button."""
         button = QPushButton(text)
         button.setObjectName("presetButton")
         button.setCursor(Qt.PointingHandCursor)
         return button
 
     def _wrap_field(self, label_text, widget, block_name=None):
+        """Wrap a field input widget with a label and optional field block registration."""
         block = QFrame()
         block_layout = QVBoxLayout(block)
         block_layout.setContentsMargins(0, 0, 0, 0)
@@ -946,6 +936,7 @@ class Dashboard(QWidget):
         return block
 
     def _connect_signals(self):
+        """Wire UI events to their corresponding handlers."""
         self.exchange_type_box.currentTextChanged.connect(self._update_exchange_list)
         self.exchange_type_box.currentTextChanged.connect(self._update_optional_fields)
         self.exchange_type_box.currentTextChanged.connect(self._update_broker_hint)
@@ -978,12 +969,14 @@ class Dashboard(QWidget):
             self.controller.license_changed.connect(lambda _status: self._update_session_preview())
 
     def _on_language_changed(self, _index):
+        """Handle language selection changes from the UI."""
         language_code = self._language_box_current_code()
         if not language_code or not hasattr(self.controller, "set_language"):
             return
         self.controller.set_language(language_code)
 
     def apply_language(self):
+        """Apply translations to all UI text elements based on selected language."""
         previous_language = getattr(self, "_applied_language_code", None)
         self.setWindowTitle(self._tr("dashboard.window_title"))
 
@@ -1092,6 +1085,7 @@ class Dashboard(QWidget):
         self._applied_language_code = getattr(self.controller, "language_code", "en")
 
     def _load_accounts_index(self):
+        """Load available saved broker profiles into the profile combo box."""
         current = self.saved_account_box.currentText()
         accounts = CredentialManager.list_accounts()
         self.saved_account_box.blockSignals(True)
@@ -1104,6 +1098,7 @@ class Dashboard(QWidget):
         self._update_session_preview()
 
     def _load_selected_account(self, account_name):
+        """Load a saved account settings profile and populate form fields."""
         if not account_name or self.saved_account_box.currentData() == "__recent__":
             return
 
@@ -1147,6 +1142,7 @@ class Dashboard(QWidget):
         self._update_session_preview()
 
     def _load_last_account(self):
+        """Load last used profile at startup if available."""
         accounts = CredentialManager.list_accounts()
         if not accounts:
             return
@@ -1156,6 +1152,7 @@ class Dashboard(QWidget):
         self._load_selected_account(target)
 
     def _apply_preset(self, preset_name):
+        """Apply a preset configuration for quick session setup."""
         if preset_name == "paper":
             self.exchange_type_box.setCurrentText("paper")
             self._update_exchange_list("paper")
@@ -1193,6 +1190,7 @@ class Dashboard(QWidget):
         self._update_session_preview()
 
     def _handle_customer_region_changed(self):
+        """Handle changes to customer region and update dependent fields."""
         region = self._selected_customer_region()
         self.settings.setValue("dashboard/customer_region", region)
         if self.exchange_type_box.currentText() == "crypto":
@@ -1202,6 +1200,7 @@ class Dashboard(QWidget):
         self._update_session_preview()
 
     def _update_exchange_list(self, exchange_type):
+        """Update the exchange dropdown list when broker type changes."""
         current = self.exchange_box.currentText()
         if exchange_type == "crypto":
             exchanges = self._crypto_exchange_options_for_region()
@@ -1218,6 +1217,7 @@ class Dashboard(QWidget):
         self.exchange_box.blockSignals(False)
 
     def _refresh_market_type_options(self):
+        """Refresh the market-type options to only include supported venues for the selected profile."""
         current = str(self.market_type_box.currentData() or "auto").strip().lower() or "auto"
         supported = supported_market_venues_for_profile(
             self.exchange_type_box.currentText(),
@@ -1236,6 +1236,7 @@ class Dashboard(QWidget):
         self.market_type_box.blockSignals(False)
 
     def _update_optional_fields(self):
+        """Show/hide broker-specific form fields based on selected exchange type."""
         broker_type = self.exchange_type_box.currentText()
         exchange = self.exchange_box.currentText()
         is_paper = broker_type == "paper" or exchange == "paper"
@@ -1271,6 +1272,7 @@ class Dashboard(QWidget):
         self._apply_credential_field_schema()
 
     def _update_broker_hint(self):
+        """Update broker hint text describing selected broker/mode constraints."""
         broker_type = self.exchange_type_box.currentText()
         exchange = self.exchange_box.currentText()
         mode = self.mode_box.currentText()
@@ -1303,12 +1305,14 @@ class Dashboard(QWidget):
         self.broker_hint.setText(copy)
 
     def _set_check_state(self, row, text, is_ready):
+        """Set the state label and style of a checklist row."""
         row.state_label.setText(text)
         row.state_label.setObjectName("checkStateGood" if is_ready else "checkStateWarn")
         row.state_label.style().unpolish(row.state_label)
         row.state_label.style().polish(row.state_label)
 
     def _update_session_preview(self):
+        """Update the dashboard session preview and readiness indicators."""
         broker_type = self.exchange_type_box.currentText()
         exchange = self.exchange_box.currentText() or "paper"
         customer_region = self._selected_customer_region()
@@ -1412,6 +1416,7 @@ class Dashboard(QWidget):
         self.summary_meta.setText(f"Risk {risk_value}%  |  Strategy Auto per symbol  |  {profile_copy}")
 
     def _confirm_live_launch(self, exchange, account_id):
+        """Request explicit user confirmation before allowing live trading launch."""
         confirmation = QMessageBox.question(
             self,
             "Confirm Live Trading",
@@ -1436,6 +1441,7 @@ class Dashboard(QWidget):
         return bool(ok and str(typed).strip().upper() == "LIVE")
 
     def _sync_shell_layout(self):
+        """Switch layout orientation based on window width for responsive behavior."""
         is_compact = self.width() < 1220
         desired_mode = QBoxLayout.TopToBottom if is_compact else QBoxLayout.LeftToRight
         if desired_mode == self._current_layout_mode:
@@ -1452,10 +1458,12 @@ class Dashboard(QWidget):
             self.connect_panel.setMaximumWidth(520)
 
     def resizeEvent(self, event):
+        """Handle resize events to reflow layout responsively."""
         super().resizeEvent(event)
         self._sync_shell_layout()
 
     def _on_connect(self):
+        """Validate input and emit login request when connecting the session."""
         exchange = self.exchange_box.currentText()
         broker_type = self.exchange_type_box.currentText()
         customer_region = self._selected_customer_region()
@@ -1579,6 +1587,7 @@ class Dashboard(QWidget):
         self.login_requested.emit(config)
 
     def show_loading(self):
+        """Show loading status while connecting to the trading terminal."""
         self.connect_button.setEnabled(False)
         self.connect_button.setText("Connecting Session...")
         self.spinner.setVisible(True)
@@ -1586,6 +1595,7 @@ class Dashboard(QWidget):
             self.spinner_movie.start()
 
     def hide_loading(self):
+        """Hide loading status and restore the connect button state."""
         self.spinner.setVisible(False)
         if self.spinner_movie is not None:
             self.spinner_movie.stop()

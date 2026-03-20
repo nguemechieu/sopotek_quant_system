@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.ui.app_controller import AppController, _bounded_window_extent
 from event_bus.event_types import EventType
+from market_data.ticker_buffer import TickerBuffer
+from market_data.ticker_stream import TickerStream
 
 
 class _SignalRecorder:
@@ -90,6 +92,36 @@ def test_request_candle_data_warns_when_history_is_short():
     assert controller.candle_signal.calls
 
 
+def test_request_candle_data_sanitizes_malformed_ohlcv_rows_before_emitting():
+    candles = [
+        [1710000000000, 100.0, 95.0, 105.0, 101.0, -4.0],
+        [1710000000000, 101.0, 106.0, 99.5, 103.0, 12.0],
+        [1710003600000, "bad", 108.0, 100.0, 104.0, 6.0],
+        [1710007200000, 104.0, 109.0, 102.0, 108.0, None],
+        [None, 105.0, 110.0, 103.0, 109.0, 8.0],
+        [1710010800000, 0.0, 111.0, 104.0, 110.0, 9.0],
+    ]
+    controller, logs = _make_controller(candles)
+
+    df = asyncio.run(controller.request_candle_data("BTC/USDT", timeframe="1h", limit=6))
+
+    assert df is not None
+    assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+    assert len(df.index) == 2
+    assert float(df.iloc[0]["open"]) == 101.0
+    assert float(df.iloc[0]["high"]) == 106.0
+    assert float(df.iloc[0]["low"]) == 99.5
+    assert float(df.iloc[0]["close"]) == 103.0
+    assert float(df.iloc[0]["volume"]) == 12.0
+    assert float(df.iloc[1]["open"]) == 104.0
+    assert float(df.iloc[1]["high"]) == 109.0
+    assert float(df.iloc[1]["low"]) == 102.0
+    assert float(df.iloc[1]["close"]) == 108.0
+    assert float(df.iloc[1]["volume"]) == 0.0
+    assert any("Sanitized OHLCV data for BTC/USDT (1h) from runtime" in message for message, _level in logs)
+    assert controller.candle_buffer.calls[-1][1]["close"] == 108.0
+
+
 def test_request_candle_data_warns_when_no_history_is_available():
     controller, logs = _make_controller([])
 
@@ -103,6 +135,75 @@ def test_request_candle_data_warns_when_no_history_is_available():
         )
     ]
     assert controller.candle_signal.calls == []
+
+
+def test_safe_fetch_ticker_uses_cached_stellar_snapshot_after_dns_failure():
+    logs = []
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.market_data_messages.cached_ticker")
+    controller.terminal = SimpleNamespace(
+        system_console=SimpleNamespace(log=lambda message, level="INFO": logs.append((message, level)))
+    )
+    controller.ticker_stream = TickerStream()
+    controller.ticker_buffer = TickerBuffer(max_length=20)
+    controller._market_data_warning_timestamps = {}
+
+    async def failing_fetch(symbol):
+        raise OSError("Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]")
+
+    cached = {
+        "symbol": "BTC/XLM",
+        "last": 0.125,
+        "bid": 0.124,
+        "ask": 0.126,
+        "timestamp": "2026-03-19T12:00:00+00:00",
+    }
+    controller.broker = SimpleNamespace(exchange_name="stellar", fetch_ticker=failing_fetch)
+    controller.ticker_stream.update("BTC/XLM", cached)
+    controller.ticker_buffer.update("BTC/XLM", cached)
+
+    result = asyncio.run(controller._safe_fetch_ticker("BTC/XLM"))
+
+    assert result == cached
+    assert logs == [
+        (
+            "Stellar Horizon is temporarily unreachable for BTC/XLM. Using cached ticker data while the connection recovers.",
+            "WARN",
+        )
+    ]
+
+
+def test_safe_fetch_ticker_rate_limits_hotspot_warning_without_cache():
+    logs = []
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.market_data_messages.hotspot_warning")
+    controller.terminal = SimpleNamespace(
+        system_console=SimpleNamespace(log=lambda message, level="INFO": logs.append((message, level)))
+    )
+    controller.ticker_stream = TickerStream()
+    controller.ticker_buffer = TickerBuffer(max_length=20)
+    controller._market_data_warning_timestamps = {}
+
+    async def failing_fetch(symbol):
+        raise OSError("Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]")
+
+    controller.broker = SimpleNamespace(exchange_name="stellar", fetch_ticker=failing_fetch)
+
+    async def scenario():
+        first = await controller._safe_fetch_ticker("BTC/XLM")
+        second = await controller._safe_fetch_ticker("BTC/XLM")
+        return first, second
+
+    first, second = asyncio.run(scenario())
+
+    assert first is None
+    assert second is None
+    assert logs == [
+        (
+            "Stellar Horizon is temporarily unreachable (Cannot connect to host horizon.stellar.org:443 ssl:default [getaddrinfo failed]). The app will keep retrying automatically.",
+            "WARN",
+        )
+    ]
 
 
 def test_extract_balance_equity_value_reads_nested_nav():
@@ -146,6 +247,20 @@ def test_update_balance_records_equity_and_emits_signal():
     assert recorded_equity == [10250.5]
     assert controller.equity_signal.calls == [(10250.5,)]
     assert behavior_guard_updates == [{"raw": {"NAV": "10250.50"}}]
+
+
+def test_extract_balance_equity_ignores_single_non_cash_asset_quantity():
+    controller = AppController.__new__(AppController)
+
+    equity = controller._extract_balance_equity_value(
+        {
+            "total": {
+                "BTC": 0.25,
+            }
+        }
+    )
+
+    assert equity is None
 
 def test_performance_history_persists_timestamp_payload():
     controller = AppController.__new__(AppController)

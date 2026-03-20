@@ -1,7 +1,9 @@
 import html
+import re
 from datetime import datetime, timezone
 
 import numpy as np
+import pandas as pd
 import pyqtgraph as pg
 from PySide6 import QtCore
 from PySide6.QtWidgets import (
@@ -107,6 +109,9 @@ class ChartWidget(QWidget):
         candle_up_color: str = "#26a69a",
         candle_down_color: str = "#ef5350",
         show_volume_panel: bool = False,
+        chart_background: str = "#11161f",
+        grid_color: str = "#8290a0",
+        axis_color: str = "#9aa4b2",
     ):
         super().__init__()
         self.controller = controller
@@ -134,10 +139,10 @@ class ChartWidget(QWidget):
         self._auto_fit_pending = True
         self._last_view_context = None
         self.default_visible_bars = 96
-        self.chart_background = "#11161f"
+        self.chart_background = str(chart_background or "#11161f")
         self.panel_background = "#171d29"
-        self.grid_color = (130, 142, 160, 34)
-        self.axis_color = "#9aa4b2"
+        self.grid_color = str(grid_color or "#8290a0")
+        self.axis_color = str(axis_color or "#9aa4b2")
         self.muted_text = "#728198"
         self._last_price_change = None
         self._news_events = []
@@ -150,6 +155,18 @@ class ChartWidget(QWidget):
         self._timeframe_picker_updating = False
         self.chart_overlays_visible = True
         self.compact_view_mode = False
+        self._chart_status_mode = "idle"
+        self._chart_status_message = ""
+        self._chart_status_detail = ""
+        self._chart_status_requested_bars = None
+        self._chart_loading_frames = ["|", "/", "-", "\\"]
+        self._chart_loading_index = 0
+        self._chart_status_clear_timer = QtCore.QTimer(self)
+        self._chart_status_clear_timer.setSingleShot(True)
+        self._chart_status_clear_timer.timeout.connect(self._clear_status_notice)
+        self._chart_loading_timer = QtCore.QTimer(self)
+        self._chart_loading_timer.setInterval(150)
+        self._chart_loading_timer.timeout.connect(self._tick_loading_status)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -516,6 +533,16 @@ class ChartWidget(QWidget):
         self.watermark_item.setZValue(-10)
         self.price_plot.addItem(self.watermark_item)
 
+        self.status_overlay_item = TextItem(
+            html="",
+            anchor=(0.5, 0.5),
+            border=mkPen((76, 92, 115, 220)),
+            fill=pg.mkBrush(10, 15, 23, 236),
+        )
+        self.status_overlay_item.setZValue(16)
+        self.status_overlay_item.setVisible(False)
+        self.price_plot.addItem(self.status_overlay_item)
+
         self.overlay_header_item = TextItem(
             html="",
             anchor=(0.0, 0.0),
@@ -544,6 +571,7 @@ class ChartWidget(QWidget):
         self.price_plot.addItem(self.overlay_ohlcv_item)
 
         self.price_plot.getPlotItem().vb.sigRangeChanged.connect(self._update_watermark_position)
+        self.price_plot.getPlotItem().vb.sigRangeChanged.connect(self._update_status_overlay_position)
         self.price_plot.getPlotItem().vb.sigRangeChanged.connect(self._update_overlay_positions)
 
         self.proxy = SignalProxy(self.price_plot.scene().sigMouseMoved, rateLimit=60, slot=self._mouse_moved)
@@ -558,9 +586,10 @@ class ChartWidget(QWidget):
         self._refresh_market_panels()
         self._update_watermark_html()
         self._update_chart_overlays()
+        self._apply_visual_theme()
 
     def _style_plot(self, plot, left_label=None, right_label=None, bottom_label=None, show_bottom=False):
-        plot.setBackground(self.chart_background)
+        plot.setBackground(self._normalized_color(self.chart_background, "#11161f"))
         plot.showGrid(x=True, y=True, alpha=0.16)
         plot.setMenuEnabled(False)
         plot.hideButtons()
@@ -578,11 +607,12 @@ class ChartWidget(QWidget):
         axis_names = ("left", "right", "bottom", "top")
         for axis_name in axis_names:
             axis = item.getAxis(axis_name)
-            axis.setTextPen(pg.mkColor(self.axis_color))
-            axis.setPen(pg.mkPen(self.axis_color, width=1))
+            axis.setTextPen(pg.mkColor(self._normalized_color(self.axis_color, "#9aa4b2")))
+            axis.setPen(pg.mkPen(self._normalized_color(self.axis_color, "#9aa4b2"), width=1))
+            axis.setTickPen(pg.mkPen(self._normalized_color(self.grid_color, "#8290a0"), width=1))
             axis.setStyle(tickLength=-6, autoExpandTextSpace=False)
             try:
-                axis.setGrid(48)
+                axis.setGrid(54)
             except Exception:
                 pass
 
@@ -590,7 +620,80 @@ class ChartWidget(QWidget):
         if right_label:
             plot.showAxis("right")
 
-        item.vb.setBackgroundColor(pg.mkColor(self.chart_background))
+        item.vb.setBackgroundColor(pg.mkColor(self._normalized_color(self.chart_background, "#11161f")))
+
+    def _normalized_color(self, value, fallback: str) -> str:
+        try:
+            return pg.mkColor(value).name()
+        except Exception:
+            return pg.mkColor(fallback).name()
+
+    def _rgba_css(self, value, alpha: int, fallback: str) -> str:
+        color = pg.mkColor(self._normalized_color(value, fallback))
+        return f"rgba({color.red()},{color.green()},{color.blue()},{max(0, min(255, int(alpha)))})"
+
+    def _update_market_tab_theme(self):
+        chart_background = self._normalized_color(self.chart_background, "#11161f")
+        panel_background = self._normalized_color(self.panel_background, "#171d29")
+        tab_text = self._rgba_css(self.axis_color, 188, "#9aa4b2")
+        active_text = self._normalized_color(self.axis_color, "#f6f8fb")
+        border = self._rgba_css(self.grid_color, 120, "#8290a0")
+        selected_tab = self._rgba_css(self.axis_color, 24, "#9aa4b2")
+        self.market_tabs.setStyleSheet(
+            f"""
+            QTabWidget::pane {{
+                border: 1px solid {border};
+                background-color: {chart_background};
+                border-radius: 14px;
+            }}
+            QTabBar::tab {{
+                background-color: {panel_background};
+                color: {tab_text};
+                padding: 8px 16px;
+                margin-right: 4px;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {selected_tab};
+                color: {active_text};
+            }}
+            """
+        )
+
+    def _update_chart_guide_theme(self):
+        guide_color = pg.mkColor(self._normalized_color(self.axis_color, "#9aa4b2"))
+        guide_color.setAlpha(90)
+        guide_pen = mkPen(guide_color, width=1, style=QtCore.Qt.PenStyle.DashLine)
+        self.v_line.setPen(guide_pen)
+        self.h_line.setPen(guide_pen)
+
+    def _apply_visual_theme(self):
+        self._update_market_tab_theme()
+        self._style_plot(self.price_plot, right_label="Price", show_bottom=not self.show_volume_panel)
+        self._style_plot(self.volume_plot, left_label="Volume", bottom_label="Date / Time (UTC)", show_bottom=self.show_volume_panel)
+        self._style_plot(self.depth_plot, right_label="Price", bottom_label="Depth")
+        self._style_plot(self.heatmap_plot, right_label="Price")
+        self._update_chart_guide_theme()
+        self._update_chart_bottom_axis_visibility()
+        self._update_watermark_html()
+        self._update_chart_overlays()
+        self._refresh_status_overlay()
+
+    def set_visual_theme(
+        self,
+        chart_background: str | None = None,
+        grid_color: str | None = None,
+        axis_color: str | None = None,
+    ):
+        if chart_background is not None:
+            self.chart_background = str(chart_background or "#11161f")
+        if grid_color is not None:
+            self.grid_color = str(grid_color or "#8290a0")
+        if axis_color is not None:
+            self.axis_color = str(axis_color or "#9aa4b2")
+        self._apply_visual_theme()
+        self.refresh_context_display()
 
     def _chart_pane_widgets(self):
         panes = []
@@ -685,6 +788,124 @@ class ChartWidget(QWidget):
             f"<div style='color: {title_color}; font-size: 9px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase;'>{html.escape(title)}</div>"
             f"{line_html}"
             "</div>"
+        )
+
+    def _chart_status_html(self) -> str:
+        if not self._chart_status_message:
+            return ""
+
+        mode = str(self._chart_status_mode or "idle").strip().lower()
+        title = "Chart Status"
+        title_color = "#8fb2db"
+        body_color = "#ecf2f8"
+        lines = [self._chart_status_message]
+
+        if mode == "loading":
+            frame = self._chart_loading_frames[self._chart_loading_index % len(self._chart_loading_frames)]
+            title = f"Loading {frame}"
+            title_color = "#8fb2db"
+            body_color = "#ecf2f8"
+        elif mode == "error":
+            title = "No Data"
+            title_color = "#ef9a9a"
+            body_color = "#fce8e6"
+        elif mode == "notice":
+            title = "History"
+            title_color = "#f2d08b"
+            body_color = "#f6f1dd"
+
+        if self._chart_status_detail:
+            lines.append(self._chart_status_detail)
+
+        return self._overlay_card_html(title, lines, title_color, body_color)
+
+    def _refresh_status_overlay(self):
+        html_value = self._chart_status_html()
+        if not html_value:
+            self.status_overlay_item.setHtml("")
+            self.status_overlay_item.setVisible(False)
+            return
+        self.status_overlay_item.setHtml(html_value)
+        self.status_overlay_item.setVisible(True)
+        self._update_status_overlay_position()
+
+    def _set_chart_status(self, mode: str, message: str = "", detail: str = "", auto_clear_ms: int = 0):
+        self._chart_status_mode = str(mode or "idle").strip().lower()
+        self._chart_status_message = str(message or "").strip()
+        self._chart_status_detail = str(detail or "").strip()
+
+        if self._chart_status_clear_timer.isActive():
+            self._chart_status_clear_timer.stop()
+
+        if self._chart_status_mode == "loading" and self._chart_status_message:
+            if not self._chart_loading_timer.isActive():
+                self._chart_loading_timer.start()
+        else:
+            self._chart_loading_timer.stop()
+
+        self._refresh_status_overlay()
+
+        if auto_clear_ms > 0 and self._chart_status_mode not in {"idle", "loading", "error"} and self._chart_status_message:
+            self._chart_status_clear_timer.start(int(auto_clear_ms))
+
+    def _tick_loading_status(self):
+        if self._chart_status_mode != "loading":
+            self._chart_loading_timer.stop()
+            return
+        self._chart_loading_index = (self._chart_loading_index + 1) % max(len(self._chart_loading_frames), 1)
+        self._refresh_status_overlay()
+
+    def _clear_status_notice(self):
+        if self._chart_status_mode == "notice":
+            self.clear_data_status()
+
+    def clear_data_status(self):
+        self._chart_status_requested_bars = None
+        self._set_chart_status("idle")
+
+    def set_loading_state(self, loading: bool, requested_bars: int | None = None):
+        if not loading:
+            if self._chart_status_mode == "loading":
+                self.clear_data_status()
+            return
+
+        self._chart_status_requested_bars = int(requested_bars) if requested_bars not in (None, "") else None
+        if self._chart_status_requested_bars is not None and self._chart_status_requested_bars > 0:
+            detail = (
+                f"Requesting up to {self._chart_status_requested_bars} candles for "
+                f"{self.symbol.upper()} ({self.timeframe})."
+            )
+        else:
+            detail = f"Requesting candles for {self.symbol.upper()} ({self.timeframe})."
+        self._chart_loading_index = 0
+        self._set_chart_status("loading", "Loading market data...", detail)
+
+    def set_no_data_state(self, detail: str = ""):
+        status_detail = str(detail or "").strip()
+        if not status_detail:
+            status_detail = f"No candle history was returned for {self.symbol.upper()} ({self.timeframe})."
+        self._set_chart_status("error", "No data received.", status_detail)
+
+    def set_history_notice(self, received_bars: int, requested_bars: int):
+        try:
+            received = max(0, int(received_bars))
+        except Exception:
+            received = 0
+        try:
+            requested = max(0, int(requested_bars))
+        except Exception:
+            requested = 0
+
+        if received <= 0 or requested <= 0 or received >= requested:
+            if self._chart_status_mode == "notice":
+                self.clear_data_status()
+            return
+
+        self._set_chart_status(
+            "notice",
+            f"Loaded {received:,} / {requested:,} candles.",
+            "Chart is using the broker history that is currently available.",
+            auto_clear_ms=4800,
         )
 
     def _update_chart_overlays(self):
@@ -786,6 +1007,19 @@ class ChartWidget(QWidget):
                 continue
             item.setPos(x_min + x_pad, current_y)
             current_y -= self._overlay_height_in_data(item, y_units_per_pixel) + stack_gap
+
+    def _update_status_overlay_position(self, *_args):
+        if not self.status_overlay_item.isVisible():
+            return
+        try:
+            x_range, y_range = self.price_plot.viewRange()
+        except Exception:
+            return
+        if len(x_range) < 2 or len(y_range) < 2:
+            return
+        center_x = (float(x_range[0]) + float(x_range[1])) / 2.0
+        center_y = (float(y_range[0]) + float(y_range[1])) / 2.0
+        self.status_overlay_item.setPos(center_x, center_y)
 
     def _time_axis_step(self):
         if self._last_x is None or len(self._last_x) < 2:
@@ -1427,12 +1661,15 @@ class ChartWidget(QWidget):
     def _update_watermark_html(self):
         base, quote = self._symbol_parts()
         description = f"{base} / {quote}" if quote else base
+        symbol_color = self._rgba_css(self.axis_color, 22, "#f6f8fb")
+        timeframe_color = self._rgba_css(self.axis_color, 32, "#9aa4b2")
+        detail_color = self._rgba_css(self.grid_color, 40, "#728198")
         self.watermark_item.setHtml(
             (
                 "<div style='text-align:center;'>"
-                f"<div style='color: rgba(246,248,251,0.08); font-size: 40px; font-weight: 800; letter-spacing: 1px;'>{self.symbol.upper()}</div>"
-                f"<div style='color: rgba(154,164,178,0.10); font-size: 22px; font-weight: 700;'>{self.timeframe.upper()}</div>"
-                f"<div style='color: rgba(114,129,152,0.12); font-size: 11px; text-transform: uppercase;'>{description}</div>"
+                f"<div style='color: {symbol_color}; font-size: 40px; font-weight: 800; letter-spacing: 1px;'>{self.symbol.upper()}</div>"
+                f"<div style='color: {timeframe_color}; font-size: 22px; font-weight: 700;'>{self.timeframe.upper()}</div>"
+                f"<div style='color: {detail_color}; font-size: 11px; text-transform: uppercase;'>{description}</div>"
                 "</div>"
             )
         )
@@ -1442,6 +1679,7 @@ class ChartWidget(QWidget):
         self._refresh_market_panels()
         self._update_watermark_html()
         self._update_watermark_position()
+        self._update_status_overlay_position()
         self._update_chart_overlays()
 
     def _refresh_market_panels(self):
@@ -1586,6 +1824,7 @@ class ChartWidget(QWidget):
             center_x = (float(x_range[0]) + float(x_range[1])) / 2.0
             center_y = (float(y_range[0]) + float(y_range[1])) / 2.0
             self.watermark_item.setPos(center_x, center_y)
+            self._update_status_overlay_position()
             self._watermark_initialized = True
         except Exception:
             return
@@ -1735,17 +1974,86 @@ class ChartWidget(QWidget):
         except Exception:
             return np.arange(len(df), dtype=float)
 
-    def _infer_candle_width(self, x):
+    def _timeframe_seconds(self, timeframe=None):
+        normalized = str(timeframe or self.timeframe or "").strip().lower()
+        mapping = {
+            "tick": 1.0,
+            "1m": 60.0,
+            "5m": 300.0,
+            "15m": 900.0,
+            "30m": 1800.0,
+            "1h": 3600.0,
+            "4h": 14400.0,
+            "1d": 86400.0,
+            "1w": 604800.0,
+        }
+        if normalized in mapping:
+            return mapping[normalized]
+        match = re.fullmatch(r"(\d+)([mhdw])", normalized)
+        if not match:
+            return None
+        size = float(match.group(1))
+        unit = match.group(2)
+        multiplier = {"m": 60.0, "h": 3600.0, "d": 86400.0, "w": 604800.0}.get(unit)
+        if multiplier is None:
+            return None
+        return size * multiplier
+
+    def _normalize_chart_time_axis(self, x_values):
+        x = np.asarray(x_values, dtype=float)
         if len(x) < 2:
+            return x
+
+        finite_mask = np.isfinite(x)
+        if not finite_mask.all():
+            x = x[finite_mask]
+        if len(x) < 2:
+            return x
+
+        expected_step = self._timeframe_seconds()
+        if expected_step is None or expected_step <= 0:
+            return x
+
+        diffs = np.diff(x)
+        diffs = diffs[np.isfinite(diffs)]
+        diffs = diffs[diffs > 0]
+        if len(diffs) == 0:
+            return x
+
+        median_step = float(np.median(diffs))
+        max_gap = float(np.max(diffs))
+        min_gap = float(np.min(diffs))
+        irregular_spacing = (
+            median_step > (expected_step * 1.5)
+            or median_step < (expected_step * 0.5)
+            or max_gap > (expected_step * 4.0)
+            or (max_gap / max(min_gap, 1e-9)) > 6.0
+        )
+        if not irregular_spacing:
+            return x
+
+        anchor = float(x[-1])
+        start = anchor - (expected_step * (len(x) - 1))
+        return np.linspace(start, anchor, num=len(x), dtype=float)
+
+    def _infer_candle_width(self, x):
+        expected_step = self._timeframe_seconds()
+        if len(x) < 2:
+            if expected_step is not None and expected_step > 0:
+                return max(expected_step * 0.64, 1e-6)
             return 60.0
 
         diffs = np.diff(x)
         diffs = diffs[np.isfinite(diffs)]
         diffs = diffs[np.abs(diffs) > 0]
         if len(diffs) == 0:
+            if expected_step is not None and expected_step > 0:
+                return max(expected_step * 0.64, 1e-6)
             return 60.0
 
         step = float(np.median(np.abs(diffs)))
+        if expected_step is not None and expected_step > 0:
+            step = min(step, float(expected_step))
         return max(min(step * 0.64, step * 0.8), 1e-6)
 
     def _resolve_signal_x(self, index):
@@ -2733,20 +3041,57 @@ class ChartWidget(QWidget):
         if not required.issubset(set(df.columns)):
             return
 
-        x = self._extract_time_axis(df)
+        frame = df.copy()
+        if "timestamp" in frame.columns:
+            timestamp_series = frame["timestamp"]
+            numeric_timestamps = pd.to_numeric(timestamp_series, errors="coerce")
+            if int(numeric_timestamps.notna().sum()) >= max(1, len(frame.index) // 2):
+                normalized_seconds = numeric_timestamps.where(
+                    numeric_timestamps.abs() <= 1e11,
+                    numeric_timestamps / 1000.0,
+                )
+                frame["timestamp"] = pd.to_datetime(normalized_seconds, unit="s", errors="coerce", utc=True)
+            else:
+                frame["timestamp"] = pd.to_datetime(timestamp_series, errors="coerce", utc=True)
+        for column in ["open", "high", "low", "close", "volume"]:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame.replace([np.inf, -np.inf], np.nan, inplace=True)
+        drop_columns = ["open", "high", "low", "close"]
+        if "timestamp" in frame.columns:
+            drop_columns.append("timestamp")
+        frame.dropna(subset=drop_columns, inplace=True)
+        if frame.empty:
+            return
+
+        frame = frame[(frame["open"] > 0) & (frame["high"] > 0) & (frame["low"] > 0) & (frame["close"] > 0)]
+        if frame.empty:
+            return
+
+        price_bounds = frame[["open", "high", "low", "close"]]
+        frame["high"] = price_bounds.max(axis=1)
+        frame["low"] = price_bounds.min(axis=1)
+        frame["volume"] = frame["volume"].fillna(0.0).clip(lower=0.0)
+        if "timestamp" in frame.columns:
+            frame.sort_values("timestamp", inplace=True)
+            frame.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+            frame.reset_index(drop=True, inplace=True)
+
+        x = self._normalize_chart_time_axis(self._extract_time_axis(frame))
         width = self._infer_candle_width(x)
         self._sync_view_context()
-        self._last_df = df.copy()
+        self._last_df = frame.copy()
         self._last_x = np.array(x, dtype=float)
         self._last_candle_stats = self._build_candle_stats(self._last_df, self._last_x)
+        if self._chart_status_mode == "loading":
+            self.clear_data_status()
 
         candles = np.column_stack(
             [
                 x,
-                df["open"].astype(float).to_numpy(),
-                df["close"].astype(float).to_numpy(),
-                df["low"].astype(float).to_numpy(),
-                df["high"].astype(float).to_numpy(),
+                frame["open"].astype(float).to_numpy(),
+                frame["close"].astype(float).to_numpy(),
+                frame["low"].astype(float).to_numpy(),
+                frame["high"].astype(float).to_numpy(),
             ]
         )
 
@@ -2755,12 +3100,12 @@ class ChartWidget(QWidget):
         self.candle_item.setData(candles)
         self.ema_curve.setData([], [])
 
-        volume = df["volume"].astype(float).to_numpy()
-        colors = [self.candle_up_color if c >= o else self.candle_down_color for o, c in zip(df["open"], df["close"])]
+        volume = frame["volume"].astype(float).to_numpy()
+        colors = [self.candle_up_color if c >= o else self.candle_down_color for o, c in zip(frame["open"], frame["close"])]
         brushes = [pg.mkBrush(c) for c in colors]
         self.volume_bars.setOpts(x=x, height=volume, width=width, brushes=brushes)
 
-        self._update_indicators(df, x, width)
+        self._update_indicators(frame, x, width)
 
         if self._should_fit_chart_view(self._last_x):
             self._fit_chart_view(self._last_candle_stats, width)
@@ -2769,8 +3114,8 @@ class ChartWidget(QWidget):
         self._render_news_events()
 
         try:
-            last_close = float(df["close"].iloc[-1])
-            prev_close = float(df["close"].iloc[-2]) if len(df) > 1 else last_close
+            last_close = float(frame["close"].iloc[-1])
+            prev_close = float(frame["close"].iloc[-2]) if len(frame) > 1 else last_close
             line_color = self.candle_up_color if last_close >= prev_close else self.candle_down_color
             self.last_line.setPen(mkPen(line_color, width=1.15))
             self.last_line.label.fill = pg.mkBrush(pg.mkColor(line_color))
