@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -78,3 +80,43 @@ def test_strategy_optimizer_skips_invalid_fast_slow_pairs():
     )
 
     assert set(results["ema_slow"].astype(int).tolist()) == {30}
+
+
+def test_strategy_optimizer_resolves_parallel_worker_count():
+    optimizer = StrategyOptimizer(strategy=TunableStrategy(), initial_balance=1000)
+
+    assert optimizer._resolve_max_workers(0) == 1
+    assert optimizer._resolve_max_workers(1) == 1
+    assert optimizer._resolve_max_workers(4, max_workers=2) == 2
+    assert optimizer._resolve_max_workers(4, max_workers=10) == 4
+
+
+def test_strategy_optimizer_parallel_run_keeps_results_and_tracking():
+    class ParallelProbeStrategy(TunableStrategy):
+        thread_ids = set()
+        lock = threading.Lock()
+
+        def generate_signal(self, candles, strategy_name=None):
+            with self.lock:
+                self.thread_ids.add(threading.get_ident())
+            time.sleep(0.01)
+            return super().generate_signal(candles, strategy_name=strategy_name)
+
+    ParallelProbeStrategy.thread_ids.clear()
+    optimizer = StrategyOptimizer(strategy=ParallelProbeStrategy(), initial_balance=1000)
+    results = optimizer.optimize(
+        make_frame(),
+        symbol="BTC/USDT",
+        param_grid={
+            "rsi_period": [10],
+            "ema_fast": [10, 15],
+            "ema_slow": [30, 35],
+            "atr_period": [14],
+        },
+        max_workers=2,
+        experiment_name="parallel-check",
+    )
+
+    assert not results.empty
+    assert len(optimizer.experiment_tracker.records) == 4
+    assert len(ParallelProbeStrategy.thread_ids) >= 2

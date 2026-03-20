@@ -19,6 +19,7 @@ The terminal is a dock-heavy operator workspace. Evidence in `src/frontend/ui/te
 
 - market watch and watchlist prioritization
 - charts
+- order book with a `Recent Trades` tab
 - trade log
 - open orders
 - positions
@@ -35,6 +36,7 @@ The terminal is a dock-heavy operator workspace. Evidence in `src/frontend/ui/te
 
 ### Chart Actions
 - open symbols in tabs
+- switch between `Candlestick`, `Depth Chart`, and `Market Info` inside each chart page
 - detach current tab
 - reattach detached charts
 - tile detached chart windows
@@ -57,6 +59,11 @@ The terminal is a dock-heavy operator workspace. Evidence in `src/frontend/ui/te
 - session badge and license badge
 - kill switch button
 
+### Market Data Views
+- `Order Book` dock shows the ladder plus a Coinbase-style `Recent Trades` tab for the active symbol
+- `Depth Chart` tab shows cumulative bid and ask depth from the live order book
+- `Market Info` tab summarizes spread, best bid/ask, visible range, visible volume, and depth bias for the current chart symbol
+
 ## Manual Order Flow
 
 The manual trade ticket supports:
@@ -70,7 +77,7 @@ The manual trade ticket supports:
 ## Trade Monitoring
 
 ### Trade Log
-Shows normalized trade records, keeps columns aligned, and marks source such as `manual`, `bot`, or `chatgpt`.
+Shows normalized trade records, keeps columns aligned, and marks source such as `manual`, `bot`, or `Sopotek Pilot`.
 
 ### Open Orders
 Shows exchange-side open orders, mark prices, fill state, status, and estimated PnL where possible.
@@ -89,7 +96,7 @@ Shows symbol-level signal context and scanning output rather than only raw appen
 ### Recommendations
 Shows why a symbol is recommended for attention or trade consideration.
 
-### Market ChatGPT
+### Sopotek Pilot
 Supports app-aware questions, screenshots, voice interaction, Telegram management, and controlled trade/order commands.
 
 Typical prompts include:

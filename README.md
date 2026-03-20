@@ -17,12 +17,12 @@ Sopotek Trading AI is a desktop trading workstation built by Sopotek Corporation
 
 - Dashboard for broker selection, mode, credentials, strategy choice, licensing, and launch control
 - Terminal workspace with chart tabs, detachable charts, tiled/cascaded layouts, and layout restore
-- MT4/MT5-style chart handling including candlesticks, indicators, orderbook heatmap, Fibonacci, and chart trading interactions
+- MT4/MT5-style chart handling including candlesticks, indicators, orderbook heatmap, depth chart, market info, Fibonacci, and chart trading interactions
 - Manual trade ticket with broker-aware formatting, suggested SL/TP, and chart-linked entry, stop, and take-profit levels
-- AI trading controls, AI signal monitor, recommendations, Market ChatGPT, news overlays, and Telegram command handling
-- Open orders, positions, trade log, closed journal, trade review, position analysis, performance analytics, and system health tools
+- AI trading controls, AI signal monitor, recommendations, Sopotek Pilot, news overlays, and Telegram command handling
+- Open orders, positions, trade log, closed journal, trade review, position analysis, performance analytics, system health tools, and Coinbase-style recent market trades in the Order Book dock
 - Risk and behavior protection including risk profiles, behavior guard, kill switch, drawdown-aware restrictions, and session health status
-- Backtesting, strategy optimization, journaling, trade checklist workflow, and local persistence through SQLite and QSettings
+- Backtesting, strategy optimization, journaling, trade checklist workflow, and local persistence through SQLite and QSettings, including date-range selection, animated in-progress equity graphing, and user-selected report export folders
 
 ## Key Workflows
 
@@ -30,23 +30,31 @@ Sopotek Trading AI is a desktop trading workstation built by Sopotek Corporation
 1. Launch from the dashboard.
 2. Select broker, mode, and strategy.
 3. Open one or more charts.
-4. Use the `Trade Checklist` and `Trade Recommendations` windows before placing risk.
-5. Place a manual order or enable AI trading only after confirming status, balances, and data quality.
-6. Monitor `Trade Log`, `Open Orders`, `Positions`, `System Status`, `Behavior Guard`, and `Performance`.
-7. Review trades later in `Closed Journal`, `Trade Review`, and `Journal Review`.
+4. Use the chart tabs to review `Candlestick`, `Depth Chart`, and `Market Info`, then inspect `Order Book` and `Recent Trades`.
+5. Use the `Trade Checklist` and `Trade Recommendations` windows before placing risk.
+6. Place a manual order or enable AI trading only after confirming status, balances, and data quality.
+7. Monitor `Trade Log`, `Open Orders`, `Positions`, `System Status`, `Behavior Guard`, and `Performance`.
+8. Review trades later in `Closed Journal`, `Trade Review`, and `Journal Review`.
 
 ### Remote Workflow
 - Receive Telegram notifications for trade activity.
 - Use Telegram commands and keyboard shortcuts for status, balances, screenshots, chart captures, recommendations, and position analysis.
-- Ask Market ChatGPT questions inside the app or through Telegram.
+- Ask Sopotek Pilot questions inside the app or through Telegram.
 
 ### Suggested First Validation Path
 1. Launch in `paper`, `practice`, or `sandbox`.
-2. Open one symbol and confirm candles, ticker, and orderbook behavior.
+2. Open one symbol and confirm candles, ticker, order book, recent trades, and depth behavior.
 3. Place one very small manual order.
 4. Confirm `Trade Log`, `Open Orders`, `Positions`, and `Closed Journal` update in a consistent way.
-5. Test `Market ChatGPT`, Telegram, and screenshots only after the broker session is healthy.
+5. Test `Sopotek Pilot`, Telegram, and screenshots only after the broker session is healthy.
 6. Enable AI trading only after manual execution and review workflows are behaving as expected.
+
+### Backtesting Workflow
+1. Open `Strategy Tester` from the terminal workspace.
+2. Pick the symbol, strategy, timeframe, and the exact `Start Date` / `End Date` you want to test.
+3. Start the run and watch the graph tab for the animated live-progress curve while the backtest is executing.
+4. Review `Results`, `Graph`, `Report`, and `Journal` after completion.
+5. Use `Generate Report` to choose the destination folder for the exported PDF and spreadsheet files.
 
 ## Architecture At A Glance
 
@@ -80,6 +88,15 @@ flowchart LR
 - `stocks` through `AlpacaBroker`
 - `paper` through `PaperBroker`
 - `stellar` through `StellarBroker`
+
+## Recent Reliability Updates
+
+- Broker-backed balances, equity, and positions are favored over local fallbacks when the connected adapter can provide them directly.
+- Coinbase runtime now treats venue selection more explicitly, keeping `spot` and `derivative` paths distinct while leaving stocks and options disabled there until a dedicated adapter path is added.
+- Coinbase history loading now backfills candle requests in chunks, skips unsupported stale symbols safely, and avoids fabricating duplicate synthetic candles when real history is missing.
+- Oanda history loading now retries empty latest-candle responses with an explicit recent time window and can fall back to midpoint candles when bid or ask candles come back empty.
+- Charts now show a visible loading state, a `No data received.` background message for empty responses, and shorter-history notices when the broker returns fewer candles than requested.
+- Malformed OHLCV rows are sanitized before they are cached or drawn so bad timestamps, duplicate rows, `NaN`, `inf`, and invalid high or low bounds do not corrupt the chart.
 
 ## Recommended Local Setup
 
@@ -115,6 +132,7 @@ python src\main.py
 - [UI Workspace Guide](docs/ui-workspace.md)
 - [Integrations](docs/integrations.md)
 - [Internal API Notes](docs/api.md)
+- [Refactor Roadmap](docs/refactor-roadmap.md)
 - [Testing And Operations](docs/testing-and-operations.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development Notes](docs/development.md)
@@ -127,9 +145,9 @@ The bot can handle:
 - status, balances, positions, and open orders
 - screenshots and chart screenshots
 - recommendation and performance summaries
-- plain-text ChatGPT conversations in addition to slash commands
+- plain-text Sopotek Pilot conversations in addition to slash commands
 
-### Market ChatGPT
+### Sopotek Pilot
 The in-app assistant can:
 
 - answer questions about balances, positions, performance, journal state, and recommendations

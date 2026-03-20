@@ -1,80 +1,41 @@
-version: "3.9"
-
 services:
-
-  worker:
+  app:
     build:
       context: .
-    container_name: sopotek_worker
-    depends_on:
-      - redis
-      - db
+      dockerfile: Dockerfile
+    image: sopotek-trading-ai:latest
+    container_name: sopotek_trading_app
+    working_dir: /app
     environment:
-      DATABASE_URL: mysql+pymysql://sopotek:sopotek_secure_pass@db:3306/trading
-      REDIS_URL: redis://redis:6379
-    command: celery -A sopotek_trading.celery_app worker --loglevel=info
-
-  # ----------------------------
-  # MySQL Database
-  # ----------------------------
-  db:
-    image: mysql:8.3
-    container_name: sopotek_mysql
-    restart: always
-    environment:
-      MYSQL_ROOT_PASSWORD: root_secure_pass
-      MYSQL_DATABASE: trading
-      MYSQL_USER: sopotek
-      MYSQL_PASSWORD: sopotek_secure_pass
+      PYTHONPATH: /app/src
+      SOPOTEK_DATABASE_URL: sqlite:////app/data/sopotek_trading.db
+      QT_X11_NO_MITSHM: "1"
+      DISPLAY: ${DISPLAY:-}
     volumes:
-      - mysql_data:/var/lib/mysql
-    ports:
-      - "3306:3306"
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./output:/app/output
+      - ./.env:/app/.env:ro
+    stdin_open: true
+    tty: true
+    command: python src/main.py
 
-  # ----------------------------
-  # Redis Cache
-  # ----------------------------
-  redis:
-    image: redis:7
-    container_name: sopotek_redis
-    restart: always
-    ports:
-      - "6379:6379"
-
-  # ----------------------------
-  # Trading Engine
-  # ----------------------------
-  engine:
+  app-headless:
     build:
-      context: ../../../..
+      context: .
       dockerfile: Dockerfile
-    container_name: sopotek_engine
-    restart: always
-    depends_on:
-      - db
-      - redis
+    image: sopotek-trading-ai:latest
+    container_name: sopotek_trading_app_headless
+    working_dir: /app
     environment:
-      DATABASE_URL: mysql+pymysql://sopotek:sopotek_secure_pass@db:3306/trading
-      REDIS_URL: redis://redis:6379
-    command: python -m sopotek_trading.engine
-
-  # ----------------------------
-  # API Layer
-  # ----------------------------
-  api:
-    build:
-      context: ../../../..
-      dockerfile: Dockerfile
-    container_name: sopotek_api
-    restart: always
-    depends_on:
-      - db
-      - engine
-    environment:
-      DATABASE_URL: mysql+pymysql://sopotek:sopotek_secure_pass@db:3306/trading
-    command: python -m sopotek_trading.api
-    ports:
-      - "8000:8000"
-
-volumes:
-  mysql_data:
+      PYTHONPATH: /app/src
+      SOPOTEK_DATABASE_URL: sqlite:////app/data/sopotek_trading.db
+      QT_QPA_PLATFORM: offscreen
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./output:/app/output
+      - ./.env:/app/.env:ro
+    profiles:
+      - headless
+    command: python src/main.py

@@ -10,9 +10,16 @@ class StrategyRegistry:
         self._register_builtin_strategies()
 
     def _register_builtin_strategies(self):
-        for name in ["Trend Following", "Mean Reversion", "Breakout", "AI Hybrid"]:
+        for definition in Strategy.STRATEGY_CATALOG:
+            name = str(definition.get("name") or "").strip()
+            if not name:
+                continue
             if name not in self.strategies:
-                self.register(name, Strategy(strategy_name=name))
+                strategy = Strategy(strategy_name=name)
+                params = dict(definition.get("params") or {})
+                if params:
+                    strategy.apply_parameters(**params)
+                self.register(name, strategy)
 
     # ===============================
     # REGISTER
@@ -28,7 +35,8 @@ class StrategyRegistry:
     # ===============================
 
     def get(self, name):
-        return self.strategies.get(name)
+        normalized = Strategy.normalize_strategy_name(name)
+        return self.strategies.get(normalized)
 
     # ===============================
     # LIST STRATEGIES
@@ -53,8 +61,9 @@ class StrategyRegistry:
         return target
 
     def _resolve_strategy(self, strategy_name=None):
-        if strategy_name and strategy_name in self.strategies:
-            selected = self.strategies[strategy_name]
+        normalized = Strategy.normalize_strategy_name(strategy_name) if strategy_name else None
+        if normalized and normalized in self.strategies:
+            selected = self.strategies[normalized]
             if selected is not self:
                 return selected
 

@@ -14,6 +14,8 @@ Requires-Dist: python-dotenv>=1.0
 Requires-Dist: joblib>=1.3
 Requires-Dist: arch>=6.3
 Requires-Dist: ta>=0.11
+Requires-Dist: SpeechRecognition>=3.10
+Requires-Dist: sounddevice>=0.4
 Provides-Extra: ui
 Requires-Dist: Pillow; extra == "ui"
 Requires-Dist: qrcode; extra == "ui"

@@ -30,6 +30,11 @@ class ReportGenerator:
                 "win_rate": 0.0,
                 "avg_profit": 0.0,
                 "sharpe_ratio": 0.0,
+                "sortino_ratio": 0.0,
+                "profit_factor": 0.0,
+                "expectancy": 0.0,
+                "commission_paid": 0.0,
+                "slippage_cost": 0.0,
                 "max_drawdown": 0.0,
                 "final_equity": float(equity_curve[-1]) if equity_curve else 0.0,
             }
@@ -41,6 +46,15 @@ class ReportGenerator:
         win_rate = float((pnl > 0).mean()) if not pnl.empty else 0.0
         avg_profit = float(pnl.mean()) if not pnl.empty else 0.0
         sharpe = float(pnl.mean() / pnl.std()) if len(pnl) > 1 and float(pnl.std()) != 0 else 0.0
+        downside = pnl[pnl < 0]
+        downside_std = float(downside.std()) if len(downside) > 1 else 0.0
+        sortino = float(pnl.mean() / downside_std) if downside_std not in (0.0, float("nan")) else 0.0
+        gross_profit = float(pnl[pnl > 0].sum()) if not pnl.empty else 0.0
+        gross_loss = abs(float(pnl[pnl < 0].sum())) if not pnl.empty else 0.0
+        profit_factor = float(gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
+        expectancy = avg_profit
+        commission_paid = float(pd.to_numeric(trades_df.get("commission", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum())
+        slippage_cost = float(pd.to_numeric(trades_df.get("slippage_cost", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum())
 
         if not equity_curve and "equity" in trades_df:
             equity_curve = pd.to_numeric(trades_df["equity"], errors="coerce").dropna().tolist()
@@ -55,6 +69,11 @@ class ReportGenerator:
             "win_rate": win_rate,
             "avg_profit": avg_profit,
             "sharpe_ratio": sharpe,
+            "sortino_ratio": sortino,
+            "profit_factor": profit_factor,
+            "expectancy": expectancy,
+            "commission_paid": commission_paid,
+            "slippage_cost": slippage_cost,
             "max_drawdown": max_drawdown,
             "final_equity": final_equity,
         }

@@ -1,9 +1,12 @@
 import copy
 import itertools
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
 from backtesting.backtest_engine import BacktestEngine
+from backtesting.experiment_tracker import ExperimentTracker
 from backtesting.report_generator import ReportGenerator
 from backtesting.simulator import Simulator
 
@@ -12,6 +15,7 @@ class StrategyOptimizer:
     def __init__(self, strategy, initial_balance=10000):
         self.strategy = strategy
         self.initial_balance = float(initial_balance)
+        self.experiment_tracker = ExperimentTracker()
 
     def _resolve_strategy(self, strategy_name=None):
         if hasattr(self.strategy, "_resolve_strategy"):
@@ -63,28 +67,119 @@ class StrategyOptimizer:
                 continue
             yield params
 
-    def optimize(self, data, symbol="BACKTEST", strategy_name=None, param_grid=None):
+    def _resolve_max_workers(self, job_count, max_workers=None):
+        total_jobs = max(0, int(job_count or 0))
+        if total_jobs <= 1:
+            return 1
+        if max_workers is not None:
+            return max(1, min(int(max_workers), total_jobs))
+        cpu_total = max(1, int(os.cpu_count() or 1))
+        return max(1, min(total_jobs, cpu_total))
+
+    def _evaluate_param_row(
+        self,
+        params,
+        data,
+        symbol,
+        strategy_name,
+        timeframe,
+        commission_bps,
+        slippage_bps,
+    ):
+        strategy_instance = self._clone_strategy(self._resolve_strategy(strategy_name))
+        for key, value in params.items():
+            setattr(strategy_instance, key, value)
+
+        engine = BacktestEngine(
+            strategy=strategy_instance,
+            simulator=Simulator(
+                initial_balance=self.initial_balance,
+                commission_bps=commission_bps,
+                slippage_bps=slippage_bps,
+            ),
+            metadata={
+                "strategy_name": strategy_name or getattr(strategy_instance, "strategy_name", None),
+                "symbol": symbol,
+                "timeframe": timeframe,
+            },
+        )
+        trades = engine.run(data, symbol=symbol, strategy_name=strategy_name)
+        report = ReportGenerator(
+            trades=trades,
+            equity_history=engine.equity_curve,
+        ).generate()
+
+        row = dict(params)
+        row.update(report)
+        row["symbol"] = symbol
+        row["strategy_name"] = strategy_name or getattr(strategy_instance, "strategy_name", None)
+        row["timeframe"] = timeframe
+        row["commission_bps"] = float(commission_bps or 0.0)
+        row["slippage_bps"] = float(slippage_bps or 0.0)
+        return row, report, strategy_instance
+
+    def optimize(
+        self,
+        data,
+        symbol="BACKTEST",
+        strategy_name=None,
+        param_grid=None,
+        timeframe="1h",
+        commission_bps=0.0,
+        slippage_bps=0.0,
+        experiment_name=None,
+        max_workers=None,
+    ):
         grid = param_grid or self.default_param_grid(strategy_name)
+        param_rows = list(self._param_rows(grid))
+        worker_count = self._resolve_max_workers(len(param_rows), max_workers=max_workers)
         rows = []
 
-        for params in self._param_rows(grid):
-            strategy_instance = self._clone_strategy(self._resolve_strategy(strategy_name))
-            for key, value in params.items():
-                setattr(strategy_instance, key, value)
+        evaluations = []
+        if worker_count <= 1:
+            for job_index, params in enumerate(param_rows):
+                row, report, strategy_instance = self._evaluate_param_row(
+                    params,
+                    data,
+                    symbol,
+                    strategy_name,
+                    timeframe,
+                    commission_bps,
+                    slippage_bps,
+                )
+                evaluations.append((job_index, params, row, report, strategy_instance))
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="optimizer") as executor:
+                future_map = {
+                    executor.submit(
+                        self._evaluate_param_row,
+                        params,
+                        data,
+                        symbol,
+                        strategy_name,
+                        timeframe,
+                        commission_bps,
+                        slippage_bps,
+                    ): (job_index, params)
+                    for job_index, params in enumerate(param_rows)
+                }
+                for future in as_completed(future_map):
+                    job_index, params = future_map[future]
+                    row, report, strategy_instance = future.result()
+                    evaluations.append((job_index, params, row, report, strategy_instance))
 
-            engine = BacktestEngine(
-                strategy=strategy_instance,
-                simulator=Simulator(initial_balance=self.initial_balance),
-            )
-            trades = engine.run(data, symbol=symbol)
-            report = ReportGenerator(
-                trades=trades,
-                equity_history=engine.equity_curve,
-            ).generate()
-
-            row = dict(params)
-            row.update(report)
+        for _, params, row, report, strategy_instance in sorted(evaluations, key=lambda item: item[0]):
             rows.append(row)
+            self.experiment_tracker.add_record(
+                name=experiment_name or f"optimizer-{strategy_name or getattr(strategy_instance, 'strategy_name', 'strategy')}",
+                strategy_name=strategy_name or getattr(strategy_instance, "strategy_name", None),
+                symbol=symbol,
+                timeframe=timeframe,
+                parameters=params,
+                dataset_metadata={"rows": len(data) if hasattr(data, "__len__") else 0},
+                metrics=report,
+                notes="optimizer_run",
+            )
 
         if not rows:
             return pd.DataFrame()

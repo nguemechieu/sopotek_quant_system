@@ -18,9 +18,12 @@ dependencies = [
     "websockets>=12",
     "SQLAlchemy>=2.0",
     "python-dotenv>=1.0",
+    "cryptography>=42.0",
     "joblib>=1.3",
     "arch>=6.3",
-    "ta>=0.11"
+    "ta>=0.11",
+    "SpeechRecognition>=3.10",
+    "sounddevice>=0.4"
 ]
 
 [project.optional-dependencies]

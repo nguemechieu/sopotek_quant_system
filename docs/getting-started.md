@@ -8,7 +8,7 @@
 - Broker credentials are optional for paper mode but required for real broker sessions.
 
 ## Install
-
+-
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\activate
@@ -64,7 +64,7 @@ After the broker session is stable, this is the safest order:
 
 1. Open `Settings -> Integrations` and use `Test OpenAI`.
 2. Enable Telegram and send `/help`.
-3. Open `Market ChatGPT` and ask for a short account summary.
+3. Open `Sopotek Pilot` and ask for a short account summary.
 4. Try one screenshot flow from the toolbar or Telegram.
 5. Only then test AI trading toggles or remote trading commands.
 
@@ -75,7 +75,7 @@ After the broker session is stable, this is the safest order:
 - `Tools -> System Health`
 - `Tools -> Closed Journal`
 - `Tools -> Position Analysis`
-- `Tools -> Market ChatGPT`
+- `Tools -> Sopotek Pilot`
 
 ## Core Commands
 

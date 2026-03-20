@@ -33,6 +33,9 @@ class PaperBroker(BaseBroker, ABC):
         self.market_data_exchanges = self._resolve_market_data_exchanges()
         self.market_data_brokers = {}
 
+    def supported_market_venues(self):
+        return ["auto", "spot", "derivative", "option", "otc"]
+
     # ======================================================
     # CONNECT
     # ======================================================
@@ -361,6 +364,7 @@ class PaperBroker(BaseBroker, ABC):
             amount: float,
             type: str = "market",
             price: Optional[float] = None,
+            stop_price: Optional[float] = None,
             params: Optional[dict] = None,
             stop_loss: Optional[float] = None,
             take_profit: Optional[float] = None,
@@ -369,6 +373,33 @@ class PaperBroker(BaseBroker, ABC):
 
         if amount <= 0:
             raise ValueError("Invalid order amount")
+
+        normalized_type = str(type or "market").strip().lower() or "market"
+        if normalized_type == "stop_limit":
+            trigger_price = stop_price
+            if trigger_price is None and isinstance(params, dict):
+                trigger_price = params.get("stop_price")
+            if price is None or float(price) <= 0:
+                raise ValueError("stop_limit orders require a positive limit price")
+            if trigger_price is None or float(trigger_price) <= 0:
+                raise ValueError("stop_limit orders require a positive stop_price trigger")
+            self.order_id += 1
+            order_id = f"paper_{self.order_id}"
+            order = {
+                "id": order_id,
+                "symbol": symbol,
+                "side": side,
+                "type": normalized_type,
+                "price": float(price),
+                "stop_price": float(trigger_price),
+                "amount": amount,
+                "status": "open",
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "params": dict(params or {}),
+            }
+            self.orders[order_id] = order
+            return order
 
         if price is None:
             price = await self.fetch_price(symbol)
@@ -428,10 +459,11 @@ class PaperBroker(BaseBroker, ABC):
             "id": order_id,
             "symbol": symbol,
             "side": side,
-            "type": type,
+            "type": normalized_type,
             "price": price,
             "amount": amount,
             "status": "filled",
+            "stop_price": stop_price,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
         }

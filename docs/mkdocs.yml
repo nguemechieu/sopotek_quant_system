@@ -25,6 +25,7 @@ nav:
   - Home: docs/index.md
   - Getting Started: getting-started.md
   - Full App Guide: FULL_APP_GUIDE.md
+  - Quant Fund Roadmap: quant-fund-roadmap.md
   - Architecture: architecture.md
   - Strategies: strategy_docs.md
   - Brokers And Modes: brokers-and-modes.md

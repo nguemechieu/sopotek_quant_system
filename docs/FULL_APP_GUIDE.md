@@ -9,7 +9,7 @@ Sopotek Trading AI is a desktop workstation that combines:
 - chart-linked manual trading and AI-assisted execution
 - risk, behavior, and session-safety tooling
 - backtesting, optimization, journaling, and trade review
-- Telegram notifications, command control, screenshots, and ChatGPT-assisted workflows
+- Telegram notifications, command control, screenshots, and Sopotek Pilot-assisted workflows
 
 ## Main Screens
 
@@ -31,13 +31,14 @@ The terminal is the main operator workspace. Evidence in `src/frontend/ui/termin
 
 - market watch and watchlist-scoped symbol selection
 - chart tabs plus detached/floating chart windows
+- order book ladder plus a `Recent Trades` market feed for the active symbol
 - timeframe controls and utility buttons
 - screenshot capture and chart-focused actions
 - manual trade ticket and chart trading interactions
 - trade log, open orders, positions, closed journal, and trade review
 - AI signal monitor, recommendations, strategy scorecard, and behavior guard status
 - risk heatmap, system status, system health, and performance analytics
-- Market ChatGPT, settings, documentation, and licensing windows
+- Sopotek Pilot, settings, documentation, and licensing windows
 
 ## Charts
 
@@ -45,6 +46,7 @@ The chart engine in `src/frontend/ui/chart/chart_widget.py` supports:
 
 - candlestick rendering with MT4-style body and wick handling
 - orderbook heatmap updates
+- dedicated `Depth Chart` and `Market Info` tabs alongside the candlestick workspace
 - live bid/ask and last-price line updates
 - lower indicator panes and overlays
 - Fibonacci retracement overlay
@@ -53,6 +55,11 @@ The chart engine in `src/frontend/ui/chart/chart_widget.py` supports:
 - tiled and cascaded detached charts
 - restored detached chart layouts through settings
 - chart-driven manual trade interactions including entry, SL, and TP context actions
+
+### Market Data Tabs
+- `Candlestick`: the main chart, indicators, overlays, and order book heatmap
+- `Depth Chart`: cumulative bid/ask depth built from the live order book for the symbol in view
+- `Market Info`: a compact market summary with spread, best bid/ask, visible range, visible volume, and depth bias
 
 ## Chart Trading
 
@@ -128,7 +135,7 @@ The execution layer supports:
 - terminal statuses such as `submitted`, `open`, `filled`, `canceled`, and `rejected`
 - open-order refresh in the UI
 - local persistence to the trade repository
-- source tagging such as `manual`, `bot`, and `chatgpt`
+- source tagging such as `manual`, `bot`, and the internal `chatgpt` source used for Sopotek Pilot actions
 
 ## Risk, Behavior, And Safety
 
@@ -198,9 +205,9 @@ Telegram now supports:
 - command keyboard
 - screenshots and chart screenshots
 - app status and analysis requests
-- normal ChatGPT-style conversation, not only slash commands
+- normal Sopotek Pilot-style conversation, not only slash commands
 
-Market ChatGPT inside the app supports:
+Sopotek Pilot inside the app supports:
 
 - app-aware questions
 - trading and order commands with confirmation
@@ -225,10 +232,10 @@ Repo evidence supports commands and keyboard actions for:
 - `/screenshot`
 - `/chart SYMBOL [TIMEFRAME]`
 - `/chartshot SYMBOL [TIMEFRAME]`
-- plain-text ChatGPT questions
+- plain-text Sopotek Pilot questions
 
-### Market ChatGPT
-Market ChatGPT can:
+### Sopotek Pilot
+Sopotek Pilot can:
 
 - explain balances, positions, equity, profitability, and behavior guard status
 - open app windows and panels
@@ -253,5 +260,5 @@ Repo-backed persistence currently includes:
 3. Validate a rejected order path.
 4. Validate chart refresh, open orders, positions, journal, and checklist flow.
 5. Validate Telegram or OpenAI features only after the base session is healthy.
-6. Validate Market ChatGPT, screenshots, and remote commands next.
+6. Validate Sopotek Pilot, screenshots, and remote commands next.
 7. Only then test AI trading or live execution.

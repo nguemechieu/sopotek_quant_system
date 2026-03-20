@@ -35,6 +35,9 @@ class AlpacaBroker(BaseBroker):
         self.api = None
         self._connected = False
 
+    def supported_market_venues(self):
+        return ["auto", "spot"]
+
         if not self.api_key:
             raise ValueError("Alpaca API key is required")
         if not self.secret:
@@ -74,6 +77,7 @@ class AlpacaBroker(BaseBroker):
             "amount": float(getattr(order, "qty", 0) or 0),
             "filled": float(getattr(order, "filled_qty", 0) or 0),
             "price": float(getattr(order, "limit_price", 0) or getattr(order, "filled_avg_price", 0) or 0),
+            "stop_price": float(getattr(order, "stop_price", 0) or 0) or None,
             "raw": order,
         }
 
@@ -156,21 +160,40 @@ class AlpacaBroker(BaseBroker):
     # ORDERS
     # =================================
 
-    async def create_order(self, symbol, side, amount, type="market", price=None, params=None, stop_loss=None, take_profit=None):
+    async def create_order(
+        self,
+        symbol,
+        side,
+        amount,
+        type="market",
+        price=None,
+        stop_price=None,
+        params=None,
+        stop_loss=None,
+        take_profit=None,
+    ):
         await self._ensure_connected()
 
         params = dict(params or {})
         time_in_force = params.pop("time_in_force", "gtc")
+        normalized_type = str(type or "market").strip().lower() or "market"
 
         order_kwargs = {
             "symbol": symbol,
             "qty": amount,
             "side": str(side).lower(),
-            "type": type,
+            "type": normalized_type,
             "time_in_force": time_in_force,
         }
-        if price is not None and type != "market":
+        if price is not None and normalized_type != "market":
             order_kwargs["limit_price"] = price
+        if normalized_type == "stop_limit":
+            if price is None or float(price) <= 0:
+                raise ValueError("stop_limit orders require a positive limit price")
+            trigger_price = params.pop("stop_price", stop_price)
+            if trigger_price is None or float(trigger_price) <= 0:
+                raise ValueError("stop_limit orders require a positive stop_price trigger")
+            order_kwargs["stop_price"] = float(trigger_price)
         if stop_loss is not None or take_profit is not None:
             order_kwargs["order_class"] = params.pop("order_class", "bracket")
             if take_profit is not None:

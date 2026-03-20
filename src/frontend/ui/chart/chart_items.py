@@ -1,3 +1,4 @@
+import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QPainter, QPen, QPicture
@@ -12,6 +13,7 @@ class CandlestickItem(pg.GraphicsObject):
         self.body_width = max(1e-9, float(body_width))
         self.up_color = up_color
         self.down_color = down_color
+        self._x_offset = 0.0
         self.picture = QPicture()
         self._bounding_rect = QRectF(0, 0, 1, 1)
         self.generatePicture(self.data)
@@ -55,11 +57,30 @@ class CandlestickItem(pg.GraphicsObject):
         max_y = float("-inf")
 
         rows = data if data is not None else []
+        valid_times = []
+        for row in rows:
+            if row is None or len(row) < 5:
+                continue
+            try:
+                valid_times.append(float(row[0]))
+            except Exception:
+                continue
+        self._x_offset = min(valid_times) if valid_times else 0.0
+        self.setPos(self._x_offset, 0.0)
+
         for row in rows:
             if len(row) < 5:
                 continue
 
-            t, open_, close, low, high = map(float, row[:5])
+            try:
+                t, open_, close, low, high = map(float, row[:5])
+            except Exception:
+                continue
+            if not all(np.isfinite(value) for value in (t, open_, close, low, high)):
+                continue
+            t -= self._x_offset
+            high = max(high, open_, close, low)
+            low = min(low, open_, close, high)
             rising = close >= open_
 
             body_top = max(open_, close)
@@ -90,6 +111,7 @@ class CandlestickItem(pg.GraphicsObject):
         painter.end()
 
         if min_x == float("inf"):
+            self.setPos(0.0, 0.0)
             self._bounding_rect = QRectF(0, 0, 1, 1)
         else:
             self._bounding_rect = QRectF(min_x, min_y, max_x - min_x, max(max_y - min_y, 1e-9))

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 
 from core.scheduler import Scheduler
 from core.system_state import SystemState
@@ -9,13 +10,14 @@ from  event_bus.event_bus import  EventBus
 from engines.market_data_engine import MarketDataEngine
 class MultiSymbolOrchestrator:
 
-    def __init__(self,controller, broker, strategy, execution_manager, risk_engine):
+    def __init__(self,controller, broker, strategy, execution_manager, risk_engine, signal_processor=None):
         self.controller = controller
 
         self.broker = broker
         self.event_bus=EventBus()
         self.strategy = strategy
         self.execution_manager = execution_manager
+        self.signal_processor = signal_processor
         self.portfolio_manager=PortfolioManager(self.event_bus)
         self.market_data_engine=MarketDataEngine(self.broker,self.event_bus)
         self.risk_engine=risk_engine
@@ -31,6 +33,7 @@ class MultiSymbolOrchestrator:
         self.scheduler = Scheduler()
 
         self.workers = []
+        self.worker_tasks = []
 
     async def start(self, symbols=None):
 
@@ -53,15 +56,18 @@ class MultiSymbolOrchestrator:
                 controller=self.controller,
                 startup_delay=(offset % 6) * 0.35,
                 poll_interval=6.0,
+                signal_processor=self.signal_processor,
             )
 
             self.workers.append(worker)
 
-            tasks.append(
-                asyncio.create_task(worker.run())
-            )
+            tasks.append(asyncio.create_task(worker.run(), name=f"symbol_worker:{symbol}"))
 
-        await asyncio.gather(*tasks)
+        self.worker_tasks = tasks
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            self.worker_tasks = [task for task in tasks if not task.done()]
 
 
 
@@ -72,6 +78,21 @@ class MultiSymbolOrchestrator:
 
     async def shutdown(self):
         self.state.stop()
+
+        for worker in list(self.workers):
+            try:
+                worker.running = False
+            except Exception:
+                pass
+
+        tasks = list(getattr(self, "worker_tasks", []) or [])
+        self.worker_tasks = []
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
         await self.engine.stop()
 

@@ -11,7 +11,7 @@ from broker.ccxt_broker import CCXTBroker
 
 
 class FakeSession:
-    def __init__(self, connector=None):
+    def __init__(self, connector=None, **kwargs):
         self.connector = connector
         self.closed = False
 
@@ -24,6 +24,7 @@ class FakeExchange:
         self.cfg = cfg
         self.closed = False
         self.sandbox_mode = None
+        self.fetch_open_orders_calls = []
         self.has = {
             "fetchTicker": True,
             "fetchTickers": True,
@@ -37,6 +38,7 @@ class FakeExchange:
             "fetchClosedOrders": False,
             "fetchOrder": True,
             "fetchBalance": True,
+            "fetchPositions": True,
             "cancelOrder": True,
             "cancelAllOrders": True,
             "createOrder": True,
@@ -45,6 +47,7 @@ class FakeExchange:
         }
         self.markets = {}
         self.currencies = {"USDT": {"code": "USDT"}}
+        self.fetch_positions_calls = []
 
     def set_sandbox_mode(self, enabled):
         self.sandbox_mode = enabled
@@ -100,6 +103,10 @@ class FakeExchange:
     async def fetch_balance(self):
         return {"free": {"USDT": 1000}}
 
+    async def fetch_positions(self, symbols=None):
+        self.fetch_positions_calls.append(symbols)
+        return [{"symbol": "BTC/USDT", "contracts": 0.25, "side": "long"}]
+
     async def fetch_order(self, order_id, symbol=None):
         return {"id": order_id, "symbol": symbol}
 
@@ -107,6 +114,7 @@ class FakeExchange:
         return [{"symbol": symbol, "limit": limit}]
 
     async def fetch_open_orders(self, symbol=None, limit=None):
+        self.fetch_open_orders_calls.append({"symbol": symbol, "limit": limit})
         return [{"symbol": symbol, "limit": limit, "status": "open"}]
 
     async def withdraw(self, code, amount, address, tag=None, params=None):
@@ -136,9 +144,19 @@ class UnsupportedPrivateExchange(FakeExchange):
 def broker_module(monkeypatch):
     import broker.ccxt_broker as broker_mod
 
-    monkeypatch.setattr(broker_mod.aiohttp, "TCPConnector", lambda family=None: {"family": family})
-    monkeypatch.setattr(broker_mod.aiohttp, "ClientSession", lambda connector=None: FakeSession(connector=connector))
+    monkeypatch.setattr(
+        broker_mod.aiohttp,
+        "TCPConnector",
+        lambda family=None, resolver=None, ttl_dns_cache=None: {
+            "family": family,
+            "resolver": resolver,
+            "ttl_dns_cache": ttl_dns_cache,
+        },
+    )
+    monkeypatch.setattr(broker_mod.aiohttp, "ThreadedResolver", lambda: "threaded-resolver")
+    monkeypatch.setattr(broker_mod.aiohttp, "ClientSession", lambda connector=None, **kwargs: FakeSession(connector=connector, **kwargs))
     monkeypatch.setattr(broker_mod.ccxt, "fakeexchange", FakeExchange, raising=False)
+    monkeypatch.setattr(broker_mod.ccxt, "binanceus", FakeExchange, raising=False)
     monkeypatch.setattr(broker_mod.ccxt, "unsupportedexchange", UnsupportedPrivateExchange, raising=False)
     return broker_mod
 
@@ -172,6 +190,8 @@ def test_ccxt_broker_connects_and_loads_symbols(broker_module):
         assert broker.exchange.cfg["password"] == "passphrase"
         assert broker.exchange.cfg["uid"] == "uid-1"
         assert broker.exchange.cfg["options"]["recvWindow"] == 9999
+        assert broker.session.connector["family"] is not None
+        assert broker.session.connector["resolver"] == "threaded-resolver"
 
         await broker.close()
 
@@ -232,5 +252,156 @@ def test_ccxt_broker_returns_safe_defaults_for_unsupported_optional_methods(brok
             await broker.fetch_deposit_address("USDT")
 
         await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_supports_stop_limit_orders(broker_module):
+    async def scenario():
+        broker = CCXTBroker(make_config())
+
+        order = await broker.create_order(
+            symbol="BTC/USDT",
+            side="buy",
+            amount=1.0,
+            type="stop_limit",
+            price=101.987,
+            stop_price=102.5,
+            params={"timeInForce": "GTC"},
+        )
+
+        assert order["type"] == "stop_limit"
+        assert order["price"] == 101.99
+        assert order["stop_price"] == 102.5
+        assert order["params"]["stopPrice"] == 102.5
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_filters_symbols_for_selected_market_type(broker_module, monkeypatch):
+    class MixedMarketExchange(FakeExchange):
+        async def load_markets(self):
+            self.markets = {
+                "BTC/USDT": {"symbol": "BTC/USDT", "spot": True, "option": False},
+                "BTC/USDT:USDT": {"symbol": "BTC/USDT:USDT", "spot": False, "contract": True, "swap": True},
+                "BTC-29MAR24-50000-C": {"symbol": "BTC-29MAR24-50000-C", "spot": False, "option": True},
+                "USDT_OTC": {"symbol": "USDT_OTC", "spot": False, "otc": True, "type": "otc"},
+            }
+            return self.markets
+
+    import broker.ccxt_broker as broker_mod
+
+    monkeypatch.setattr(broker_mod.ccxt, "mixedmarketexchange", MixedMarketExchange, raising=False)
+
+    async def scenario():
+        broker = CCXTBroker(make_config(exchange="mixedmarketexchange", options={"market_type": "option"}))
+        await broker.connect()
+
+        assert broker.symbols == ["BTC-29MAR24-50000-C"]
+        assert broker.resolved_market_preference == "option"
+        assert broker.supported_market_venues() == ["auto", "spot", "derivative", "option", "otc"]
+
+        derivative_symbols = broker.apply_market_preference("derivative")
+        assert derivative_symbols == ["BTC/USDT:USDT"]
+        assert broker.resolved_market_preference == "derivative"
+
+        otc_symbols = broker.apply_market_preference("otc")
+        assert otc_symbols == ["USDT_OTC"]
+        assert broker.resolved_market_preference == "otc"
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_binanceus_uses_symbol_aware_open_orders_defaults(broker_module):
+    async def scenario():
+        broker = CCXTBroker(make_config(exchange="binanceus", symbol="BTC/USDT"))
+        await broker.connect()
+
+        orders = await broker.fetch_open_orders(limit=25)
+
+        assert broker.exchange.cfg["options"]["warnOnFetchOpenOrdersWithoutSymbol"] is False
+        assert orders[0]["symbol"] == "BTC/USDT"
+        assert orders[0]["limit"] == 25
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_binanceus_monitors_all_symbols_with_cached_snapshot(broker_module):
+    async def scenario():
+        broker = CCXTBroker(make_config(exchange="binanceus"))
+        await broker.connect()
+
+        first = await broker.fetch_open_orders_snapshot(symbols=["BTC/USDT", "ETH/USDT"], limit=10)
+        second = await broker.fetch_open_orders_snapshot(symbols=["BTC/USDT", "ETH/USDT"], limit=10)
+
+        assert [item["symbol"] for item in first] == ["BTC/USDT", "ETH/USDT"]
+        assert first == second
+        assert broker.exchange.fetch_open_orders_calls == [
+            {"symbol": "BTC/USDT", "limit": 10},
+            {"symbol": "ETH/USDT", "limit": 10},
+        ]
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_binanceus_forces_spot_and_blocks_positions(broker_module):
+    async def scenario():
+        broker = CCXTBroker(make_config(exchange="binanceus", options={"defaultType": "future", "recvWindow": 9999}))
+        await broker.connect()
+
+        positions = await broker.fetch_positions()
+
+        assert broker.exchange.cfg["options"]["defaultType"] == "spot"
+        assert broker._exchange_has("fetch_positions") is False
+        assert positions == []
+        assert broker.exchange.fetch_positions_calls == []
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_normalizes_credentials_before_connect(broker_module):
+    async def scenario():
+        broker = CCXTBroker(
+            make_config(
+                exchange="binanceus",
+                api_key="  demo-key  ",
+                secret="  demo-secret  ",
+                password="  demo-pass  ",
+                uid="  uid-1  ",
+            )
+        )
+
+        await broker.connect()
+
+        assert broker.api_key == "demo-key"
+        assert broker.secret == "demo-secret"
+        assert broker.password == "demo-pass"
+        assert broker.uid == "uid-1"
+        assert broker.exchange.cfg["apiKey"] == "demo-key"
+        assert broker.exchange.cfg["secret"] == "demo-secret"
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_rejects_binance_credentials_with_whitespace(broker_module):
+    async def scenario():
+        broker = CCXTBroker(make_config(exchange="binanceus", api_key="demo key", secret="secret"))
+
+        with pytest.raises(ValueError) as exc:
+            await broker.connect()
+
+        assert "contains whitespace" in str(exc.value)
 
     asyncio.run(scenario())

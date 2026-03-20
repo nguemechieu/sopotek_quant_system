@@ -19,13 +19,14 @@ class ExecutionManager:
     }
     FILLED_ORDER_STATUSES = {"filled", "closed"}
 
-    def __init__(self, broker, event_bus, router, trade_repository=None, trade_notifier=None):
+    def __init__(self, broker, event_bus, router, trade_repository=None, trade_notifier=None, behavior_guard=None):
 
         self.broker = broker
         self.bus = event_bus
         self.router = router
         self.trade_repository = trade_repository
         self.trade_notifier = trade_notifier
+        self.behavior_guard = behavior_guard
         self.logger = logging.getLogger("ExecutionManager")
 
         self.running = False
@@ -61,9 +62,8 @@ class ExecutionManager:
         try:
             await self.execute(event.data)
 
-        except Exception as e:
-
-            print("Execution error:", e)
+        except Exception:
+            self.logger.exception("Execution error while handling event order payload")
 
     def _cooldown_remaining(self, symbol):
         expires_at = self._symbol_cooldowns.get(symbol)
@@ -215,6 +215,51 @@ class ExecutionManager:
 
         return fallback_price
 
+    def _extract_fee_cost(self, execution):
+        if not isinstance(execution, dict):
+            return None
+
+        fee = execution.get("fee")
+        if isinstance(fee, dict):
+            value = fee.get("cost")
+            if value not in (None, ""):
+                return self._safe_float(value, 0.0)
+
+        fees = execution.get("fees")
+        if isinstance(fees, list):
+            total = 0.0
+            found = False
+            for item in fees:
+                if not isinstance(item, dict):
+                    continue
+                cost = item.get("cost")
+                if cost in (None, ""):
+                    continue
+                total += self._safe_float(cost, 0.0)
+                found = True
+            if found:
+                return total
+
+        return None
+
+    def _extract_fee_currency(self, execution):
+        if not isinstance(execution, dict):
+            return None
+        fee = execution.get("fee")
+        if isinstance(fee, dict):
+            currency = fee.get("currency")
+            if currency:
+                return str(currency)
+        fees = execution.get("fees")
+        if isinstance(fees, list):
+            for item in fees:
+                if not isinstance(item, dict):
+                    continue
+                currency = item.get("currency")
+                if currency:
+                    return str(currency)
+        return None
+
     def _build_trade_payload(self, execution, submitted_order):
         execution = execution or {}
         submitted_order = submitted_order or {}
@@ -225,24 +270,98 @@ class ExecutionManager:
             or submitted_order.get("timestamp")
             or datetime.now(timezone.utc).isoformat()
         )
+        actual_price = self._extract_order_price(execution, fallback_price=submitted_order.get("price"))
+        expected_price = execution.get("expected_price", submitted_order.get("expected_price"))
+        expected_price = self._safe_float(expected_price, 0.0) if expected_price not in (None, "") else None
+        size = self._extract_order_amount(execution, fallback_amount=submitted_order.get("amount", 0.0))
+        filled_size = self._extract_filled_amount(
+            execution,
+            fallback_amount=submitted_order.get("amount", 0.0),
+            status=status,
+        )
+        side = str(execution.get("side") or submitted_order.get("side") or "").upper()
+        slippage_abs = None
+        slippage_bps = None
+        slippage_cost = None
+        if actual_price not in (None, "") and expected_price not in (None, 0, ""):
+            direction = 1.0 if side == "BUY" else -1.0 if side == "SELL" else 1.0
+            slippage_abs = (float(actual_price) - float(expected_price)) * direction
+            slippage_bps = (slippage_abs / float(expected_price)) * 10000.0
+            executed_size = filled_size if filled_size > 0 else size
+            slippage_cost = slippage_abs * float(executed_size or 0.0)
+        fee_cost = execution.get("fee", submitted_order.get("fee"))
+        if fee_cost in (None, ""):
+            fee_cost = self._extract_fee_cost(execution)
+        fee_currency = execution.get("fee_currency") or submitted_order.get("fee_currency") or self._extract_fee_currency(execution)
+        execution_quality = execution.get("execution_quality") or submitted_order.get("execution_quality") or {}
+        execution_strategy = (
+            execution.get("execution_strategy")
+            or submitted_order.get("execution_strategy")
+            or (execution_quality.get("algorithm") if isinstance(execution_quality, dict) else None)
+        )
 
         return {
             "symbol": execution.get("symbol") or submitted_order.get("symbol"),
-            "side": str(execution.get("side") or submitted_order.get("side") or "").upper(),
-            "price": self._extract_order_price(execution, fallback_price=submitted_order.get("price")),
-            "size": self._extract_order_amount(execution, fallback_amount=submitted_order.get("amount", 0.0)),
-            "filled_size": self._extract_filled_amount(
-                execution,
-                fallback_amount=submitted_order.get("amount", 0.0),
-                status=status,
-            ),
+            "side": side,
+            "source": str(execution.get("source") or submitted_order.get("source") or "bot").strip().lower() or "bot",
+            "price": actual_price,
+            "size": size,
+            "filled_size": filled_size,
             "order_type": execution.get("type") or submitted_order.get("type"),
             "status": status,
             "order_id": execution.get("id") or submitted_order.get("id"),
             "timestamp": timestamp,
+            "stop_price": execution.get("stop_price", submitted_order.get("stop_price")),
             "stop_loss": execution.get("stop_loss", submitted_order.get("stop_loss")),
             "take_profit": execution.get("take_profit", submitted_order.get("take_profit")),
             "pnl": execution.get("pnl", submitted_order.get("pnl")),
+            "reason": execution.get("reason") or submitted_order.get("reason"),
+            "strategy_name": execution.get("strategy_name") or submitted_order.get("strategy_name"),
+            "confidence": execution.get("confidence", submitted_order.get("confidence")),
+            "expected_price": expected_price,
+            "spread_abs": execution.get("spread_abs", submitted_order.get("spread_abs")),
+            "spread_bps": execution.get("spread_bps", submitted_order.get("spread_bps")),
+            "slippage_abs": slippage_abs,
+            "slippage_bps": slippage_bps,
+            "slippage_cost": slippage_cost,
+            "fee": fee_cost,
+            "fee_currency": fee_currency,
+            "setup": execution.get("setup") or submitted_order.get("setup"),
+            "outcome": execution.get("outcome") or submitted_order.get("outcome"),
+            "lessons": execution.get("lessons") or submitted_order.get("lessons"),
+            "blocked_by_guard": bool(
+                execution.get("blocked_by_guard", submitted_order.get("blocked_by_guard", False))
+            ),
+            "execution_strategy": execution_strategy,
+            "execution_quality": execution_quality if isinstance(execution_quality, dict) else {},
+            "timeframe": execution.get("timeframe") or submitted_order.get("timeframe"),
+            "signal_source_agent": execution.get("signal_source_agent") or submitted_order.get("signal_source_agent"),
+            "consensus_status": execution.get("consensus_status") or submitted_order.get("consensus_status"),
+            "adaptive_weight": execution.get("adaptive_weight", submitted_order.get("adaptive_weight")),
+            "adaptive_score": execution.get("adaptive_score", submitted_order.get("adaptive_score")),
+            "requested_amount": execution.get("requested_amount", submitted_order.get("requested_amount")),
+            "requested_quantity_mode": execution.get(
+                "requested_quantity_mode",
+                submitted_order.get("requested_quantity_mode"),
+            ),
+            "requested_amount_units": execution.get(
+                "requested_amount_units",
+                submitted_order.get("requested_amount_units"),
+            ),
+            "deterministic_amount_units": execution.get(
+                "deterministic_amount_units",
+                submitted_order.get("deterministic_amount_units"),
+            ),
+            "amount_units": execution.get("amount_units", submitted_order.get("amount_units")),
+            "applied_requested_mode_amount": execution.get(
+                "applied_requested_mode_amount",
+                submitted_order.get("applied_requested_mode_amount"),
+            ),
+            "size_adjusted": bool(execution.get("size_adjusted", submitted_order.get("size_adjusted", False))),
+            "ai_adjusted": bool(execution.get("ai_adjusted", submitted_order.get("ai_adjusted", False))),
+            "sizing_summary": execution.get("sizing_summary") or submitted_order.get("sizing_summary"),
+            "sizing_notes": execution.get("sizing_notes") or submitted_order.get("sizing_notes"),
+            "ai_sizing_reason": execution.get("ai_sizing_reason") or submitted_order.get("ai_sizing_reason"),
         }
 
     def _payload_fingerprint(self, payload):
@@ -252,6 +371,8 @@ class ExecutionManager:
             payload.get("size"),
             payload.get("filled_size"),
             payload.get("pnl"),
+            payload.get("slippage_bps"),
+            payload.get("fee"),
             payload.get("timestamp"),
         )
 
@@ -269,6 +390,25 @@ class ExecutionManager:
                     payload.get("order_type"),
                     payload.get("status"),
                     payload.get("timestamp"),
+                    payload.get("source"),
+                    payload.get("pnl"),
+                    payload.get("strategy_name"),
+                    payload.get("reason"),
+                    payload.get("confidence"),
+                    payload.get("expected_price"),
+                    payload.get("spread_bps"),
+                    payload.get("slippage_bps"),
+                    payload.get("fee"),
+                    payload.get("stop_loss"),
+                    payload.get("take_profit"),
+                    payload.get("setup"),
+                    payload.get("outcome"),
+                    payload.get("lessons"),
+                    payload.get("timeframe"),
+                    payload.get("signal_source_agent"),
+                    payload.get("consensus_status"),
+                    payload.get("adaptive_weight"),
+                    payload.get("adaptive_score"),
                 )
             except Exception as exc:
                 self.logger.debug("Trade persistence failed for %s: %s", payload.get("symbol"), exc)
@@ -304,6 +444,12 @@ class ExecutionManager:
         tracker_state = self._tracked_orders.get(order_id, {}) if order_id else {}
 
         await self._publish_fill_delta(payload, tracker_state)
+
+        if self.behavior_guard is not None:
+            try:
+                self.behavior_guard.record_trade_update(payload)
+            except Exception as exc:
+                self.logger.debug("Behavior guard trade update failed for %s: %s", payload.get("symbol"), exc)
 
         fingerprint = self._payload_fingerprint(payload)
         if fingerprint != tracker_state.get("fingerprint"):
@@ -381,6 +527,26 @@ class ExecutionManager:
             return None
 
         price = await self._fetch_reference_price(symbol, side, order.get("price"))
+        spread_abs = None
+        spread_bps = None
+        if hasattr(self.broker, "fetch_ticker"):
+            try:
+                ticker = await self.broker.fetch_ticker(symbol)
+            except Exception:
+                ticker = None
+            if isinstance(ticker, dict):
+                bid = ticker.get("bid") or ticker.get("bidPrice")
+                ask = ticker.get("ask") or ticker.get("askPrice")
+                try:
+                    bid = float(bid) if bid is not None else None
+                    ask = float(ask) if ask is not None else None
+                except Exception:
+                    bid = ask = None
+                if bid and ask and ask >= bid:
+                    spread_abs = ask - bid
+                    denominator = float(price or ask or bid or 0.0)
+                    if denominator > 0:
+                        spread_bps = (spread_abs / denominator) * 10000.0
 
         amount = float(order["amount"])
         base_currency, quote_currency = (symbol.split("/", 1) + [None])[:2]
@@ -450,6 +616,9 @@ class ExecutionManager:
 
         prepared = dict(order)
         prepared["amount"] = amount
+        prepared["expected_price"] = price
+        prepared["spread_abs"] = spread_abs
+        prepared["spread_bps"] = spread_bps
         if order.get("price") is not None:
             prepared["price"] = order["price"]
 
@@ -470,7 +639,8 @@ class ExecutionManager:
         if amount is None:
             amount = order.get("size")
         price = order.get("price")
-        order_type = order.get("type", "market")
+        order_type = str(order.get("type", "market") or "market").strip().lower().replace(" ", "_")
+        stop_price = order.get("stop_price")
         stop_loss = order.get("stop_loss")
         take_profit = order.get("take_profit")
         params = dict(order.get("params") or {})
@@ -481,27 +651,96 @@ class ExecutionManager:
             raise ValueError("Order side is required")
         if amount is None:
             raise ValueError("Order amount is required")
+        if order_type == "stop_limit":
+            if price is None:
+                raise ValueError("stop_limit orders require a limit price")
+            if stop_price is None:
+                raise ValueError("stop_limit orders require a stop_price trigger")
 
         normalized_order = {
             "symbol": symbol,
             "side": str(side).lower(),
+            "source": str(order.get("source") or "bot").strip().lower() or "bot",
             "amount": amount,
             "type": order_type,
         }
 
         if price is not None:
             normalized_order["price"] = price
+        if stop_price is not None:
+            normalized_order["stop_price"] = stop_price
         if stop_loss is not None:
             normalized_order["stop_loss"] = stop_loss
         if take_profit is not None:
             normalized_order["take_profit"] = take_profit
+        for extra_key in (
+            "reason",
+            "confidence",
+            "strategy_name",
+            "expected_price",
+            "spread_abs",
+            "spread_bps",
+            "pnl",
+            "execution_strategy",
+            "timeframe",
+            "signal_source_agent",
+            "consensus_status",
+            "adaptive_weight",
+            "adaptive_score",
+            "requested_amount",
+            "requested_quantity_mode",
+            "requested_amount_units",
+            "deterministic_amount_units",
+            "amount_units",
+            "applied_requested_mode_amount",
+            "size_adjusted",
+            "ai_adjusted",
+            "sizing_summary",
+            "sizing_notes",
+            "ai_sizing_reason",
+        ):
+            if order.get(extra_key) is not None:
+                normalized_order[extra_key] = order.get(extra_key)
         if params:
             normalized_order["params"] = params
 
         async with self._execution_lock:
+            if self.behavior_guard is not None:
+                try:
+                    allowed, guard_reason, _guard_snapshot = self.behavior_guard.evaluate_order(normalized_order)
+                except Exception as exc:
+                    self.logger.debug("Behavior guard evaluation failed for %s: %s", symbol, exc)
+                    allowed, guard_reason = True, "Allowed"
+                if not allowed:
+                    blocked_order = dict(normalized_order)
+                    blocked_order["timestamp"] = datetime.now(timezone.utc).isoformat()
+                    blocked_order["reason"] = guard_reason
+                    blocked_order["blocked_by_guard"] = True
+                    self.behavior_guard.record_order_attempt(blocked_order, allowed=False, reason=guard_reason)
+                    rejected_execution = {
+                        "symbol": symbol,
+                        "side": normalized_order["side"],
+                        "source": normalized_order.get("source", "bot"),
+                        "amount": normalized_order.get("amount"),
+                        "type": normalized_order.get("type", order_type),
+                        "price": normalized_order.get("price"),
+                        "status": "rejected",
+                        "reason": guard_reason,
+                        "blocked_by_guard": True,
+                        "raw": {"error": guard_reason},
+                    }
+                    await self._handle_order_update(rejected_execution, blocked_order, allow_tracking=False)
+                    return rejected_execution
+
             prepared_order = await self._prepare_order(normalized_order)
             if prepared_order is None:
                 return None
+
+            if self.behavior_guard is not None:
+                try:
+                    self.behavior_guard.record_order_attempt(prepared_order, allowed=True, reason="submitted")
+                except Exception as exc:
+                    self.logger.debug("Behavior guard attempt recording failed for %s: %s", symbol, exc)
 
             try:
                 execution = await self.router.route(prepared_order)
@@ -528,6 +767,7 @@ class ExecutionManager:
                     rejected_execution = {
                         "symbol": symbol,
                         "side": normalized_order["side"],
+                        "source": prepared_order.get("source", normalized_order.get("source", "bot")),
                         "amount": prepared_order.get("amount"),
                         "type": prepared_order.get("type", order_type),
                         "price": prepared_order.get("price"),
@@ -540,6 +780,8 @@ class ExecutionManager:
                     return rejected_execution
                 raise
             prepared_order["timestamp"] = datetime.now(timezone.utc).isoformat()
+            if isinstance(execution, dict):
+                execution.setdefault("source", prepared_order.get("source", normalized_order.get("source", "bot")))
             await self._handle_order_update(execution, prepared_order)
 
         return execution

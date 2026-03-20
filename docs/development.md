@@ -53,11 +53,11 @@
 - Prefer validating changes with focused tests plus a quick UI sanity pass when the feature is heavily visual.
 - Keep broker-specific behavior isolated in adapters whenever possible.
 - Generated output and screenshots should stay out of commits unless explicitly intended.
-- Documentation should be updated whenever terminal workflows, Telegram commands, Market ChatGPT behavior, or safety controls change, because those are fast-moving user-facing surfaces.
+- Documentation should be updated whenever terminal workflows, Telegram commands, Sopotek Pilot behavior, or safety controls change, because those are fast-moving user-facing surfaces.
 
 ## Recommended Next Improvements
 
 - deeper broker capability introspection in the UI
 - more dedicated tests around detached window workflows
-- more coverage for Telegram + chart capture + ChatGPT interaction together
+- more coverage for Telegram + chart capture + Sopotek Pilot interaction together
 - exported reports or PDFs from checklist, journal, and review workflows

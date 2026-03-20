@@ -15,6 +15,16 @@ class CoinbaseWebSocket:
 
         self.url = "wss://ws-feed.exchange.coinbase.com"
 
+    def _normalize_symbol(self, product_id):
+        symbol = str(product_id or "").strip().upper()
+        if not symbol:
+            return symbol
+        if "-" in symbol and "/" not in symbol:
+            base, quote = symbol.split("-", 1)
+            if base and quote:
+                return f"{base}/{quote}"
+        return symbol
+
     # ==========================================
     # CONNECT
     # ==========================================
@@ -45,7 +55,7 @@ class CoinbaseWebSocket:
                     continue
 
                 ticker = {
-                    "symbol": data.get("product_id"),
+                    "symbol": self._normalize_symbol(data.get("product_id")),
                     "price": float(data.get("price", 0)),
                     "bid": float(data.get("best_bid", 0)),
                     "ask": float(data.get("best_ask", 0)),

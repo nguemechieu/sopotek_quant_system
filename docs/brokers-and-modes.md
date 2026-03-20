@@ -6,7 +6,10 @@
 - file: `src/broker/ccxt_broker.py`
 - role: generic crypto exchange adapter
 - supports market data, order submission, order queries, balances, and open orders where the underlying exchange supports them
-- now also carries venue preference handling such as `auto`, `spot`, or `option` when available on the venue
+- now also carries venue preference handling such as `auto`, `spot`, or `derivative` when available on the venue
+- Coinbase is now treated as venue-aware rather than permanently spot-only, but stock and option paths remain intentionally disabled until a dedicated broker implementation exists
+- unsupported or stale symbols are skipped more defensively so background ticker, order book, and recent-trades tasks fail closed instead of flooding the UI with `BadSymbol` errors
+- larger OHLCV requests can be backfilled in chunks on exchanges that return too little history for a single request
 
 ### Oanda Broker
 - file: `src/broker/oanda_broker.py`
@@ -15,6 +18,8 @@
 - market data currently uses polling in this application
 - position/account data is normalized for the position analysis window
 - rejected orders such as insufficient-margin responses are surfaced back into the app flow
+- empty latest-candle responses now retry against an explicit recent time window before the adapter gives up
+- forex candle source can be aligned to `Bid`, `Mid`, or `Ask`, with midpoint fallback used when a requested bid or ask series comes back empty
 
 ### Alpaca Broker
 - file: `src/broker/alpaca_broker.py`
@@ -50,7 +55,7 @@
 - testing a new symbol list
 - validating UI state updates
 - testing strategy parameters
-- validating screenshots, Telegram, or ChatGPT flows
+- validating screenshots, Telegram, or Sopotek Pilot flows
 - checking order-state transitions without risking capital
 
 ### Use Practice Or Sandbox When
@@ -93,11 +98,18 @@ This matters especially when switching between forex, crypto, and stock-style br
 
 The UI now leans toward broker-aware behavior. In practice this matters for:
 
-- option vs spot venue selection
+- spot vs derivative venue selection
 - orderbook availability
 - symbol formatting and precision
 - open-order visibility
 - position/account metric labels in position analysis
+- whether balances, equity, and positions should come from the broker account snapshot instead of local portfolio estimates
+
+## Market Data Safety Notes
+
+- the controller now sanitizes malformed OHLCV rows before caching or drawing them
+- the app no longer fabricates long synthetic candle runs from a single live tick when history is missing
+- chart requests return honest `no data` states when the broker has no usable candles, instead of silently drawing bad data
 
 ## Operational Caution
 

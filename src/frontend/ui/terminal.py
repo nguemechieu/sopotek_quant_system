@@ -1,39 +1,220 @@
+"""Terminal UI definitions and behavior for Sopotek trading app.
+
+This module defines Terminal window, chart panes, market watch, session
+control, and many supporting UI actions for live trading and analysis.
+
+Type-checking directives are configured for dynamic UI attributes and hotpatch
+methods that are assigned outside of class definitions.
+"""
+
+# mypy: disable-error-code="attr-defined, method-assign"
+# pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportGeneralTypeIssues=false
 import asyncio
-from datetime import datetime, timezone
+
 import html
 import json
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import threading
-import tomllib
+import time
+import shiboken6 # type: ignore[import-untyped]
 import traceback
-
 import numpy as np
-import pyqtgraph as pg
-from PySide6.QtCore import Qt, QSettings, QDateTime, Signal, QTimer
-from PySide6.QtGui import QAction, QColor, QTextCursor
+import pandas as pd  # type: ignore[import-untyped]
+import pyqtgraph as pg  # type: ignore[import-untyped]
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional, cast
+from PySide6.QtCore import Qt, QDate, QSettings, QDateTime, Signal, QTimer, QUrl, QRect
+from PySide6.QtGui import QAction, QColor, QTextCursor, QDesktopServices
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QDockWidget,
+    QMainWindow, QWidget, QVBoxLayout, QDockWidget, QSpinBox,
     QTableWidget, QTableWidgetItem,
-    QPushButton, QLabel, QComboBox,
-    QTabWidget, QToolBar, QFileDialog, QDialog, QGridLayout, QDoubleSpinBox, QMessageBox, QFormLayout, QInputDialog, QColorDialog,
-    QFrame,
-    QHBoxLayout, QSizePolicy, QTextEdit, QTextBrowser, QApplication, QLineEdit
+    QAbstractItemView,
+    QPushButton, QLabel, QComboBox, QProgressBar,
+    QTabWidget, QToolBar, QDialog, QGridLayout, QDoubleSpinBox, QMessageBox, QFormLayout, QInputDialog, QColorDialog, 
+    QFrame, QHeaderView,
+    QHBoxLayout, QSizePolicy, QTextEdit, QTextBrowser, QApplication, QLineEdit, QSlider, QCheckBox, QScrollArea
 )
-from shiboken6 import isValid
+
+
+class _MultiChartPage(QWidget):
+    """Subclass for dynamic multi-chart page state keys used in Terminal."""
+    _detach_window_key: str
+    _terminal_multi_chart_symbols: list[str]
+    _terminal_multi_chart_timeframe: str
+
+
+if __name__ == "__main__" and (__package__ is None or __package__ == ""):
+    repo_root = Path(__file__).resolve().parents[3]
+    repo_value = str(repo_root)
+    if repo_value not in sys.path:
+        sys.path.insert(0, repo_value)
+    from src.main import main as app_main
+
+    raise SystemExit(app_main())
 
 from backtesting.backtest_engine import BacktestEngine
 from backtesting.report_generator import ReportGenerator
 from backtesting.simulator import Simulator
-from frontend.console.system_console import SystemConsole
+from broker.market_venues import MARKET_VENUE_CHOICES
+from event_bus.event_types import EventType
 from frontend.ui.chart.chart_widget import ChartWidget
-from frontend.ui.i18n import iter_supported_languages
-from frontend.ui.panels.orderbook_panel import OrderBookPanel
+from frontend.ui.actions.trading_actions import (
+    cancel_all_orders,
+    cancel_all_orders_async,
+    close_all_positions,
+    close_all_positions_async,
+    export_trades,
+    show_async_message,
+)
+from frontend.ui.actions.optimization_actions import (
+    apply_best_optimization_params,
+    optimize_strategy,
+    optimization_selection_changed,
+    refresh_optimization_selectors,
+    refresh_optimization_window,
+    show_optimization_window,
+)
+from frontend.ui.actions.backtest_actions import (
+    generate_report,
+    load_backtest_history_clicked,
+    refresh_backtest_window,
+    show_backtest_window,
+    start_backtest,
+    stop_backtest,
+)
+from frontend.ui.actions.window_actions import (
+    open_docs,
+    open_logs,
+    open_ml_monitor,
+    open_text_window,
+    sync_logs_window,
+)
+from frontend.ui.i18n import apply_runtime_translations, iter_supported_languages
+from frontend.ui.panels.system_panels import (
+    AI_MONITOR_HEADERS,
+    create_ai_signal_panel,
+    create_system_console_panel,
+    create_system_status_panel,
+)
+from frontend.ui.panels.manual_trade_panels import ensure_manual_trade_ticket_window
+from frontend.ui.panels.manual_trade_updates import (
+    default_entry_price_for_symbol,
+    manual_trade_default_payload,
+    manual_trade_format_context,
+    manual_trade_quantity_context,
+    populate_manual_trade_ticket,
+    refresh_manual_trade_ticket,
+    normalize_manual_trade_amount,
+    normalize_manual_trade_price,
+    normalize_manual_trade_quantity_mode,
+    submit_manual_trade_from_ticket,
+    submit_manual_trade_side,
+    suggest_manual_trade_levels,
+    validate_manual_trade_amount,
+)
+from frontend.ui.panels.performance_updates import (
+    performance_snapshot,
+    populate_performance_symbol_table,
+    populate_performance_view,
+    refresh_performance_views,
+)
+from frontend.ui.panels.runtime_updates import (
+    load_persisted_runtime_data,
+    refresh_open_orders_async,
+    refresh_positions_async,
+    schedule_open_orders_refresh,
+    schedule_positions_refresh,
+)
+from frontend.ui.panels.trading_panels import (
+    create_open_orders_panel,
+    create_positions_panel,
+    create_trade_log_panel,
+)
+from frontend.ui.panels.trading_updates import (
+    format_trade_log_value,
+    format_trade_source_label,
+    normalize_open_order_entry,
+    normalize_position_entry,
+    normalize_trade_log_entry,
+    populate_open_orders_table,
+    populate_positions_table,
+    trade_log_row_for_entry,
+    update_trade_log,
+)
+from frontend.ui.panels.workspace_panels import (
+    create_orderbook_panel,
+    create_risk_heatmap_panel,
+    create_strategy_debug_panel,
+    create_strategy_scorecard_panel,
+)
+from frontend.ui.panels.workspace_updates import (
+    handle_strategy_debug,
+    refresh_strategy_comparison_panel,
+    risk_heatmap_positions_snapshot,
+    set_risk_heatmap_status,
+    strategy_scorecard_rows,
+    update_orderbook,
+    update_recent_trades,
+    update_risk_heatmap,
+)
+from frontend.ui.services.screenshot_service import prompt_and_save_widget_screenshot
+from integrations.news_service import NewsService
+from quant.ml_research import MLResearchPipeline
 from strategy.strategy import Strategy
 
+RISK_PROFILE_PRESETS = {
+    "Capital Preservation": {
+        "max_portfolio_risk": 0.03,
+        "max_risk_per_trade": 0.005,
+        "max_position_size_pct": 0.03,
+        "max_gross_exposure_pct": 0.50,
+        "description": "Very defensive. Small risk budget, small positions, and low total exposure.",
+    },
+    "Conservative": {
+        "max_portfolio_risk": 0.05,
+        "max_risk_per_trade": 0.01,
+        "max_position_size_pct": 0.05,
+        "max_gross_exposure_pct": 1.00,
+        "description": "Controlled risk for steady participation with tighter exposure limits.",
+    },
+    "Balanced": {
+        "max_portfolio_risk": 0.10,
+        "max_risk_per_trade": 0.02,
+        "max_position_size_pct": 0.10,
+        "max_gross_exposure_pct": 2.00,
+        "description": "General-purpose default. Balanced between protection and opportunity.",
+    },
+    "Growth": {
+        "max_portfolio_risk": 0.15,
+        "max_risk_per_trade": 0.03,
+        "max_position_size_pct": 0.16,
+        "max_gross_exposure_pct": 2.50,
+        "description": "Moderately aggressive growth profile with room for larger positions.",
+    },
+    "Active Trader": {
+        "max_portfolio_risk": 0.18,
+        "max_risk_per_trade": 0.025,
+        "max_position_size_pct": 0.12,
+        "max_gross_exposure_pct": 3.50,
+        "description": "Designed for more active rotation across symbols with controlled per-trade risk.",
+    },
+    "Aggressive": {
+        "max_portfolio_risk": 0.25,
+        "max_risk_per_trade": 0.05,
+        "max_position_size_pct": 0.25,
+        "max_gross_exposure_pct": 4.00,
+        "description": "High-risk profile for experienced users who accept deeper swings.",
+    },
+}
+
+
 def global_exception_hook(exctype, value, tb):
+    """Global exception hook to capture unexpected errors in the GUI process."""
     # Ignore expected shutdown interrupts so the terminal closes quietly.
     if exctype in (KeyboardInterrupt, SystemExit):
         return
@@ -42,13 +223,80 @@ def global_exception_hook(exctype, value, tb):
     traceback.print_exception(exctype, value, tb)
 
 
+def _json_text(value: object, fallback: str) -> str:
+    """Convert a JSON value to a safe string representation with fallback."""
+    if isinstance(value, str):
+        return value or fallback
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            decoded = bytes(value).decode("utf-8")
+        except (UnicodeDecodeError, TypeError, ValueError):
+            return fallback
+        return decoded or fallback
+    return fallback
+
+
+def _setting_bool(value: object, default: bool = False) -> bool:
+    """Normalize various setting value formats to a boolean."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _coerce_float(value: Any) -> float | None:
+    """Try converting a value to float; return None on failure."""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _read_pyproject_version(pyproject_path: Path) -> str | None:
+    """Read the project version from pyproject.toml (PEP 621 [project] version)."""
+    try:
+        content = pyproject_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    in_project_section = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "[project]":
+            in_project_section = True
+            continue
+        if in_project_section and line.startswith("["):
+            break
+        if in_project_section:
+            match = re.match(r'version\s*=\s*["\']([^"\']+)["\']', line)
+            if match:
+                return match.group(1).strip() or None
+    return None
+
+
 
 
 class Terminal(QMainWindow):
+    """Main trading terminal UI window.
+
+    Contains broker controls, charts, orders, positions, and autoscaling status.
+    """
     logout_requested = Signal()
     ai_signal = Signal(dict)
     autotrade_toggle = Signal(bool)
+
     def __init__(self, controller):
+        """Initialize terminal state and start refresh timers."""
 
         super().__init__(controller)
 
@@ -60,6 +308,7 @@ class Terminal(QMainWindow):
         self.settings = QSettings("Sopotek", "TradingPlatform")
 
         self.symbols_table = QTableWidget()
+        self.system_console: Any = None
 
         self.risk_map = None
         self.auto_button = QPushButton()
@@ -75,6 +324,7 @@ class Terminal(QMainWindow):
             self.symbol = "BTC/USDT"
 
         self.MAX_LOG_ROWS = 200
+        self.AI_TABLE_REFRESH_MIN_SECONDS = 0.5
         self.current_timeframe = getattr(controller,"time_frame")
         self.autotrading_enabled = False
         self.autotrade_scope_value = str(getattr(controller, "autotrade_scope", "all") or "all").lower()
@@ -82,15 +332,25 @@ class Terminal(QMainWindow):
 
         self.training_status = {}
         self.show_bid_ask_lines = True
+        self.show_chart_volume = _setting_bool(self.settings.value("terminal/show_chart_volume", False), False)
         self._ui_shutting_down = False
         self._positions_refresh_task = None
         self._open_orders_refresh_task = None
+        self._broker_status_refresh_task = None
         self._latest_positions_snapshot = []
         self._latest_open_orders_snapshot = []
+        self._latest_broker_status_snapshot = {"status": "disconnected", "summary": "Disconnected"}
+        self._last_broker_status_refresh_at = 0.0
+        self._last_ai_table_refresh_at = 0.0
         self._ai_signal_records = {}
+        self._recommendation_records = {}
+        self._closed_journal_refresh_task = None
 
-        self.candle_up_color = self.settings.value("chart/candle_up_color", "#26a69a")
-        self.candle_down_color = self.settings.value("chart/candle_down_color", "#ef5350")
+        self.candle_up_color = str(self.settings.value("chart/candle_up_color", "#26a69a") or "#26a69a")
+        self.candle_down_color = str(self.settings.value("chart/candle_down_color", "#ef5350") or "#ef5350")
+        self.chart_background_color = str(self.settings.value("chart/background_color", "#11161f") or "#11161f")
+        self.chart_grid_color = str(self.settings.value("chart/grid_color", "#8290a0") or "#8290a0")
+        self.chart_axis_color = str(self.settings.value("chart/axis_color", "#9aa4b2") or "#9aa4b2")
 
         self.heartbeat = QLabel("●")
         self.heartbeat.setStyleSheet("color: green")
@@ -98,11 +358,14 @@ class Terminal(QMainWindow):
         self._setup_core()
         self._setup_ui()
         self._setup_panels()
+        self._restore_settings()
         self._connect_signals()
         self._setup_spinner()
 
         if hasattr(self.controller, "language_changed"):
             self.controller.language_changed.connect(lambda _code: self.apply_language())
+        if hasattr(self.controller, "license_changed"):
+            self.controller.license_changed.connect(lambda _status: self._handle_license_status_change())
 
         self.controller.symbols_signal.connect(self._update_symbols)
 
@@ -118,10 +381,19 @@ class Terminal(QMainWindow):
 
 
     def _setup_core(self):
+        """Configure core terminal window settings and initialize state holders."""
 
         self.order_type = self.controller.order_type
         self.setWindowTitle("Sopotek AI Trading Terminal")
         self.resize(1700, 950)
+        self.setMinimumSize(1024, 680)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setDockOptions(
+            QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.GroupedDragging
+            | QMainWindow.DockOption.AnimatedDocks
+        )
 
         self.connection_indicator = QLabel("● CONNECTING")
         self.connection_indicator.setStyleSheet(
@@ -134,26 +406,66 @@ class Terminal(QMainWindow):
         self.autotrade_scope_picker = None
         self.system_status_button = None
         self.system_status_dock = None
+        self.ai_signal_dock = None
+        self.secondary_toolbar = None
+        self.market_watch_dock = None
+        self.tick_chart_dock = None
+        self.system_console_dock = None
+        self.positions_dock = None
+        self.open_orders_dock = None
+        self.trade_log_dock = None
+        self.orderbook_dock = None
+        self.strategy_scorecard_dock = None
+        self.strategy_debug_dock = None
+        self.risk_heatmap_dock = None
         self.trading_activity_label = None
+        self.live_trading_bar_frame = None
+        self.live_trading_bar_label = None
+        self.live_trading_bar = None
+        self.session_mode_badge = None
+        self.license_badge = None
+        self.kill_switch_button = None
         self.symbol_picker = None
-        self.detached_tool_windows = {}
+        self.detached_tool_windows: dict[str, Any] = {}
+        self._active_chart_widget_ref = None
         self._last_chart_request_key = None
         self.current_connection_status = "connecting"
         self.language_actions = {}
 
     def _history_request_limit(self, fallback=None):
+        """Compute effective OHLCV history limit using app, runtime, and broker caps."""
         value = fallback if fallback is not None else getattr(self.controller, "limit", 50000)
         try:
-            return max(100, int(value))
-        except Exception:
-            return 50000
+            resolved = max(100, int(value))
+        except (TypeError, ValueError):
+            resolved = 50000
+
+        runtime_cap = getattr(self.controller, "runtime_history_limit", None)
+        if runtime_cap is None:
+            runtime_cap = 1000
+        try:
+            resolved = min(resolved, max(100, int(runtime_cap)))
+        except (TypeError, ValueError):
+            pass
+
+        broker = getattr(self.controller, "broker", None)
+        broker_cap = getattr(broker, "MAX_OHLCV_COUNT", None)
+        try:
+            if broker_cap is not None:
+                resolved = min(resolved, max(100, int(broker_cap)))
+        except (TypeError, ValueError):
+            pass
+
+        return resolved
 
     def _tr(self, key, **kwargs):
+        """Translate UI key using controller translation system."""
         if hasattr(self.controller, "tr"):
             return self.controller.tr(key, **kwargs)
         return key
 
     def _active_exchange_name(self):
+        """Determine current active exchange name from broker or settings."""
         broker = getattr(self.controller, "broker", None)
         if broker is not None:
             name = getattr(broker, "exchange_name", None)
@@ -175,9 +487,11 @@ class Terminal(QMainWindow):
         return ""
 
     def _is_stellar_market_watch(self):
+        """Return whether the current market watch should include Stellar column behavior."""
         return self._active_exchange_name() == "stellar"
 
     def _market_watch_headers(self):
+        """Return headers for the market watch table based on exchange type."""
         if self._is_stellar_market_watch():
             return ["Watch", "Symbol", "Bid", "Ask", "USD Value", "AI Training"]
         return ["Watch", "Symbol", "Bid", "Ask", "AI Training"]
@@ -201,6 +515,7 @@ class Terminal(QMainWindow):
         return 4 if self._is_stellar_market_watch() else None
 
     def _configure_market_watch_table(self):
+        """Initialize the watchlist table structure and header labels."""
         if not hasattr(self, "symbols_table") or self.symbols_table is None:
             return
         headers = self._market_watch_headers()
@@ -208,9 +523,11 @@ class Terminal(QMainWindow):
         self.symbols_table.setHorizontalHeaderLabels(headers)
 
     def _normalized_symbol(self, symbol):
+        """Normalize symbol text to uppercase trimmed value."""
         return str(symbol or "").upper().strip()
 
     def _find_market_watch_row(self, symbol):
+        """Find the row index for a symbol in the watchlist table."""
         target = self._normalized_symbol(symbol)
         symbol_column = self._market_watch_symbol_column()
         for row in range(self.symbols_table.rowCount()):
@@ -220,6 +537,7 @@ class Terminal(QMainWindow):
         return None
 
     def _market_watch_check_item(self, symbol, checked=False):
+        """Create a checkable table cell for market watch symbol inclusion."""
         item = QTableWidgetItem("")
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled
@@ -231,6 +549,7 @@ class Terminal(QMainWindow):
         return item
 
     def _set_market_watch_row(self, row, symbol, bid="-", ask="-", status="⏳", usd_value="-"):
+        """Update or insert a market watch row with latest quote and state values."""
         normalized_symbol = self._normalized_symbol(symbol)
         checked = normalized_symbol in self.autotrade_watchlist
         watch_column = self._market_watch_watch_column()
@@ -258,6 +577,7 @@ class Terminal(QMainWindow):
         self.symbols_table.setItem(row, self._market_watch_status_column(), QTableWidgetItem(str(status)))
 
     def _sync_watchlist_from_table(self):
+        """Extract selected watchlist symbols from the table and persist to controller."""
         watchlist = set()
         watch_column = self._market_watch_watch_column()
         symbol_column = self._market_watch_symbol_column()
@@ -275,10 +595,12 @@ class Terminal(QMainWindow):
             self.controller.set_autotrade_watchlist(sorted(watchlist))
 
     def _handle_market_watch_item_changed(self, item):
+        """Handle a check state change for the market watch table."""
         if item is None or item.column() != self._market_watch_watch_column():
             return
         self._sync_watchlist_from_table()
         self._reorder_market_watch_rows()
+        self._queue_terminal_layout_fit()
         self._refresh_terminal()
 
     def _market_watch_row_snapshot(self, row):
@@ -411,7 +733,7 @@ class Terminal(QMainWindow):
             bid = float(ticker.get("bid") or ticker.get("bidPrice") or ticker.get("bp") or 0)
             ask = float(ticker.get("ask") or ticker.get("askPrice") or ticker.get("ap") or 0)
             last = float(ticker.get("last") or ticker.get("price") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
         if bid > 0 and ask > 0:
@@ -424,7 +746,7 @@ class Terminal(QMainWindow):
             return ask
         return None
 
-    def _lookup_symbol_mid_price(self, symbol):
+    def _lookup_symbol_mid_price_from_stream(self, symbol):
         ticker_stream = getattr(self.controller, "ticker_stream", None)
         if ticker_stream is None:
             return None
@@ -457,7 +779,7 @@ class Terminal(QMainWindow):
 
         try:
             mid = (float(bid) + float(ask)) / 2.0
-        except Exception:
+        except (TypeError, ValueError):
             return None
         if mid <= 0:
             return None
@@ -473,7 +795,7 @@ class Terminal(QMainWindow):
             return "-"
         try:
             numeric = float(value)
-        except Exception:
+        except (TypeError, ValueError):
             return "-"
         if numeric >= 1000:
             return f"{numeric:,.2f}"
@@ -486,7 +808,7 @@ class Terminal(QMainWindow):
             return "-"
         try:
             numeric = float(value)
-        except Exception:
+        except (TypeError, ValueError):
             return "-"
         if numeric >= 1000:
             return f"${numeric:,.2f}"
@@ -496,8 +818,11 @@ class Terminal(QMainWindow):
 
     def _is_qt_object_alive(self, obj):
         try:
-            return obj is not None and isValid(obj)
-        except Exception:
+            validator = getattr(shiboken6, "isValid", lambda *_: False)
+            if obj is None:
+                return False
+            return bool(validator(obj))
+        except (AttributeError, TypeError, RuntimeError):
             return False
 
     def _chart_tabs_ready(self):
@@ -518,7 +843,7 @@ class Terminal(QMainWindow):
                 continue
             try:
                 page = window.centralWidget()
-            except Exception:
+            except (AttributeError, RuntimeError):
                 page = None
             if page is not None:
                 pages.append(page)
@@ -529,21 +854,267 @@ class Terminal(QMainWindow):
         return pages
 
     def _chart_widgets_in_page(self, page):
+        """Return all ChartWidget instances inside a page or window UI element."""
         if page is None:
             return []
         if isinstance(page, ChartWidget):
             return [page]
         try:
             return list(page.findChildren(ChartWidget))
-        except Exception:
+        except Exception as e:
+            self.logger.error(f"Error finding chart widgets in page: {e}")
             return []
 
+    def _is_multi_chart_page(self, page):
+        """Return True when the page is a grouped multi-chart layout."""
+        if page is None:
+            return False
+        try:
+            return str(page.objectName() or "") == "multi_chart_page"
+        except Exception as e:
+            self.logger.error(f"Error checking multi-chart page: {e}")
+            return False
+
+    def _normalized_chart_symbols(self, symbols, max_count=4):
+        """Normalize a list of chart symbols uppercase, trimming duplicates and capping the count."""
+        normalized = []
+        for symbol in symbols or []:
+            value = str(symbol or "").strip().upper()
+            if not value or value in normalized:
+                continue
+            normalized.append(value)
+            if len(normalized) >= max_count:
+                break
+        return normalized
+
+    def _multi_chart_symbols(self, max_count=4):
+        """Generate a prioritized set of chart symbols used for multi-chart layout creation."""
+        candidates = []
+
+        current_symbol = self._current_chart_symbol() or getattr(self, "symbol", "")
+        if current_symbol:
+            candidates.append(current_symbol)
+
+        for chart in self._all_chart_widgets():
+            candidates.append(getattr(chart, "symbol", ""))
+
+        for symbol in sorted(getattr(self, "autotrade_watchlist", set()) or set()):
+            candidates.append(symbol)
+
+        for symbol in getattr(self.controller, "symbols", []) or []:
+            candidates.append(symbol)
+
+        return self._normalized_chart_symbols(candidates, max_count=max_count)
+
+    def _multi_chart_window_key(self, symbols, timeframe):
+        """Create a working key for multi-chart windows to remember layout/restoration state."""
+        safe_symbols = "_".join(
+            symbol.replace("/", "_").replace(":", "_")
+            for symbol in self._normalized_chart_symbols(symbols, max_count=4)
+        )
+        safe_timeframe = str(timeframe or self.current_timeframe or "1h").strip().lower().replace("/", "_")
+        return f"multi_chart_{safe_timeframe}_{safe_symbols or 'group'}"
+
+    def _find_multi_chart_tab(self, symbols, timeframe):
+        """Find the index of an existing multi-chart tab matching target symbols and timeframe."""
+        if not self._chart_tabs_ready():
+            return -1
+
+        target_symbols = self._normalized_chart_symbols(symbols, max_count=4)
+        target_timeframe = str(timeframe or self.current_timeframe or "1h").strip().lower() or "1h"
+        if not target_symbols:
+            return -1
+
+        try:
+            count = self.chart_tabs.count()
+        except RuntimeError:
+            return -1
+
+        for index in range(count):
+            try:
+                page = self.chart_tabs.widget(index)
+            except RuntimeError:
+                break
+            if not self._is_multi_chart_page(page):
+                continue
+            page_symbols = self._normalized_chart_symbols(
+                getattr(page, "_terminal_multi_chart_symbols", None)
+                or [getattr(chart, "symbol", "") for chart in self._chart_widgets_in_page(page)],
+                max_count=4,
+            )
+            page_timeframe = str(
+                getattr(page, "_terminal_multi_chart_timeframe", None)
+                or target_timeframe
+            ).strip().lower() or target_timeframe
+            if page_symbols == target_symbols and page_timeframe == target_timeframe:
+                return index
+        return -1
+
+    def _build_multi_chart_page(self, symbols, timeframe):
+        """Create and return a QWidget containing up to four linked ChartWidgets."""
+        normalized_symbols = self._normalized_chart_symbols(symbols, max_count=4)
+        if not normalized_symbols:
+            return None
+
+        normalized_tf = str(timeframe or self.current_timeframe or "1h").strip().lower() or "1h"
+        page = _MultiChartPage()
+        page.setObjectName("multi_chart_page")
+        setattr(page, "_detach_window_key", self._multi_chart_window_key(normalized_symbols, normalized_tf))
+        setattr(page, "_terminal_multi_chart_symbols", list(normalized_symbols))
+        setattr(page, "_terminal_multi_chart_timeframe", normalized_tf)
+
+        layout = QGridLayout(page)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+
+        column_count = 1 if len(normalized_symbols) == 1 else 2
+        row_count = int(np.ceil(len(normalized_symbols) / column_count))
+        for row in range(row_count):
+            layout.setRowStretch(row, 1)
+        for column in range(column_count):
+            layout.setColumnStretch(column, 1)
+
+        for index, symbol in enumerate(normalized_symbols):
+            chart = ChartWidget(
+                symbol,
+                normalized_tf,
+                self.controller,
+                candle_up_color=self.candle_up_color,
+                candle_down_color=self.candle_down_color,
+                show_volume_panel=getattr(self, "show_chart_volume", False),
+                chart_background=self.chart_background_color,
+                grid_color=self.chart_grid_color,
+                axis_color=self.chart_axis_color,
+            )
+            self._configure_chart_widget(chart)
+            chart.setMinimumHeight(300)
+            row = index // column_count
+            column = index % column_count
+            layout.addWidget(chart, row, column)
+
+        return page
+
+    def _close_multi_chart_pages(self):
+        """Close and clean up all multi-chart tabs and detached windows."""
+        if self._chart_tabs_ready():
+            for index in reversed(range(self.chart_tabs.count())):
+                page = self.chart_tabs.widget(index)
+                if self._is_multi_chart_page(page):
+                    self._close_chart_tab(index)
+
+        for key, window in list((getattr(self, "detached_tool_windows", {}) or {}).items()):
+            if not self._is_qt_object_alive(window):
+                self.detached_tool_windows.pop(key, None)
+                continue
+            if not getattr(window, "_contains_chart_page", False):
+                continue
+            page = getattr(window, "centralWidget", lambda: None)()
+            if not self._is_multi_chart_page(page):
+                continue
+            self.detached_tool_windows.pop(key, None)
+            window._contains_chart_page = False
+            try:
+                window.close()
+            except (RuntimeError, AttributeError):
+                pass
+            try:
+                window.deleteLater()
+            except (RuntimeError, AttributeError):
+                pass
+
+    def _set_active_chart_widget(self, chart, refresh_orderbook=False):
+        """Mark a specific ChartWidget as active and update UI state accordingly."""
+        if not isinstance(chart, ChartWidget) or not self._is_qt_object_alive(chart):
+            return
+
+        self._active_chart_widget_ref = chart
+        self.current_timeframe = str(getattr(chart, "timeframe", self.current_timeframe) or self.current_timeframe)
+        self.controller.time_frame = self.current_timeframe
+        self.settings.setValue("terminal/current_timeframe", self.current_timeframe)
+        self._set_active_timeframe_button(self.current_timeframe)
+
+        symbol = str(getattr(chart, "symbol", "") or "").strip().upper()
+        if symbol and self.symbol_picker is not None:
+            self.symbol_picker.setCurrentText(symbol)
+
+        page = self._chart_page_for_widget(chart)
+        if page is not None and self._chart_tabs_ready():
+            try:
+                index = self.chart_tabs.indexOf(page)
+            except RuntimeError:
+                index = -1
+            if index >= 0 and self.chart_tabs.currentIndex() != index:
+                self.chart_tabs.setCurrentIndex(index)
+
+        self._last_chart_request_key = (symbol, self.current_timeframe)
+        if refresh_orderbook:
+            self._request_active_orderbook()
+
+    def _preferred_chart_in_page(self, page):
+        """Return the currently active chart in a page or the first chart as fallback."""
+        charts = self._chart_widgets_in_page(page)
+        if not charts:
+            return None
+
+        active_chart = getattr(self, "_active_chart_widget_ref", None)
+        if isinstance(active_chart, ChartWidget) and self._is_qt_object_alive(active_chart):
+            for chart in charts:
+                if chart is active_chart:
+                    return chart
+        return charts[0]
+
+    def _chart_page_for_widget(self, target_chart):
+        """Find the parent page or tab that contains the given ChartWidget."""
+        if target_chart is None:
+            return None
+        if isinstance(target_chart, ChartWidget):
+            for page in self._iter_detached_chart_pages():
+                if target_chart in self._chart_widgets_in_page(page):
+                    return page
+            if self._chart_tabs_ready():
+                try:
+                    count = self.chart_tabs.count()
+                except RuntimeError:
+                    count = 0
+                for index in range(count):
+                    try:
+                        page = self.chart_tabs.widget(index)
+                    except RuntimeError:
+                        break
+                    if target_chart in self._chart_widgets_in_page(page):
+                        return page
+            return target_chart
+        return None
+
+    def _all_chart_widgets(self):
+        """Collect all active ChartWidget objects from tabs and detached windows."""
+        charts = []
+        if self._chart_tabs_ready():
+            try:
+                count = self.chart_tabs.count()
+            except RuntimeError:
+                count = 0
+
+            for index in range(count):
+                try:
+                    page = self.chart_tabs.widget(index)
+                except RuntimeError:
+                    break
+                charts.extend(self._chart_widgets_in_page(page))
+
+        for page in self._iter_detached_chart_pages():
+            charts.extend(self._chart_widgets_in_page(page))
+        return charts
+
     def _single_chart_window_key(self, symbol, timeframe):
+        """Generate a stable key for a single chart window state based on symbol/timeframe."""
         safe_symbol = str(symbol or "").upper().replace("/", "_").replace(":", "_")
         safe_timeframe = str(timeframe or "").lower().replace("/", "_")
         return f"chart_{safe_symbol}_{safe_timeframe}"
 
     def _detached_chart_windows(self):
+        """List all currently detached chart windows that are still valid."""
         windows = []
         for window in self.detached_tool_windows.values():
             if not self._is_qt_object_alive(window):
@@ -552,7 +1123,8 @@ class Terminal(QMainWindow):
                 windows.append(window)
         return windows
 
-    def _find_detached_chart_window(self, symbol=None, timeframe=None):
+    def _find_detached_chart_window(self, symbol=None, timeframe=None) -> Any | None:
+        """Find a detached chart window matching symbol/timeframe if present."""
         target_symbol = str(symbol or "").upper().strip() if symbol else None
         target_timeframe = str(timeframe or "").strip() if timeframe else None
         for window in self._detached_chart_windows():
@@ -568,6 +1140,7 @@ class Terminal(QMainWindow):
         return None
 
     def _active_detached_chart_window(self):
+        """Return the active detached chart window, if there is exactly one or the active window."""
         active_window = QApplication.activeWindow()
         if active_window is not None and getattr(active_window, "_contains_chart_page", False):
             return active_window
@@ -577,6 +1150,7 @@ class Terminal(QMainWindow):
         return None
 
     def _install_chart_window_actions(self, window):
+        """Install the terminal action shortcuts to a detached window context."""
         if window is None or not self._is_qt_object_alive(window):
             return
         if getattr(window, "_chart_actions_installed", False):
@@ -596,36 +1170,42 @@ class Terminal(QMainWindow):
         window._chart_actions_installed = True
 
     def _detached_chart_layouts(self):
+        """Serialize geometry and symbol data for detached chart windows."""
         layouts = []
         for window in self._detached_chart_windows():
-            charts = self._chart_widgets_in_page(getattr(window, "centralWidget", lambda: None)())
+            page = getattr(window, "centralWidget", lambda: None)()
+            charts = self._chart_widgets_in_page(page)
             if not charts:
                 continue
-            chart = charts[0]
             geometry = window.geometry()
-            layouts.append(
-                {
-                    "symbol": str(chart.symbol),
-                    "timeframe": str(chart.timeframe),
-                    "x": int(geometry.x()),
-                    "y": int(geometry.y()),
-                    "width": int(geometry.width()),
-                    "height": int(geometry.height()),
-                }
-            )
+            layout = {
+                "timeframe": str(getattr(charts[0], "timeframe", self.current_timeframe)),
+                "x": int(geometry.x()),
+                "y": int(geometry.y()),
+                "width": int(geometry.width()),
+                "height": int(geometry.height()),
+            }
+            if len(charts) > 1 or self._is_multi_chart_page(page):
+                layout["kind"] = "group"
+                layout["symbols"] = [str(chart.symbol) for chart in charts]
+            else:
+                layout["symbol"] = str(charts[0].symbol)
+            layouts.append(layout)
         return layouts
 
     def _save_detached_chart_layouts(self):
+        """Persist the current detached chart window geometries to settings."""
         try:
             self.settings.setValue("charts/detached_layouts", json.dumps(self._detached_chart_layouts()))
-        except Exception as exc:
+        except (TypeError, ValueError, OSError) as exc:
             self.logger.debug("Unable to save detached chart layouts: %s", exc)
 
     def _restore_detached_chart_layouts(self):
+        """Restore detached chart windows from saved geometry and layout data."""
         raw_value = self.settings.value("charts/detached_layouts", "[]")
         try:
-            layouts = json.loads(raw_value or "[]")
-        except Exception:
+            layouts = json.loads(_json_text(raw_value, "[]"))
+        except (json.JSONDecodeError, TypeError, ValueError):
             layouts = []
 
         if not isinstance(layouts, list):
@@ -634,20 +1214,27 @@ class Terminal(QMainWindow):
         for entry in layouts:
             if not isinstance(entry, dict):
                 continue
-            symbol = str(entry.get("symbol") or "").strip().upper()
             timeframe = str(entry.get("timeframe") or "").strip() or self.current_timeframe
+            symbols = self._normalized_chart_symbols(entry.get("symbols") or [], max_count=4)
+            symbol = str(entry.get("symbol") or "").strip().upper()
             if not symbol:
-                continue
+                symbol = symbols[0] if symbols else ""
             try:
                 x = int(entry.get("x", 0))
                 y = int(entry.get("y", 0))
                 width = max(360, int(entry.get("width", 1200)))
                 height = max(260, int(entry.get("height", 780)))
-            except Exception:
+            except Exception as exc:
+                self.logger.debug("Invalid geometry in detached chart layout entry: %s", exc)
                 x, y, width, height = 0, 0, 1200, 780
-            self._open_or_focus_detached_chart(symbol, timeframe, geometry=QtCore.QRect(x, y, width, height))
+            geometry = QRect(x, y, width, height)
+            if str(entry.get("kind") or "").strip().lower() == "group" and symbols:
+                self._open_or_focus_detached_chart_group(symbols, timeframe, geometry=geometry)
+            elif symbol:
+                self._open_or_focus_detached_chart(symbol, timeframe, geometry=geometry)
 
     def _reattach_chart_window(self, window):
+        """Move a detached chart window back into the main chart tab view."""
         if window is None or not self._is_qt_object_alive(window):
             return
         if not getattr(window, "_contains_chart_page", False):
@@ -661,7 +1248,10 @@ class Terminal(QMainWindow):
         page.setParent(None)
         self.chart_tabs.addTab(page, title)
         self.chart_tabs.setCurrentWidget(page)
-        for chart in self._chart_widgets_in_page(page):
+        charts = self._chart_widgets_in_page(page)
+        if charts:
+            self._set_active_chart_widget(charts[0])
+        for chart in charts:
             self._schedule_chart_data_refresh(chart)
         self._request_active_orderbook()
         window._contains_chart_page = False
@@ -689,6 +1279,23 @@ class Terminal(QMainWindow):
         return charts
 
     def _current_chart_widget(self):
+        active_chart = getattr(self, "_active_chart_widget_ref", None)
+        if isinstance(active_chart, ChartWidget) and self._is_qt_object_alive(active_chart):
+            page = self._chart_page_for_widget(active_chart)
+            if page is not None:
+                active_window = QApplication.activeWindow()
+                if active_window is not None and active_window is not self:
+                    active_page = getattr(active_window, "centralWidget", lambda: None)()
+                    if active_page is page or active_chart in self._chart_widgets_in_page(active_page):
+                        return active_chart
+                if self._chart_tabs_ready():
+                    try:
+                        current_page = self.chart_tabs.currentWidget()
+                    except RuntimeError:
+                        current_page = None
+                    if current_page is page or active_chart in self._chart_widgets_in_page(current_page):
+                        return active_chart
+
         active_window = QApplication.activeWindow()
         if active_window is not None and active_window is not self:
             charts = self._chart_widgets_in_page(getattr(active_window, "centralWidget", lambda: None)())
@@ -728,10 +1335,13 @@ class Terminal(QMainWindow):
             ("equity_signal", self._update_equity),
             ("trade_signal", self._update_trade_log),
             ("ticker_signal", self._update_ticker),
+            ("news_signal", self._update_news),
             ("orderbook_signal", self._update_orderbook),
+            ("recent_trades_signal", self._update_recent_trades),
             ("strategy_debug_signal", self._handle_strategy_debug),
             ("training_status_signal", self._update_training_status),
             ("symbols_signal", self._update_symbols),
+            ("agent_runtime_signal", self._handle_agent_runtime_event),
         ):
             signal = getattr(controller, signal_name, None)
             if signal is not None:
@@ -779,6 +1389,148 @@ class Terminal(QMainWindow):
             }
         """
 
+    def _danger_button_style(self):
+        return """
+            QPushButton {
+                background-color: #3a1014;
+                color: #ffd7db;
+                border: 1px solid #8d3f49;
+                border-radius: 12px;
+                padding: 8px 14px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: #4d151c;
+                border-color: #c25f6d;
+            }
+        """
+
+    def _session_badge_style(self, live=False):
+        background = "#4a151b" if live else "#123126"
+        border = "#d36b77" if live else "#2b8d68"
+        text = "#ffe4e7" if live else "#d9ffee"
+        return (
+            "QLabel { "
+            f"background-color: {background}; color: {text}; border: 1px solid {border}; "
+            "border-radius: 12px; padding: 8px 14px; font-weight: 800; letter-spacing: 0.5px; }"
+        )
+
+    def _live_trading_bar_style(self, armed=False):
+        frame_background = "#301117" if armed else "#24161a"
+        frame_border = "#de6b7f" if armed else "#805760"
+        label_color = "#ffe3e8" if armed else "#d8b9c0"
+        chunk_color = "#ff6b81" if armed else "#b85b69"
+        return (
+            "QFrame { "
+            f"background-color: {frame_background}; border: 1px solid {frame_border}; border-radius: 14px; "
+            "}"
+            "QLabel { "
+            f"color: {label_color}; font-size: 11px; font-weight: 800; letter-spacing: 0.8px; "
+            "padding: 0 2px; border: 0; background: transparent; }"
+            "QProgressBar { "
+            "background-color: #12070a; border: 1px solid #5d3139; border-radius: 6px; "
+            "padding: 0; min-height: 10px; max-height: 10px; }"
+            "QProgressBar::chunk { "
+            f"background-color: {chunk_color}; border-radius: 5px; margin: 1px; "
+            "}"
+        )
+
+    def _update_session_badge(self):
+        badge = getattr(self, "session_mode_badge", None)
+        if badge is None:
+            return
+        live = bool(getattr(self.controller, "is_live_mode", lambda: False)())
+        mode_text = "LIVE" if live else "PAPER"
+        exchange = str(
+            getattr(getattr(self.controller, "broker", None), "exchange_name", None)
+            or getattr(getattr(getattr(self.controller, "config", None), "broker", None), "exchange", "")
+            or ""
+        ).upper() or "BROKER"
+        badge.setText(f"{mode_text} | {exchange}")
+        badge.setStyleSheet(self._session_badge_style(live=live))
+        account = getattr(self.controller, "current_account_label", lambda: "Not set")()
+        badge.setToolTip(f"Mode: {mode_text}\nBroker: {exchange}\nAccount: {account}")
+        self._update_live_trading_bar()
+
+    def _update_live_trading_bar(self):
+        frame = getattr(self, "live_trading_bar_frame", None)
+        label = getattr(self, "live_trading_bar_label", None)
+        bar = getattr(self, "live_trading_bar", None)
+        if frame is None or label is None or bar is None:
+            return
+
+        live_mode = bool(getattr(self.controller, "is_live_mode", lambda: False)())
+        if not live_mode:
+            frame.setVisible(False)
+            return
+
+        frame.setVisible(True)
+        armed = bool(self.autotrading_enabled)
+        if armed:
+            label.setText("LIVE TRADING ACTIVE")
+            label.setToolTip("Live session is active and AI trading is currently enabled.")
+        else:
+            label.setText("LIVE MODE ARMED")
+            label.setToolTip("Live broker session is open. AI trading is currently off.")
+        frame.setStyleSheet(self._live_trading_bar_style(armed=armed))
+        bar.setRange(0, 0)
+        bar.setTextVisible(False)
+        bar.setFormat("")
+
+
+    def _update_license_badge(self):
+        badge = getattr(self, "license_badge", None)
+        if badge is None:
+            return
+        status = {}
+        if hasattr(self.controller, "get_license_status"):
+            try:
+                status = self.controller.get_license_status()
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                status = {}
+        tier = str(status.get("tier", "community") or "community").lower()
+        badge_text = str(status.get("badge", "FREE") or "FREE").upper()
+        if tier == "full":
+            background, border, text = "#1f3424", "#40bf73", "#ddffee"
+        elif tier == "subscription":
+            background, border, text = "#102d3a", "#49b6ff", "#dff5ff"
+        elif tier == "trial":
+            background, border, text = "#3a2a10", "#e3b04b", "#fff2d6"
+        else:
+            background, border, text = "#2b2630", "#80798f", "#ece8f5"
+        badge.setText(badge_text)
+        badge.setStyleSheet(
+            "QLabel { "
+            f"background-color: {background}; color: {text}; border: 1px solid {border}; "
+            "border-radius: 12px; padding: 8px 12px; font-weight: 800; letter-spacing: 0.5px; }"
+        )
+        badge.setToolTip(
+            f"{status.get('plan_name', 'License')} | {status.get('summary', 'Status unavailable')}\n"
+            f"{status.get('description', '')}"
+        )
+
+    def _open_stellar_asset_explorer_window(self) -> None:
+        """Placeholder for dynamically patched Stellar explorer method."""
+        # This method is set via module-level hotfix patching later in the file.
+        pass
+
+    def _handle_license_status_change(self):
+        self._update_license_badge()
+        if hasattr(self, "status_labels"):
+            self._refresh_terminal()
+
+    def _update_kill_switch_button(self):
+        button = getattr(self, "kill_switch_button", None)
+        if button is None:
+            return
+        active = bool(getattr(self.controller, "is_emergency_stop_active", lambda: False)())
+        if active:
+            button.setText("Resume")
+            button.setToolTip("Clear the emergency lock so new orders can be submitted again.")
+        else:
+            button.setText("Kill Switch")
+            button.setToolTip("Stop auto trading, cancel open orders, close tracked positions, and block new entries.")
+
     def _set_active_timeframe_button(self, active_tf):
         for tf, button in self.timeframe_buttons.items():
             button.setChecked(tf == active_tf)
@@ -790,16 +1542,19 @@ class Terminal(QMainWindow):
 
     def _update_autotrade_button(self):
         scope_suffix = f" [{self._autotrade_scope_label()}]"
+        phase = getattr(self, "_spinner_index", 0) % 3
+        self.auto_button.setChecked(bool(self.autotrading_enabled))
         if self.autotrading_enabled:
-            self.auto_button.setText(f"{self._tr('terminal.autotrade.on')}{scope_suffix}")
+            live_texts = ["AI Trading ON", "AI Trading ON.", "AI Trading ON.."]
+            self.auto_button.setText(f"{live_texts[phase]}{scope_suffix}")
             self.auto_button.setStyleSheet(
                 """
                 QPushButton {
                     background-color: #123524;
                     color: #d7ffe9;
-                    border: 1px solid #28a86b;
+                    border: 2px solid #32d296;
                     border-radius: 14px;
-                    padding: 9px 16px;
+                    padding: 10px 18px;
                     font-weight: 700;
                 }
                 QPushButton:hover {
@@ -809,15 +1564,15 @@ class Terminal(QMainWindow):
             )
             self._update_trading_activity_indicator(active=True)
         else:
-            self.auto_button.setText(f"{self._tr('terminal.autotrade.off')}{scope_suffix}")
+            self.auto_button.setText(f"AI Trading OFF{scope_suffix}")
             self.auto_button.setStyleSheet(
                 """
                 QPushButton {
                     background-color: #34161a;
                     color: #ffd9de;
-                    border: 1px solid #b45b68;
+                    border: 2px solid #b45b68;
                     border-radius: 14px;
-                    padding: 9px 16px;
+                    padding: 10px 18px;
                     font-weight: 700;
                 }
                 QPushButton:hover {
@@ -826,6 +1581,12 @@ class Terminal(QMainWindow):
                 """
             )
             self._update_trading_activity_indicator(active=False)
+        self.auto_button.setMinimumWidth(164)
+        self.auto_button.setToolTip(
+            "Turn AI auto trading on or off for the current scope. "
+            "When enabled, the bot scans the chosen symbols and sends live signals/orders."
+        )
+        self._update_live_trading_bar()
 
     def _update_trading_activity_indicator(self, active=None):
         label = getattr(self, "trading_activity_label", None)
@@ -870,7 +1631,8 @@ class Terminal(QMainWindow):
             self.controller.time_frame
         )
 
-        self._restore_settings()
+        self.chart_tabs.setUsesScrollButtons(True)
+        self.chart_tabs.tabBar().setExpanding(False)
         self.apply_language()
 
     # ==========================================================
@@ -910,6 +1672,9 @@ class Terminal(QMainWindow):
         self.action_cancel_orders = QAction(self)
         self.action_cancel_orders.triggered.connect(self._cancel_all_orders)
         self.trading_menu.addAction(self.action_cancel_orders)
+        self.action_kill_switch = QAction("Emergency Kill Switch", self)
+        self.action_kill_switch.triggered.connect(self._toggle_emergency_stop)
+        self.trading_menu.addAction(self.action_kill_switch)
 
         self.backtest_menu = menu_bar.addMenu("")
         self.action_run_backtest = QAction(self)
@@ -920,7 +1685,10 @@ class Terminal(QMainWindow):
         self.backtest_menu.addAction(self.action_run_backtest)
         self.action_optimize_strategy = QAction(self)
         self.action_optimize_strategy.triggered.connect(self._optimize_strategy)
+        self.action_optimize_strategy.setShortcut("Ctrl+Shift+O")
         self.backtest_menu.addAction(self.action_optimize_strategy)
+
+        self.strategy_menu = menu_bar.addMenu("")
 
         self.charts_menu = menu_bar.addMenu("")
         self.action_new_chart = QAction(self)
@@ -956,11 +1724,19 @@ class Terminal(QMainWindow):
         self.action_add_indicator = QAction(self)
         self.action_add_indicator.triggered.connect(self._add_indicator_to_current_chart)
         self.charts_menu.addAction(self.action_add_indicator)
+        self.action_remove_indicator = QAction(self)
+        self.action_remove_indicator.triggered.connect(self._remove_indicator_from_current_chart)
+        self.charts_menu.addAction(self.action_remove_indicator)
         self.toggle_bid_ask_lines_action = QAction(self)
         self.toggle_bid_ask_lines_action.setCheckable(True)
         self.toggle_bid_ask_lines_action.setChecked(self.show_bid_ask_lines)
         self.toggle_bid_ask_lines_action.triggered.connect(self._toggle_bid_ask_lines)
         self.charts_menu.addAction(self.toggle_bid_ask_lines_action)
+        self.toggle_volume_bar_action = QAction(self)
+        self.toggle_volume_bar_action.setCheckable(True)
+        self.toggle_volume_bar_action.setChecked(getattr(self, "show_chart_volume", False))
+        self.toggle_volume_bar_action.triggered.connect(self._toggle_chart_volume)
+        self.charts_menu.addAction(self.toggle_volume_bar_action)
 
         self.data_menu = menu_bar.addMenu("")
         self.action_refresh_markets = QAction(self)
@@ -981,6 +1757,9 @@ class Terminal(QMainWindow):
         self.action_app_settings = QAction(self)
         self.action_app_settings.triggered.connect(self._open_settings)
         self.settings_menu.addAction(self.action_app_settings)
+        self.action_risk_settings = QAction("Risk Settings", self)
+        self.action_risk_settings.triggered.connect(self._open_risk_settings)
+        self.settings_menu.addAction(self.action_risk_settings)
         self.action_portfolio_view = QAction(self)
         self.action_portfolio_view.triggered.connect(self._show_portfolio_exposure)
         self.settings_menu.addAction(self.action_portfolio_view)
@@ -994,16 +1773,101 @@ class Terminal(QMainWindow):
             self.language_menu.addAction(action)
             self.language_actions[code] = action
 
-        self.tools_menu = menu_bar.addMenu("")
+        self.action_market_chat = QAction("Sopotek Pilot", self)
+        self.action_market_chat.triggered.connect(self._open_market_chat_window)
+        self.action_recommendations = QAction("Recommendations", self)
+        self.action_recommendations.triggered.connect(self._open_recommendations_window)
         self.action_ml_monitor = QAction(self)
         self.action_ml_monitor.triggered.connect(self._open_ml_monitor)
-        self.tools_menu.addAction(self.action_ml_monitor)
         self.action_logs = QAction(self)
         self.action_logs.triggered.connect(self._open_logs)
-        self.tools_menu.addAction(self.action_logs)
         self.action_performance = QAction(self)
         self.action_performance.triggered.connect(self._open_performance)
+        self.action_performance.setShortcut("Ctrl+Shift+P")
+        self.action_closed_journal = QAction("Closed Journal", self)
+        self.action_closed_journal.triggered.connect(self._open_closed_journal_window)
+        self.action_trade_checklist = QAction("Trade Checklist", self)
+        self.action_trade_checklist.triggered.connect(self._open_trade_checklist_window)
+        self.action_trade_checklist.setShortcut("Ctrl+Shift+K")
+        self.action_journal_review = QAction("Journal Review", self)
+        self.action_journal_review.triggered.connect(self._open_trade_journal_review_window)
+        self.action_system_health = QAction("System Health", self)
+        self.action_system_health.triggered.connect(self._open_system_health_window)
+        self.action_quant_pm = QAction("Quant PM", self)
+        self.action_quant_pm.triggered.connect(self._open_quant_pm_window)
+        self.action_ml_research = QAction("ML Research Lab", self)
+        self.action_ml_research.triggered.connect(self._open_ml_research_window)
+        self.action_position_analysis = QAction("Position Analysis", self)
+        self.action_position_analysis.triggered.connect(self._open_position_analysis_window)
+        self.action_position_analysis.setShortcut("Ctrl+Shift+I")
+        self.action_strategy_optimization = QAction("Strategy Optimization", self)
+        self.action_strategy_optimization.triggered.connect(self._optimize_strategy)
+        self.action_strategy_assigner = QAction("Strategy Assigner", self)
+        self.action_strategy_assigner.triggered.connect(self._open_strategy_assignment_window)
+        self.action_strategy_scorecard = QAction("Strategy Scorecard", self)
+        self.action_strategy_scorecard.triggered.connect(self._open_strategy_scorecard_dock)
+        self.action_strategy_debug = QAction("Strategy Debug", self)
+        self.action_strategy_debug.triggered.connect(self._open_strategy_debug_dock)
+        self.action_system_console = QAction("System Console", self)
+        self.action_system_console.triggered.connect(self._open_system_console_dock)
+        self.action_system_status = QAction("System Status", self)
+        self.action_system_status.triggered.connect(self._open_system_status_dock)
+        self.action_stellar_asset_explorer = QAction("Stellar Asset Explorer", self)
+        self.action_stellar_asset_explorer.triggered.connect(self._open_stellar_asset_explorer_window)
+
+        self.strategy_menu.addAction(self.action_strategy_optimization)
+        self.strategy_menu.addAction(self.action_strategy_assigner)
+        self.strategy_menu.addSeparator()
+        self.strategy_menu.addAction(self.action_strategy_scorecard)
+        self.strategy_menu.addAction(self.action_strategy_debug)
+
+        self.risk_menu = menu_bar.addMenu("")
+        self.risk_menu.addAction(self.action_risk_settings)
+        self.risk_menu.addAction(self.action_portfolio_view)
+        self.risk_menu.addAction(self.action_position_analysis)
+        self.risk_menu.addAction(self.action_trade_checklist)
+        self.risk_menu.addSeparator()
+        self.risk_menu.addAction(self.action_system_health)
+        self.risk_menu.addAction(self.action_kill_switch)
+
+        self.review_menu = menu_bar.addMenu("")
+        self.review_menu.addAction(self.action_performance)
+        self.review_menu.addAction(self.action_recommendations)
+        self.review_menu.addAction(self.action_closed_journal)
+        self.review_menu.addAction(self.action_journal_review)
+        self.review_menu.addSeparator()
+        self.review_menu.addAction(self.action_generate_report)
+        self.review_menu.addAction(self.action_export_trades)
+
+        self.research_menu = menu_bar.addMenu("")
+        self.research_menu.addAction(self.action_market_chat)
+        self.research_menu.addAction(self.action_quant_pm)
+        self.research_menu.addAction(self.action_ml_monitor)
+        self.research_menu.addAction(self.action_ml_research)
+        self.research_menu.addSeparator()
+        self.research_menu.addAction(self.action_strategy_optimization)
+        self.research_menu.addAction(self.action_strategy_assigner)
+        self.research_menu.addAction(self.action_run_backtest)
+        self.research_menu.addAction(self.action_stellar_asset_explorer)
+
+        self.tools_menu = menu_bar.addMenu("")
+        self.tools_menu.addAction(self.action_market_chat)
+        self.tools_menu.addAction(self.action_recommendations)
+        self.tools_menu.addAction(self.action_ml_monitor)
+        self.tools_menu.addAction(self.action_logs)
+        self.tools_menu.addAction(self.action_system_console)
+        self.tools_menu.addAction(self.action_system_status)
         self.tools_menu.addAction(self.action_performance)
+        self.tools_menu.addAction(self.action_closed_journal)
+        self.tools_menu.addAction(self.action_trade_checklist)
+        self.tools_menu.addAction(self.action_journal_review)
+        self.tools_menu.addAction(self.action_system_health)
+        self.tools_menu.addAction(self.action_quant_pm)
+        self.tools_menu.addAction(self.action_ml_research)
+        self.tools_menu.addAction(self.action_position_analysis)
+        self.tools_menu.addAction(self.action_strategy_optimization)
+        self.tools_menu.addAction(self.action_strategy_assigner)
+        self.tools_menu.addAction(self.action_stellar_asset_explorer)
 
         self.help_menu = menu_bar.addMenu("")
         self.action_documentation = QAction(self)
@@ -1013,6 +1877,9 @@ class Terminal(QMainWindow):
         self.action_api_docs.triggered.connect(self._open_api_docs)
         self.help_menu.addAction(self.action_api_docs)
         self.help_menu.addSeparator()
+        self.action_license = QAction("License", self)
+        self.action_license.triggered.connect(self._open_license_manager)
+        self.help_menu.addAction(self.action_license)
         self.action_about = QAction(self)
         self.action_about.triggered.connect(self._show_about)
         self.help_menu.addAction(self.action_about)
@@ -1039,15 +1906,20 @@ class Terminal(QMainWindow):
             )
 
     def apply_language(self):
+        previous_language = getattr(self, "_applied_language_code", None)
         self.setWindowTitle(self._tr("terminal.window_title"))
 
         if hasattr(self, "file_menu"):
             self.file_menu.setTitle(self._tr("terminal.menu.file"))
             self.trading_menu.setTitle(self._tr("terminal.menu.trading"))
             self.backtest_menu.setTitle(self._tr("terminal.menu.backtesting"))
+            self.strategy_menu.setTitle("Strategy")
             self.charts_menu.setTitle(self._tr("terminal.menu.charts"))
             self.data_menu.setTitle(self._tr("terminal.menu.data"))
             self.settings_menu.setTitle(self._tr("terminal.menu.settings"))
+            self.risk_menu.setTitle(self._tr("terminal.menu.risk"))
+            self.review_menu.setTitle(self._tr("terminal.menu.review"))
+            self.research_menu.setTitle(self._tr("terminal.menu.research"))
             self.language_menu.setTitle(self._tr("terminal.menu.language"))
             self.tools_menu.setTitle(self._tr("terminal.menu.tools"))
             self.help_menu.setTitle(self._tr("terminal.menu.help"))
@@ -1060,8 +1932,9 @@ class Terminal(QMainWindow):
             self.action_manual_trade.setText(self._tr("terminal.action.manual_trade"))
             self.action_close_all.setText(self._tr("terminal.action.close_all"))
             self.action_cancel_orders.setText(self._tr("terminal.action.cancel_all"))
+            self.action_kill_switch.setText("Emergency Kill Switch")
             self.action_run_backtest.setText(self._tr("terminal.action.run_backtest"))
-            self.action_optimize_strategy.setText(self._tr("terminal.action.optimize"))
+            self.action_optimize_strategy.setText("Strategy Optimization")
             self.action_new_chart.setText(self._tr("terminal.action.new_chart"))
             self.action_multi_chart.setText(self._tr("terminal.action.multi_chart"))
             self.action_detach_chart.setText("Detach Current Tab")
@@ -1070,16 +1943,36 @@ class Terminal(QMainWindow):
             self.action_cascade_chart_windows.setText("Cascade Chart Windows")
             self.action_candle_colors.setText(self._tr("terminal.action.candle_colors"))
             self.action_add_indicator.setText(self._tr("terminal.action.add_indicator"))
+            self.action_remove_indicator.setText("Remove Indicator")
             self.toggle_bid_ask_lines_action.setText(self._tr("terminal.action.toggle_bid_ask"))
+            self.toggle_volume_bar_action.setText("Volume Bar")
             self.action_refresh_markets.setText(self._tr("terminal.action.refresh_markets"))
             self.action_refresh_chart.setText(self._tr("terminal.action.refresh_chart"))
             self.action_refresh_orderbook.setText(self._tr("terminal.action.refresh_orderbook"))
             self.action_reload_balance.setText(self._tr("terminal.action.reload_balance"))
             self.action_app_settings.setText(self._tr("terminal.action.app_settings"))
+            self.action_risk_settings.setText(self._tr("terminal.action.risk_settings"))
             self.action_portfolio_view.setText(self._tr("terminal.action.portfolio"))
+            self.action_market_chat.setText("Sopotek Pilot")
+            self.action_recommendations.setText("Recommendations")
             self.action_ml_monitor.setText(self._tr("terminal.action.ml_monitor"))
             self.action_logs.setText(self._tr("terminal.action.logs"))
             self.action_performance.setText(self._tr("terminal.action.performance"))
+            self.action_closed_journal.setText("Closed Journal")
+            self.action_trade_checklist.setText("Trade Checklist")
+            self.action_journal_review.setText("Journal Review")
+            self.action_system_health.setText("System Health")
+            self.action_quant_pm.setText("Quant PM")
+            self.action_ml_research.setText("ML Research Lab")
+            self.action_position_analysis.setText("Position Analysis")
+            self.action_strategy_optimization.setText("Strategy Optimization")
+            self.action_strategy_assigner.setText("Strategy Assigner")
+            self.action_strategy_scorecard.setText("Strategy Scorecard")
+            self.action_strategy_debug.setText("Strategy Debug")
+            self.action_system_console.setText("System Console")
+            self.action_system_status.setText("System Status")
+            self.action_stellar_asset_explorer.setText("Stellar Asset Explorer")
+            self.action_license.setText("License")
             self.action_documentation.setText(self._tr("terminal.action.documentation"))
             self.action_api_docs.setText(self._tr("terminal.action.api_reference"))
             self.action_about.setText(self._tr("terminal.action.about"))
@@ -1099,6 +1992,12 @@ class Terminal(QMainWindow):
         if getattr(self, "system_status_button", None) is not None:
             self.system_status_button.setText("Status")
             self.system_status_button.setToolTip("Show or hide the System Status panel")
+        if getattr(self, "kill_switch_button", None) is not None:
+            self._update_kill_switch_button()
+        if getattr(self, "session_mode_badge", None) is not None:
+            self._update_session_badge()
+        if getattr(self, "license_badge", None) is not None:
+            self._update_license_badge()
         if getattr(self, "trading_activity_label", None) is not None:
             self.trading_activity_label.setToolTip("Shows whether AI trading is currently active")
 
@@ -1112,17 +2011,36 @@ class Terminal(QMainWindow):
         if getattr(self, "connection_indicator", None) is not None:
             self.connection_indicator.setText(f"* {self._tr(status_key)}")
 
+        apply_runtime_translations(
+            self,
+            getattr(self.controller, "language_code", "en"),
+            previous_language=previous_language,
+        )
+        self._applied_language_code = getattr(self.controller, "language_code", "en")
+
     # ==========================================================
     # TOOLBAR
     # ==========================================================
 
     def _create_toolbar(self):
+        frame_style = "QFrame { background-color: #0f1726; border: 1px solid #24324a; border-radius: 16px; }"
+
         toolbar = QToolBar("Main Toolbar")
+        toolbar.setObjectName("terminal_main_toolbar")
         toolbar.setMovable(False)
         toolbar.setFloatable(False)
         toolbar.setStyleSheet("QToolBar { spacing: 8px; padding: 6px; }")
         self.toolbar = toolbar
-        self.addToolBar(toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+
+        controls_toolbar = QToolBar("Trading Controls")
+        controls_toolbar.setObjectName("terminal_controls_toolbar")
+        controls_toolbar.setMovable(False)
+        controls_toolbar.setFloatable(False)
+        controls_toolbar.setStyleSheet("QToolBar { spacing: 8px; padding: 4px 6px 8px 6px; }")
+        self.secondary_toolbar = controls_toolbar
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, controls_toolbar)
 
         symbol_box = QFrame()
         symbol_box.setStyleSheet(
@@ -1137,7 +2055,10 @@ class Terminal(QMainWindow):
         symbol_layout.addWidget(self.symbol_label)
 
         self.symbol_picker = QComboBox()
-        self.symbol_picker.setMinimumWidth(170)
+        self.symbol_picker.setMinimumWidth(150)
+        self.symbol_picker.setMaximumWidth(240)
+        self.symbol_picker.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.symbol_picker.setMinimumContentsLength(10)
         self.symbol_picker.setStyleSheet(
             """
             QComboBox {
@@ -1168,9 +2089,7 @@ class Terminal(QMainWindow):
         toolbar.addWidget(symbol_box)
 
         timeframe_box = QFrame()
-        timeframe_box.setStyleSheet(
-            "QFrame { background-color: #0f1726; border: 1px solid #24324a; border-radius: 16px; }"
-        )
+        timeframe_box.setStyleSheet(frame_style)
         timeframe_layout = QHBoxLayout(timeframe_box)
         timeframe_layout.setContentsMargins(10, 6, 10, 6)
         timeframe_layout.setSpacing(6)
@@ -1189,42 +2108,68 @@ class Terminal(QMainWindow):
 
         toolbar.addWidget(timeframe_box)
 
+        toolbar_spacer = QWidget()
+        toolbar_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(toolbar_spacer)
+
         utility_box = QFrame()
-        utility_box.setStyleSheet(
-            "QFrame { background-color: #0f1726; border: 1px solid #24324a; border-radius: 16px; }"
-        )
+        utility_box.setStyleSheet(frame_style)
         utility_layout = QHBoxLayout(utility_box)
         utility_layout.setContentsMargins(8, 6, 8, 6)
         utility_layout.setSpacing(8)
 
-        self.system_status_button = QPushButton("Status")
-        self.system_status_button.setStyleSheet(self._action_button_style())
-        self.system_status_button.setMinimumWidth(84)
-        self.system_status_button.setToolTip("Show or hide the System Status panel")
-        self.system_status_button.clicked.connect(self._show_system_status_panel)
-        utility_layout.addWidget(self.system_status_button)
+        self.connection_indicator.hide()
+        utility_layout.addWidget(self.heartbeat)
 
         self.screenshot_button = QPushButton(self._tr("terminal.toolbar.screenshot"))
         self.screenshot_button.setStyleSheet(self._action_button_style())
-        self.screenshot_button.setMinimumWidth(110)
+        self.screenshot_button.setMinimumWidth(96)
         self.screenshot_button.clicked.connect(self.take_screen_shot)
         utility_layout.addWidget(self.screenshot_button)
 
+        self.session_mode_badge = QLabel("PAPER")
+        self.session_mode_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        utility_layout.addWidget(self.session_mode_badge)
+
+        self.license_badge = QLabel("TRIAL")
+        self.license_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        utility_layout.addWidget(self.license_badge)
+
+        self.live_trading_bar_frame = QFrame()
+        self.live_trading_bar_frame.setMinimumWidth(148)
+        live_bar_layout = QVBoxLayout(self.live_trading_bar_frame)
+        live_bar_layout.setContentsMargins(10, 6, 10, 6)
+        live_bar_layout.setSpacing(4)
+        self.live_trading_bar_label = QLabel("LIVE MODE")
+        self.live_trading_bar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        live_bar_layout.addWidget(self.live_trading_bar_label)
+        self.live_trading_bar = QProgressBar()
+        self.live_trading_bar.setFixedWidth(128)
+        self.live_trading_bar.setFixedHeight(12)
+        self.live_trading_bar.setRange(0, 0)
+        self.live_trading_bar.setTextVisible(False)
+        live_bar_layout.addWidget(self.live_trading_bar, alignment=Qt.AlignmentFlag.AlignCenter)
+        utility_layout.addWidget(self.live_trading_bar_frame)
+
+        self.kill_switch_button = QPushButton("Kill Switch")
+        self.kill_switch_button.setStyleSheet(self._danger_button_style())
+        self.kill_switch_button.setMinimumWidth(102)
+        self.kill_switch_button.clicked.connect(self._toggle_emergency_stop)
+        utility_layout.addWidget(self.kill_switch_button)
+
         self.trading_activity_label = QLabel("AI Idle")
-        self.trading_activity_label.setMinimumWidth(74)
+        self.trading_activity_label.setMinimumWidth(70)
         self.trading_activity_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         utility_layout.addWidget(self.trading_activity_label)
 
-        toolbar.addWidget(utility_box)
+        controls_toolbar.addWidget(utility_box)
 
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
+        controls_spacer = QWidget()
+        controls_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        controls_toolbar.addWidget(controls_spacer)
 
         actions_box = QFrame()
-        actions_box.setStyleSheet(
-            "QFrame { background-color: #0f1726; border: 1px solid #24324a; border-radius: 16px; }"
-        )
+        actions_box.setStyleSheet(frame_style)
         actions_layout = QHBoxLayout(actions_box)
         actions_layout.setContentsMargins(8, 6, 8, 6)
         actions_layout.setSpacing(8)
@@ -1234,8 +2179,8 @@ class Terminal(QMainWindow):
         actions_layout.addWidget(scope_label)
 
         self.autotrade_scope_picker = QComboBox()
-        self.autotrade_scope_picker.setMinimumWidth(120)
-        self.autotrade_scope_picker.setMaximumWidth(140)
+        self.autotrade_scope_picker.setMinimumWidth(108)
+        self.autotrade_scope_picker.setMaximumWidth(126)
         self.autotrade_scope_picker.setStyleSheet(
             """
             QComboBox {
@@ -1259,45 +2204,18 @@ class Terminal(QMainWindow):
         actions_layout.addWidget(self.autotrade_scope_picker)
 
         self.auto_button = QPushButton()
+        self.auto_button.setCheckable(True)
         self.auto_button.clicked.connect(self._toggle_autotrading)
         actions_layout.addWidget(self.auto_button)
 
-        toolbar.addWidget(actions_box)
+        controls_toolbar.addWidget(actions_box)
 
         self._set_active_timeframe_button(self.current_timeframe)
         self._apply_autotrade_scope(self.autotrade_scope_value)
         self._update_autotrade_button()
-        return
-
-        toolbar = QToolBar("Main Toolbar")
-        self.addToolBar(toolbar)
-        toolbar.addWidget(self.connection_indicator)
-
-        self.heartbeat.setText("●")
-        toolbar.addWidget(self.heartbeat)
-
-        for tf in ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mn"]:
-            btn = QPushButton(tf)
-            btn.clicked.connect(lambda _, t=tf: self._set_timeframe(t))
-
-
-            toolbar.addWidget(btn)
-            toolbar.addSeparator()
-
-
-            self.timeframe_buttons[tf] = btn
-
-        toolbar.addSeparator()
-        self.auto_button = QPushButton("AutoTrading OFF")
-        self.auto_button.clicked.connect(self._toggle_autotrading)
-
-        toolbar.addWidget(self.auto_button)
-
-
-
-        screenshot_btn = QPushButton("Screenshot")
-        screenshot_btn.clicked.connect(self.take_screen_shot)
-        toolbar.addWidget(screenshot_btn)
+        self._update_session_badge()
+        self._update_live_trading_bar()
+        self._update_kill_switch_button()
 
     # ==========================================================
     # AUTOTRADING
@@ -1331,7 +2249,7 @@ class Terminal(QMainWindow):
             if hasattr(self.controller, "get_active_autotrade_symbols"):
                 try:
                     active_symbols = self.controller.get_active_autotrade_symbols()
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     active_symbols = []
             if not active_symbols:
                 message = "No symbols are available for the chosen AI scope."
@@ -1367,6 +2285,63 @@ class Terminal(QMainWindow):
             if hasattr(self, "system_console"):
                 self.system_console.log("AI auto trading disabled.", "INFO")
 
+    def _stop_autotrading_for_emergency(self):
+        self.autotrading_enabled = False
+        self._update_autotrade_button()
+        self.autotrade_toggle.emit(False)
+        trading_system = getattr(self.controller, "trading_system", None)
+        if trading_system is not None:
+            trading_system.running = False
+
+    def _toggle_emergency_stop(self):
+        if bool(getattr(self.controller, "is_emergency_stop_active", lambda: False)()):
+            self.controller.clear_emergency_stop()
+            self._update_kill_switch_button()
+            self._refresh_terminal()
+            self.system_console.log("Emergency lock cleared. New orders may be submitted again.", "WARN")
+            self._show_async_message(
+                "Trading Resumed",
+                "Emergency lock cleared. Auto trading remains OFF until you enable it again.",
+                QMessageBox.Icon.Information,
+            )
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Emergency Kill Switch",
+            (
+                "Activate the emergency kill switch?\n\n"
+                "This will stop auto trading, cancel open orders, close tracked positions, "
+                "and block new entries until you resume manually."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        asyncio.get_event_loop().create_task(self._activate_emergency_stop_async())
+
+    async def _activate_emergency_stop_async(self):
+        self.controller.activate_emergency_stop("Emergency kill switch engaged by operator")
+        self._update_kill_switch_button()
+        self._refresh_terminal()
+        self._stop_autotrading_for_emergency()
+        self.system_console.log("Emergency kill switch engaged. Canceling open orders and closing tracked positions.", "WARN")
+        try:
+            await self._cancel_all_orders_async(show_dialog=False)
+        except (asyncio.CancelledError, RuntimeError, AttributeError):
+            pass
+        try:
+            await self._close_all_positions_async(show_dialog=False)
+        except (asyncio.CancelledError, RuntimeError, AttributeError):
+            pass
+        self._refresh_terminal()
+        self._show_async_message(
+            "Emergency Kill Switch",
+            "Emergency lock is active. Auto trading is OFF and new orders are blocked until you press Resume.",
+            QMessageBox.Icon.Warning,
+        )
+
     # ==========================================================
     # CHARTS
     # ==========================================================
@@ -1378,8 +2353,11 @@ class Terminal(QMainWindow):
             self.controller,
             candle_up_color=self.candle_up_color,
             candle_down_color=self.candle_down_color,
+            chart_background=self.chart_background_color,
+            grid_color=self.chart_grid_color,
+            axis_color=self.chart_axis_color,
         )
-        chart.set_bid_ask_lines_visible(self.show_bid_ask_lines)
+        self._configure_chart_widget(chart)
 
         row = self._find_market_watch_row(symbol)
         if row is None:
@@ -1389,6 +2367,7 @@ class Terminal(QMainWindow):
         self.chart_tabs.addTab(chart, f"{symbol} ({timeframe})")
         chart.link_all_charts(self.chart_tabs.count())
         self.chart_tabs.setCurrentWidget(chart)
+        self._set_active_chart_widget(chart)
         if self.symbol_picker is not None:
             self.symbol_picker.setCurrentText(symbol)
         self._request_active_orderbook()
@@ -1410,26 +2389,26 @@ class Terminal(QMainWindow):
         for chart in self._chart_widgets_in_page(page):
             try:
                 chart.refresh_context_display()
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
             last_df = getattr(chart, "_last_df", None)
             if last_df is not None and hasattr(last_df, "empty") and not last_df.empty:
                 try:
                     chart.update_candles(last_df.copy())
-                except Exception:
+                except (RuntimeError, AttributeError, TypeError, ValueError):
                     self._schedule_chart_data_refresh(chart)
             else:
                 self._schedule_chart_data_refresh(chart)
             try:
                 chart.updateGeometry()
                 chart.repaint()
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
 
         try:
             window.centralWidget().updateGeometry()
             window.centralWidget().repaint()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError):
             pass
         if not getattr(window, "_chart_layout_save_hook_installed", False):
             window.destroyed.connect(lambda *_: self._save_detached_chart_layouts())
@@ -1442,16 +2421,91 @@ class Terminal(QMainWindow):
 
         if hasattr(self.controller, "request_candle_data"):
             asyncio.get_event_loop().create_task(
-                self.controller.request_candle_data(
-                    symbol=chart.symbol,
-                    timeframe=chart.timeframe,
+                self._request_chart_data_for_widget(
+                    chart,
                     limit=self._history_request_limit(),
                 )
             )
+        else:
+            asyncio.get_event_loop().create_task(
+                self._reload_chart_data(chart.symbol, chart.timeframe)
+            )
 
-        asyncio.get_event_loop().create_task(
-            self._reload_chart_data(chart.symbol, chart.timeframe)
-        )
+    def _register_chart_request_token(self, chart):
+        tokens = getattr(self, "_chart_request_tokens", None)
+        if not isinstance(tokens, dict):
+            tokens = {}
+            self._chart_request_tokens = tokens
+        token = object()
+        tokens[id(chart)] = token
+        return token
+
+    def _is_chart_request_current(self, chart, token):
+        if not isinstance(chart, ChartWidget):
+            return False
+        if not self._is_qt_object_alive(chart):
+            return False
+        tokens = getattr(self, "_chart_request_tokens", None)
+        if not isinstance(tokens, dict):
+            return False
+        return tokens.get(id(chart)) is token
+
+    async def _request_chart_data_for_widget(self, chart, limit=None):
+        if not isinstance(chart, ChartWidget):
+            return None
+        if not self._is_qt_object_alive(chart):
+            return None
+        if not hasattr(self.controller, "request_candle_data"):
+            return None
+
+        symbol = str(getattr(chart, "symbol", "") or "").strip()
+        timeframe = str(getattr(chart, "timeframe", getattr(self, "current_timeframe", "1h")) or "1h").strip() or "1h"
+        if not symbol:
+            return None
+
+        try:
+            requested_limit = int(limit if limit is not None else self._history_request_limit())
+        except Exception:
+            requested_limit = int(self._history_request_limit())
+        requested_limit = max(requested_limit, 1)
+
+        token = self._register_chart_request_token(chart)
+        if hasattr(chart, "set_loading_state"):
+            chart.set_loading_state(True, requested_bars=requested_limit)
+
+        try:
+            frame = await self.controller.request_candle_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=requested_limit,
+            )
+        except Exception as exc:
+            if self._is_chart_request_current(chart, token) and hasattr(chart, "set_no_data_state"):
+                chart.set_no_data_state(str(exc))
+            raise
+
+        if not self._is_chart_request_current(chart, token):
+            return frame
+
+        frame = candles_to_df(frame)
+        if frame is None or getattr(frame, "empty", False):
+            if hasattr(chart, "set_no_data_state"):
+                chart.set_no_data_state()
+            return None
+
+        self._update_chart(symbol, frame)
+
+        try:
+            received_count = int(len(frame.index))
+        except Exception:
+            received_count = int(len(frame))
+
+        if requested_limit > 0 and received_count < requested_limit:
+            if hasattr(chart, "set_history_notice"):
+                chart.set_history_notice(received_count, requested_limit)
+        elif hasattr(chart, "clear_data_status"):
+            chart.clear_data_status()
+        return frame
 
     def _chart_page_title(self, page, fallback_index=None):
         charts = self._chart_widgets_in_page(page)
@@ -1466,7 +2520,7 @@ class Terminal(QMainWindow):
         if fallback_index is not None and self._chart_tabs_ready():
             try:
                 return self.chart_tabs.tabText(fallback_index)
-            except Exception:
+            except (IndexError, RuntimeError):
                 pass
         return "Detached Chart"
 
@@ -1588,7 +2642,7 @@ class Terminal(QMainWindow):
         self._show_chart_page_in_window(page, title, detach_key, width=1320, height=860)
         self._save_detached_chart_layouts()
 
-    def _open_or_focus_detached_chart(self, symbol, timeframe=None, geometry=None):
+    def _open_or_focus_detached_chart(self, symbol, timeframe=None, geometry=None, compact_view=False):
         target_symbol = (symbol or "").strip().upper()
         target_timeframe = timeframe or self.current_timeframe
         if not target_symbol:
@@ -1603,7 +2657,11 @@ class Terminal(QMainWindow):
             existing_window.raise_()
             existing_window.activateWindow()
             page = existing_window.centralWidget()
+            if page is None:
+                return existing_window
             for chart in self._chart_widgets_in_page(page):
+                if hasattr(chart, "set_compact_view_mode"):
+                    chart.set_compact_view_mode(compact_view)
                 self._schedule_chart_data_refresh(chart)
             self._save_detached_chart_layouts()
             return existing_window
@@ -1615,6 +2673,9 @@ class Terminal(QMainWindow):
             except RuntimeError:
                 page = None
             if page is not None:
+                for chart in self._chart_widgets_in_page(page):
+                    if hasattr(chart, "set_compact_view_mode"):
+                        chart.set_compact_view_mode(compact_view)
                 self.chart_tabs.removeTab(existing_index)
                 page.setParent(None)
                 return self._show_chart_page_in_window(
@@ -1632,8 +2693,13 @@ class Terminal(QMainWindow):
             self.controller,
             candle_up_color=self.candle_up_color,
             candle_down_color=self.candle_down_color,
+            chart_background=self.chart_background_color,
+            grid_color=self.chart_grid_color,
+            axis_color=self.chart_axis_color,
         )
-        chart.set_bid_ask_lines_visible(self.show_bid_ask_lines)
+        self._configure_chart_widget(chart)
+        if hasattr(chart, "set_compact_view_mode"):
+            chart.set_compact_view_mode(compact_view)
         window = self._show_chart_page_in_window(
             chart,
             f"{target_symbol} ({target_timeframe})",
@@ -1643,6 +2709,70 @@ class Terminal(QMainWindow):
             geometry=geometry,
         )
         self._schedule_chart_data_refresh(chart)
+        self._save_detached_chart_layouts()
+        return window
+
+    def _open_or_focus_detached_chart_group(self, symbols, timeframe=None, geometry=None):
+        target_symbols = self._normalized_chart_symbols(symbols, max_count=4)
+        target_timeframe = str(timeframe or self.current_timeframe or "1h").strip().lower() or "1h"
+        if not target_symbols:
+            return None
+
+        detach_key = self._multi_chart_window_key(target_symbols, target_timeframe)
+        existing_window = self.detached_tool_windows.get(detach_key)
+        if self._is_qt_object_alive(existing_window):
+            if geometry is not None:
+                existing_window.setGeometry(geometry)
+            existing_window.showNormal()
+            existing_window.raise_()
+            existing_window.activateWindow()
+            page = existing_window.centralWidget()
+            for chart in self._chart_widgets_in_page(page):
+                self._schedule_chart_data_refresh(chart)
+            preferred_chart = self._preferred_chart_in_page(page)
+            if preferred_chart is not None:
+                self._set_active_chart_widget(preferred_chart)
+            self._save_detached_chart_layouts()
+            return existing_window
+
+        existing_index = self._find_multi_chart_tab(target_symbols, target_timeframe)
+        if existing_index >= 0:
+            try:
+                page = self.chart_tabs.widget(existing_index)
+            except RuntimeError:
+                page = None
+            if page is not None:
+                self.chart_tabs.removeTab(existing_index)
+                page.setParent(None)
+                window = self._show_chart_page_in_window(
+                    page,
+                    self._chart_page_title(page),
+                    detach_key,
+                    width=1320,
+                    height=860,
+                    geometry=geometry,
+                )
+                preferred_chart = self._preferred_chart_in_page(page)
+                if preferred_chart is not None:
+                    self._set_active_chart_widget(preferred_chart)
+                self._save_detached_chart_layouts()
+                return window
+
+        page = self._build_multi_chart_page(target_symbols, target_timeframe)
+        if page is None:
+            return None
+
+        window = self._show_chart_page_in_window(
+            page,
+            self._chart_page_title(page),
+            detach_key,
+            width=1320,
+            height=860,
+            geometry=geometry,
+        )
+        preferred_chart = self._preferred_chart_in_page(page)
+        if preferred_chart is not None:
+            self._set_active_chart_widget(preferred_chart)
         self._save_detached_chart_layouts()
         return window
 
@@ -1658,13 +2788,13 @@ class Terminal(QMainWindow):
         if not charts:
             return
 
-        chart = charts[0]
+        chart = self._preferred_chart_in_page(page)
+        if chart is None:
+            return
 
-        self.current_timeframe = chart.timeframe
-        if self.symbol_picker is not None:
-            self.symbol_picker.setCurrentText(chart.symbol)
-
-        self._last_chart_request_key = (chart.symbol, chart.timeframe)
+        self._set_active_chart_widget(chart)
+        if hasattr(chart, "set_timeframe"):
+            chart.set_timeframe(chart.timeframe, emit_signal=False)
         for chart_widget in charts:
             self._schedule_chart_data_refresh(chart_widget)
         self._request_active_orderbook()
@@ -1677,6 +2807,134 @@ class Terminal(QMainWindow):
         )
         if ok and symbol:
             self._open_symbol_chart(symbol.upper(), self.current_timeframe)
+
+    def _configure_chart_widget(self, chart):
+        if not isinstance(chart, ChartWidget):
+            return chart
+        chart.set_bid_ask_lines_visible(self.show_bid_ask_lines)
+        chart.set_volume_panel_visible(getattr(self, "show_chart_volume", False))
+        if not bool(getattr(chart, "_sopotek_trade_signal_hooks_installed", False)):
+            chart.sigTradeLevelRequested.connect(self._handle_chart_trade_level_request)
+            chart.sigTradeLevelChanged.connect(self._handle_chart_trade_level_changed)
+            chart.sigTradeContextAction.connect(self._handle_chart_trade_context_action)
+            chart.sigTimeframeSelected.connect(lambda timeframe, chart_ref=chart: self._set_chart_timeframe(chart_ref, timeframe))
+            chart.sigActivated.connect(lambda chart_ref, _chart=chart: self._set_active_chart_widget(_chart, refresh_orderbook=True))
+            chart._sopotek_trade_signal_hooks_installed = True
+        return chart
+
+    def _handle_chart_trade_level_request(self, payload):
+        if not isinstance(payload, dict):
+            return
+        price = self._safe_float(payload.get("price"))
+        if price is None or price <= 0:
+            return
+        symbol = str(payload.get("symbol") or self._current_chart_symbol() or getattr(self, "symbol", "")).strip()
+        if not symbol:
+            return
+        self._open_manual_trade(
+            {
+                "symbol": symbol,
+                "order_type": "limit",
+                "price": price,
+                "source": "chart_double_click",
+                "timeframe": payload.get("timeframe"),
+            }
+        )
+
+    def _handle_chart_trade_level_changed(self, payload):
+        if not isinstance(payload, dict):
+            return
+        window = self.detached_tool_windows.get("manual_trade_ticket")
+        if not self._is_qt_object_alive(window):
+            return
+        symbol_picker = getattr(window, "_manual_trade_symbol_picker", None)
+        current_symbol = str(symbol_picker.currentText() or "").strip() if symbol_picker is not None else ""
+        if str(payload.get("symbol") or "").strip() != current_symbol:
+            return
+
+        level = str(payload.get("level") or "").strip().lower()
+        price = self._safe_float(payload.get("price"))
+        if price is None or price <= 0:
+            return
+
+        if level == "entry":
+            self._set_manual_trade_order_type(window, "limit")
+            self._set_manual_trade_text_field(window, "_manual_trade_price_input", price)
+        elif level == "stop_loss":
+            self._set_manual_trade_text_field(window, "_manual_trade_stop_loss_input", price)
+        elif level == "take_profit":
+            self._set_manual_trade_text_field(window, "_manual_trade_take_profit_input", price)
+
+    def _handle_chart_trade_context_action(self, payload):
+        if not isinstance(payload, dict):
+            return
+        action = str(payload.get("action") or "").strip().lower()
+        symbol = str(payload.get("symbol") or self._current_chart_symbol() or "").strip()
+        price = self._safe_float(payload.get("price"))
+        if action == "clear_levels":
+            self._clear_trade_overlays(symbol=symbol)
+            window = self.detached_tool_windows.get("manual_trade_ticket")
+            if self._is_qt_object_alive(window):
+                ticket_symbol = str(getattr(getattr(window, "_manual_trade_symbol_picker", None), "currentText", lambda: "")()).strip()
+                if ticket_symbol == symbol:
+                    self._set_manual_trade_text_field(window, "_manual_trade_price_input", None)
+                    self._set_manual_trade_text_field(window, "_manual_trade_stop_loss_input", None)
+                    self._set_manual_trade_text_field(window, "_manual_trade_take_profit_input", None)
+            return
+        if price is None or price <= 0 or not symbol:
+            return
+
+        if action == "buy_limit":
+            self._open_manual_trade(
+                {
+                    "symbol": symbol,
+                    "side": "buy",
+                    "order_type": "limit",
+                    "price": price,
+                    "source": "chart_context_menu",
+                    "timeframe": payload.get("timeframe"),
+                }
+            )
+            return
+        if action == "sell_limit":
+            self._open_manual_trade(
+                {
+                    "symbol": symbol,
+                    "side": "sell",
+                    "order_type": "limit",
+                    "price": price,
+                    "source": "chart_context_menu",
+                    "timeframe": payload.get("timeframe"),
+                }
+            )
+            return
+
+        window = self.detached_tool_windows.get("manual_trade_ticket")
+        if not self._is_qt_object_alive(window):
+            self._open_manual_trade(
+                {
+                    "symbol": symbol,
+                    "order_type": "limit",
+                    "price": price if action == "set_entry" else None,
+                    "stop_loss": price if action == "set_stop_loss" else None,
+                    "take_profit": price if action == "set_take_profit" else None,
+                    "source": "chart_context_menu",
+                    "timeframe": payload.get("timeframe"),
+                }
+            )
+            return
+
+        symbol_picker = getattr(window, "_manual_trade_symbol_picker", None)
+        if symbol_picker is not None:
+            symbol_picker.setCurrentText(symbol)
+        if action == "set_entry":
+            self._set_manual_trade_order_type(window, "limit")
+            self._set_manual_trade_text_field(window, "_manual_trade_price_input", price)
+        elif action == "set_stop_loss":
+            self._set_manual_trade_text_field(window, "_manual_trade_stop_loss_input", price)
+        elif action == "set_take_profit":
+            self._set_manual_trade_text_field(window, "_manual_trade_take_profit_input", price)
+        self._refresh_manual_trade_ticket(window)
 
     def _find_chart_tab(self, symbol, timeframe):
         if not self._chart_tabs_ready():
@@ -1703,6 +2961,8 @@ class Terminal(QMainWindow):
             detached_window.raise_()
             detached_window.activateWindow()
             page = detached_window.centralWidget()
+            if page is None:
+                return
             for chart in self._chart_widgets_in_page(page):
                 self._schedule_chart_data_refresh(chart)
             return
@@ -1721,40 +2981,74 @@ class Terminal(QMainWindow):
 
         self._open_symbol_chart(self.symbol_picker.currentText(), self.current_timeframe)
 
-    def _set_timeframe(self, tf="1h"):
-
-        self.current_timeframe = tf
-        self._set_active_timeframe_button(tf)
-
-        if not self._chart_tabs_ready():
+    def _set_chart_timeframe(self, chart, tf="1h"):
+        normalized_tf = str(tf or self.current_timeframe or "1h").strip().lower() or "1h"
+        page = self._chart_page_for_widget(chart)
+        if page is None:
             return
-
-        index = self.chart_tabs.currentIndex()
-        page = self.chart_tabs.widget(index)
         charts = self._chart_widgets_in_page(page)
+
+        self.current_timeframe = normalized_tf
+        self.controller.time_frame = normalized_tf
+        self.settings.setValue("terminal/current_timeframe", normalized_tf)
+        self._set_active_timeframe_button(normalized_tf)
+
         if not charts:
             return
 
-        primary_chart = charts[0]
-        for chart in charts:
-            chart.timeframe = tf
-            if hasattr(chart, "refresh_context_display"):
-                chart.refresh_context_display()
-            self._schedule_chart_data_refresh(chart)
+        anchor_chart = chart if chart in charts else charts[0]
+        for chart_widget in charts:
+            if hasattr(chart_widget, "set_timeframe"):
+                chart_widget.set_timeframe(normalized_tf, emit_signal=False)
+            else:
+                chart_widget.timeframe = normalized_tf
+                if hasattr(chart_widget, "refresh_context_display"):
+                    chart_widget.refresh_context_display()
+            self._schedule_chart_data_refresh(chart_widget)
 
-        if len(charts) == 1:
-            tab_text = f"{primary_chart.symbol} ({tf})"
-        else:
-            tab_text = f"Multi Chart ({tf})"
-        self.chart_tabs.setTabText(index, tab_text)
+        if self.symbol_picker is not None:
+            self.symbol_picker.setCurrentText(anchor_chart.symbol)
 
+        if self._chart_tabs_ready():
+            try:
+                index = self.chart_tabs.indexOf(page)
+            except RuntimeError:
+                index = -1
+            if index >= 0:
+                self.chart_tabs.setCurrentIndex(index)
+                self.chart_tabs.setTabText(index, self._chart_page_title(page, fallback_index=index))
+
+        if page is not None:
+            window = page.window()
+            if window is not None and window is not self and getattr(window, "_contains_chart_page", False):
+                window.setWindowTitle(self._chart_page_title(page))
+                self._save_detached_chart_layouts()
+
+        self._last_chart_request_key = (anchor_chart.symbol, normalized_tf)
         self._request_active_orderbook()
+
+    def _set_timeframe(self, tf="1h"):
+        chart = self._current_chart_widget()
+        if chart is None and self._chart_tabs_ready():
+            try:
+                chart = self.chart_tabs.currentWidget()
+            except RuntimeError:
+                chart = None
+        self._set_chart_timeframe(chart, tf)
 
     def _toggle_bid_ask_lines(self, checked):
         self.show_bid_ask_lines = bool(checked)
 
         for chart in self._iter_chart_widgets():
             chart.set_bid_ask_lines_visible(self.show_bid_ask_lines)
+
+    def _toggle_chart_volume(self, checked):
+        self.show_chart_volume = bool(checked)
+        for chart in self._iter_chart_widgets():
+            chart.set_volume_panel_visible(self.show_chart_volume)
+        settings = getattr(self, "settings", None)
+        if settings is not None:
+            settings.setValue("terminal/show_chart_volume", self.show_chart_volume)
 
     # ==========================================================
     # UPDATE METHODS
@@ -1763,20 +3057,86 @@ class Terminal(QMainWindow):
         if self._ui_shutting_down:
             return
 
-        df = candles_to_df(df)
+        fallback_frame = candles_to_df(df)
+        symbol_buffers = getattr(self.controller, "candle_buffers", {}).get(symbol, {})
 
         for chart in self._iter_chart_widgets():
-            if chart.symbol == symbol:
-                chart.update_candles(df)
+            if chart.symbol != symbol:
+                continue
+            chart_frame = symbol_buffers.get(chart.timeframe) if isinstance(symbol_buffers, dict) else None
+            if chart_frame is None:
+                chart_frame = fallback_frame
+            else:
+                chart_frame = candles_to_df(chart_frame)
+            chart.update_candles(chart_frame)
 
         self.heartbeat.setStyleSheet("color: green;")
+        if getattr(self.controller, "news_draw_on_chart", False) and hasattr(self.controller, "request_news"):
+            asyncio.get_event_loop().create_task(self.controller.request_news(symbol))
 
     def _update_equity(self, equity):
         if getattr(self, "equity_summary_label", None) is not None:
             self.equity_summary_label.setText(f"Equity: {float(equity):,.2f}")
         if getattr(self, "equity_curve", None) is not None:
-            self.equity_curve.setData(self.controller.performance_engine.equity_history)
+            equity_series = list(self._performance_series())
+            equity_timestamps = list(self._performance_time_series())
+            if equity_timestamps and len(equity_timestamps) == len(equity_series):
+                self.equity_curve.setData(equity_timestamps, equity_series)
+            else:
+                self.equity_curve.setData(equity_series)
         self._refresh_performance_views()
+
+    def _strategy_family_name(self, strategy_name):
+        normalized = Strategy.normalize_strategy_name(strategy_name)
+        if " | " in normalized:
+            return normalized.split(" | ", 1)[0].strip()
+        return Strategy.resolve_signal_strategy_name(normalized)
+
+    def _grouped_strategy_names(self, selected_strategy=None):
+        names = list(Strategy.AVAILABLE_STRATEGIES)
+        selected = str(selected_strategy or "").strip()
+        if selected and selected not in names:
+            names.append(selected)
+
+        grouped = []
+        seen = set()
+        core_families = list(getattr(Strategy, "CORE_STRATEGIES", []) or [])
+        for family in core_families:
+            family_items = [name for name in names if self._strategy_family_name(name) == family]
+            if not family_items:
+                continue
+            family_items.sort(key=lambda item: (0 if Strategy.normalize_strategy_name(item) == family else 1, item))
+            grouped.append(family_items)
+            seen.update(family_items)
+
+        remaining = [name for name in names if name not in seen]
+        if remaining:
+            remaining.sort()
+            grouped.append(remaining)
+        return grouped
+
+    def _populate_strategy_picker(self, picker, selected_strategy=None):
+        if picker is None:
+            return
+        target = Strategy.normalize_strategy_name(selected_strategy or "")
+        blocked = picker.blockSignals(True)
+        picker.clear()
+        first_group = True
+        for group in self._grouped_strategy_names(selected_strategy=target):
+            if not group:
+                continue
+            if not first_group:
+                picker.insertSeparator(picker.count())
+            for name in group:
+                picker.addItem(name)
+            first_group = False
+        if target:
+            if picker.findText(target) < 0:
+                if picker.count() > 0:
+                    picker.insertSeparator(picker.count())
+                picker.addItem(target)
+            picker.setCurrentText(target)
+        picker.blockSignals(blocked)
 
     def _lookup_symbol_mid_price(self, symbol):
         ticker = None
@@ -1784,101 +3144,36 @@ class Terminal(QMainWindow):
         if ticker_buffer is not None and hasattr(ticker_buffer, "get"):
             try:
                 ticker = ticker_buffer.get(symbol)
-            except Exception:
+            except (AttributeError, KeyError, TypeError, RuntimeError):
                 ticker = None
         if not isinstance(ticker, dict):
             ticker_stream = getattr(self.controller, "ticker_stream", None)
             if ticker_stream is not None and hasattr(ticker_stream, "get"):
                 try:
                     ticker = ticker_stream.get(symbol)
-                except Exception:
+                except (AttributeError, KeyError, TypeError, RuntimeError):
                     ticker = None
         if not isinstance(ticker, dict):
             return None
 
         candidates = []
         for key in ("price", "last", "close", "bid", "ask"):
-            value = ticker.get(key)
-            try:
-                numeric = float(value)
-            except Exception:
+            numeric = _coerce_float(ticker.get(key))
+            if numeric is None:
                 continue
             if numeric > 0:
                 candidates.append(numeric)
         if not candidates:
             return None
         if len(candidates) >= 2 and ticker.get("bid") is not None and ticker.get("ask") is not None:
-            try:
-                bid = float(ticker.get("bid"))
-                ask = float(ticker.get("ask"))
-                if bid > 0 and ask > 0:
-                    return (bid + ask) / 2.0
-            except Exception:
-                pass
+            bid = _coerce_float(ticker.get("bid"))
+            ask = _coerce_float(ticker.get("ask"))
+            if bid is not None and ask is not None and bid > 0 and ask > 0:
+                return (bid + ask) / 2.0
         return candidates[0]
 
     def _normalize_position_entry(self, raw):
-        if raw is None:
-            return None
-
-        if isinstance(raw, dict):
-            symbol = raw.get("symbol", "")
-            side = raw.get("side", "")
-            amount = raw.get("amount", raw.get("size", raw.get("quantity", raw.get("qty", 0))))
-            entry = raw.get("entry_price", raw.get("avg_entry_price", raw.get("price", raw.get("avg_price", 0))))
-            mark = raw.get("mark_price", raw.get("market_price"))
-            pnl = raw.get("pnl", raw.get("unrealized_pnl", raw.get("unrealized_pl", raw.get("pl"))))
-        else:
-            symbol = getattr(raw, "symbol", "")
-            side = getattr(raw, "side", "")
-            amount = getattr(raw, "amount", getattr(raw, "size", getattr(raw, "quantity", getattr(raw, "qty", 0))))
-            entry = getattr(raw, "entry_price", getattr(raw, "avg_entry_price", getattr(raw, "avg_price", getattr(raw, "price", 0))))
-            mark = getattr(raw, "mark_price", getattr(raw, "market_price", None))
-            pnl = getattr(raw, "pnl", getattr(raw, "unrealized_pnl", getattr(raw, "unrealized_pl", None)))
-
-        try:
-            amount = float(amount or 0)
-        except Exception:
-            amount = 0.0
-        try:
-            entry = float(entry or 0)
-        except Exception:
-            entry = 0.0
-        try:
-            mark = float(mark) if mark not in (None, "") else None
-        except Exception:
-            mark = None
-        try:
-            pnl = float(pnl) if pnl not in (None, "") else None
-        except Exception:
-            pnl = None
-
-        normalized_symbol = str(symbol or "")
-        if not normalized_symbol:
-            return None
-
-        normalized_side = str(side or "").lower()
-        if not normalized_side:
-            normalized_side = "long" if amount >= 0 else "short"
-        abs_amount = abs(amount)
-
-        if mark is None or mark <= 0:
-            mark = self._lookup_symbol_mid_price(normalized_symbol)
-
-        value = abs_amount * float(mark or entry or 0)
-        if pnl is None and mark is not None and entry:
-            direction = 1.0 if normalized_side != "short" else -1.0
-            pnl = (float(mark) - entry) * abs_amount * direction
-
-        return {
-            "symbol": normalized_symbol,
-            "side": normalized_side,
-            "amount": abs_amount,
-            "entry_price": entry,
-            "mark_price": float(mark or 0),
-            "value": value,
-            "pnl": float(pnl or 0),
-        }
+        return normalize_position_entry(self, raw)
 
     def _portfolio_positions_snapshot(self):
         portfolio = getattr(self.controller, "portfolio", None)
@@ -1886,363 +3181,1118 @@ class Terminal(QMainWindow):
         if portfolio is None:
             return positions
 
-        raw_positions = getattr(portfolio, "positions", {})
+        raw_positions: list[object] = []
+        get_positions = getattr(portfolio, "get_positions", None)
+        if callable(get_positions):
+            try:
+                raw_positions = get_positions() or []
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                raw_positions = []
         if isinstance(raw_positions, dict):
-            for symbol, pos in raw_positions.items():
-                normalized = self._normalize_position_entry(
-                    {
-                        "symbol": symbol,
-                        "amount": getattr(pos, "quantity", 0),
-                        "entry_price": getattr(pos, "avg_price", 0),
-                        "side": "long" if float(getattr(pos, "quantity", 0) or 0) >= 0 else "short",
-                    }
-                )
-                if normalized is not None and normalized["amount"] > 0:
-                    positions.append(normalized)
-        return positions
+            raw_positions = list(raw_positions.values())
+        if not raw_positions:
+            stored_positions = getattr(portfolio, "positions", {})
+            if isinstance(stored_positions, dict):
+                raw_positions = list(stored_positions.values())
+            elif isinstance(stored_positions, (list, tuple)):
+                raw_positions = list(stored_positions)
 
-    def _populate_positions_table(self, positions):
-        table = getattr(self, "positions_table", None)
-        if table is None:
-            return
-
-        normalized_positions = []
-        for pos in positions or []:
+        for pos in raw_positions:
             normalized = self._normalize_position_entry(pos)
             if normalized is not None and normalized["amount"] > 0:
+                positions.append(normalized)
+        return positions
+
+    def _active_positions_snapshot(self):
+        normalized_positions = []
+        for raw in list(getattr(self, "_latest_positions_snapshot", []) or []):
+            normalized = self._normalize_position_entry(raw)
+            if normalized is not None and float(normalized.get("amount", 0.0) or 0.0) > 0:
                 normalized_positions.append(normalized)
+        if normalized_positions:
+            return normalized_positions
+        return list(self._portfolio_positions_snapshot() or [])
 
-        normalized_positions.sort(key=lambda item: (item["symbol"], item["side"]))
-        table.setRowCount(len(normalized_positions))
+    def _populate_positions_table(self, positions):
+        populate_positions_table(self, positions)
 
-        for row, pos in enumerate(normalized_positions):
-            values = [
-                pos["symbol"],
-                pos["side"].upper(),
-                f"{pos['amount']:.6f}".rstrip("0").rstrip("."),
-                f"{pos['entry_price']:.6f}".rstrip("0").rstrip("."),
-                f"{pos['mark_price']:.6f}".rstrip("0").rstrip("."),
-                f"{pos['value']:.2f}",
-                f"{pos['pnl']:.2f}",
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if col == 6:
-                    item.setForeground(QColor("#32d296" if pos["pnl"] >= 0 else "#ef5350"))
-                table.setItem(row, col, item)
+    def _build_position_close_button(self, position, compact=False):
+        button = QPushButton("->" if compact else "-> Close")
+        button.setStyleSheet(self._action_button_style())
+        button.setToolTip("Close this position with a market order.")
+        normalized = self._normalize_position_entry(position) or {}
+        button.setEnabled(
+            bool(getattr(self.controller, "broker", None))
+            and bool(str(normalized.get("symbol") or "").strip())
+            and float(normalized.get("amount", 0.0) or 0.0) > 0
+        )
+        button.clicked.connect(
+            lambda _checked=False, payload=dict(normalized): self._confirm_close_position(payload)
+        )
+        return button
 
-        table.resizeColumnsToContents()
-        table.horizontalHeader().setStretchLastSection(True)
+    def _confirm_close_position(self, position):
+        normalized = self._normalize_position_entry(position)
+        if normalized is None:
+            QMessageBox.warning(self, "Close Position", "The selected position is no longer available.")
+            return
+
+        symbol = str(normalized.get("symbol") or "").strip().upper()
+        amount = float(normalized.get("amount", 0.0) or 0.0)
+        if not symbol or amount <= 0:
+            QMessageBox.warning(self, "Close Position", "Unable to determine a valid position to close.")
+            return
+        side_label = str(normalized.get("position_side") or normalized.get("side") or "").strip().upper()
+        descriptor = f"{side_label} {symbol}".strip()
+
+        confirm = QMessageBox.question(
+            self,
+            "Close Position",
+            f"Close {amount:.6f}".rstrip("0").rstrip(".") + f" {descriptor} with a market order?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self._run_close_position_task(symbol, amount=amount, position=normalized)
+
+    def _run_close_position_task(self, symbol, amount=None, position=None):
+        runner = self._close_position_async(symbol, amount=amount, position=position, show_dialog=True)
+        create_task = getattr(self.controller, "_create_task", None)
+        if callable(create_task):
+            create_task(runner, "close_single_position")
+        else:
+            asyncio.create_task(runner)
+
+    async def _close_position_async(self, symbol, amount=None, position=None, show_dialog=True):
+        controller = getattr(self, "controller", None)
+        if controller is None or not hasattr(controller, "close_market_chat_position"):
+            if show_dialog:
+                QMessageBox.warning(self, "Close Position", "Close-position controls are not available right now.")
+            return
+
+        try:
+            result = await controller.close_market_chat_position(symbol, amount=amount, position=position)
+            status_text = str((result or {}).get("status") or "submitted").replace("_", " ").upper()
+            amount_text = ""
+            if amount is not None:
+                amount_text = f" {float(amount):.6f}".rstrip("0").rstrip(".")
+            side_text = ""
+            if isinstance(position, dict):
+                resolved_side = str(position.get("position_side") or position.get("side") or "").strip().upper()
+                if resolved_side:
+                    side_text = f" [{resolved_side}]"
+            self.system_console.log(f"Close position {status_text}: {symbol}{side_text}{amount_text}", "INFO")
+            self._schedule_positions_refresh()
+            self._refresh_position_analysis_window()
+            if show_dialog:
+                self._show_async_message(
+                    "Close Position",
+                    f"{status_text.title()} close order for {symbol}.",
+                    QMessageBox.Icon.Information,
+                )
+        except Exception as exc:
+            self.logger.exception("Close-position request failed")
+            self.system_console.log(f"Close position failed for {symbol}: {exc}", "ERROR")
+            if show_dialog:
+                self._show_async_message("Close Position Failed", str(exc), QMessageBox.Icon.Critical)
 
     def _normalize_open_order_entry(self, order):
-        if not isinstance(order, dict):
-            return None
-
-        symbol = str(order.get("symbol") or "").strip()
-        if not symbol:
-            return None
-
-        side = str(order.get("side") or "").strip().lower()
-        order_type = str(order.get("type") or order.get("order_type") or "").strip().lower()
-        status = str(order.get("status") or "").strip().lower()
-
-        amount = abs(float(order.get("amount") or order.get("qty") or order.get("size") or 0) or 0)
-        filled = abs(float(order.get("filled") or order.get("filled_qty") or 0) or 0)
-        remaining = max(amount - filled, 0.0)
-
-        try:
-            price = float(order.get("price")) if order.get("price") not in (None, "") else None
-        except Exception:
-            price = None
-        if price is not None and price <= 0:
-            price = None
-
-        mark = self._lookup_symbol_mid_price(symbol)
-        if mark is not None and mark <= 0:
-            mark = None
-
-        pnl = order.get("pnl")
-        if pnl in (None, ""):
-            pnl = order.get("unrealized_pnl", order.get("unrealizedPnl"))
-        try:
-            pnl = float(pnl) if pnl not in (None, "") else None
-        except Exception:
-            pnl = None
-
-        if pnl is None and price is not None and mark is not None and remaining > 0:
-            direction = -1.0 if side == "sell" else 1.0
-            pnl = (float(mark) - float(price)) * remaining * direction
-
-        return {
-            "symbol": symbol,
-            "side": side or "-",
-            "type": order_type or "-",
-            "price": price,
-            "mark": mark,
-            "amount": amount,
-            "filled": filled,
-            "remaining": remaining,
-            "status": status or "-",
-            "pnl": pnl,
-            "order_id": str(order.get("id") or order.get("order_id") or ""),
-        }
+        return normalize_open_order_entry(self, order)
 
     def _populate_open_orders_table(self, orders):
-        table = getattr(self, "open_orders_table", None)
-        if table is None:
+        populate_open_orders_table(self, orders)
+
+    async def _refresh_positions_async(self):
+        await refresh_positions_async(self)
+
+    def _schedule_positions_refresh(self):
+        schedule_positions_refresh(self)
+
+    def _resolve_position_analysis_metric(self, account, balances, *keys):
+        candidates = []
+        for key in keys:
+            if key is None:
+                continue
+            key_text = str(key)
+            variants = {
+                key_text,
+                key_text.lower(),
+                key_text.upper(),
+                key_text.replace("_", ""),
+                key_text.replace("_", "").lower(),
+                key_text.replace("_", "").upper(),
+            }
+            variants.update(
+                {
+                    key_text.replace("_", " "),
+                    key_text.replace("_", "-"),
+                    key_text.replace("_", " ").title(),
+                    "".join(part.capitalize() for part in key_text.split("_")),
+                }
+            )
+            for variant in variants:
+                if variant not in candidates:
+                    candidates.append(variant)
+
+        for source in (account, balances):
+            if not isinstance(source, dict):
+                continue
+            for candidate in candidates:
+                if candidate in source:
+                    numeric = self._safe_float(source.get(candidate))
+                    if numeric is not None:
+                        return numeric
+        return None
+
+    def _position_analysis_has_key(self, account, balances, *keys):
+        candidates = []
+        for key in keys:
+            if key is None:
+                continue
+            key_text = str(key)
+            variants = {
+                key_text,
+                key_text.lower(),
+                key_text.upper(),
+                key_text.replace("_", ""),
+                key_text.replace("_", "").lower(),
+                key_text.replace("_", "").upper(),
+                key_text.replace("_", " "),
+                key_text.replace("_", "-"),
+                "".join(part.capitalize() for part in key_text.split("_")),
+            }
+            for variant in variants:
+                if variant not in candidates:
+                    candidates.append(variant)
+
+        for source in (account, balances):
+            if not isinstance(source, dict):
+                continue
+            for candidate in candidates:
+                if candidate in source:
+                    return True
+        return False
+
+    def _position_analysis_metric_labels(self, payload):
+        account = dict(payload.get("account") or {})
+        balances = dict(payload.get("balances") or {})
+
+        equity_label = "Equity"
+        if self._position_analysis_has_key(account, balances, "nav"):
+            equity_label = "NAV"
+        elif self._position_analysis_has_key(account, balances, "net_liquidation"):
+            equity_label = "Net Liquidation"
+        elif self._position_analysis_has_key(account, balances, "account_value", "total_account_value"):
+            equity_label = "Account Value"
+
+        balance_label = "Balance"
+        if self._position_analysis_has_key(account, balances, "cash", "cash_balance"):
+            balance_label = "Cash"
+
+        available_label = "Available Margin"
+        if self._position_analysis_has_key(account, balances, "buying_power", "buyingPower"):
+            available_label = "Buying Power"
+        elif self._position_analysis_has_key(account, balances, "free"):
+            available_label = "Free Balance"
+
+        used_label = "Margin Used"
+        if self._position_analysis_has_key(account, balances, "used") and not self._position_analysis_has_key(account, balances, "margin_used", "marginUsed"):
+            used_label = "Used Balance"
+
+        ratio_label = "Margin Ratio"
+        if self._position_analysis_has_key(account, balances, "margin_closeout_percent", "marginCloseoutPercent"):
+            ratio_label = "Margin Closeout %"
+
+        return {
+            "equity": equity_label,
+            "balance": balance_label,
+            "available": available_label,
+            "used": used_label,
+            "ratio": ratio_label,
+        }
+
+    def _position_analysis_window_payload(self):
+        broker = getattr(self.controller, "broker", None)
+        exchange = str(getattr(broker, "exchange_name", "") or "").lower()
+        balances = dict(getattr(self.controller, "balances", {}) or {})
+        account = dict((balances or {}).get("raw", {}) or {})
+        positions = list(self._active_positions_snapshot() or [])
+        financing_total = sum(
+            self._safe_float(item.get("financing"), 0.0) or 0.0
+            for item in positions
+            if isinstance(item, dict)
+        )
+        trade_records_getter = getattr(self, "_performance_trade_records", None)
+        trade_records = trade_records_getter() if callable(trade_records_getter) else []
+        fee_values = []
+        for trade in trade_records:
+            if not isinstance(trade, dict):
+                continue
+            fee = self._safe_float(trade.get("fee"))
+            if fee is not None:
+                fee_values.append(fee)
+        payload = {
+            "available": broker is not None,
+            "exchange": exchange or "-",
+            "account": account,
+            "balances": balances,
+            "positions": positions,
+            "financing_total": financing_total,
+            "fee_total": sum(fee_values) if fee_values else 0.0,
+            "fee_count": len(fee_values),
+        }
+
+        nav = self._resolve_position_analysis_metric(account, balances, "nav", "equity", "net_liquidation", "account_value", "total_account_value")
+        balance = self._resolve_position_analysis_metric(account, balances, "balance", "cash", "cash_balance")
+        margin_used = self._resolve_position_analysis_metric(account, balances, "margin_used", "used_margin", "used")
+        margin_available = self._resolve_position_analysis_metric(account, balances, "margin_available", "free_margin", "free")
+        unrealized = self._resolve_position_analysis_metric(account, balances, "unrealized_pl", "unrealized_pnl", "upl", "pl_unrealized")
+        realized = self._resolve_position_analysis_metric(account, balances, "realized_pl", "realized_pnl", "pl")
+        position_value = self._resolve_position_analysis_metric(account, balances, "position_value", "positions_value", "exposure", "gross_exposure")
+        margin_closeout = self._resolve_position_analysis_metric(account, balances, "margin_closeout_percent", "margin_ratio")
+        guard_snapshot = {}
+        controller_guard = getattr(self.controller, "margin_closeout_snapshot", None)
+        if callable(controller_guard):
+            try:
+                guard_snapshot = dict(controller_guard(balances) or {})
+            except Exception:
+                guard_snapshot = {}
+
+        if nav is None:
+            nav = balance
+        if balance is None:
+            balance = nav
+        if unrealized is None:
+            unrealized = sum(float(item.get("pnl", 0.0) or 0.0) for item in positions)
+        if realized is None:
+            realized = sum(float(item.get("realized_pnl", 0.0) or 0.0) for item in positions)
+        if position_value is None:
+            position_value = sum(float(item.get("value", 0.0) or 0.0) for item in positions)
+        if margin_used is None:
+            margin_used = sum(float(item.get("margin_used", 0.0) or 0.0) for item in positions)
+
+        payload["nav"] = nav
+        payload["balance"] = balance
+        payload["margin_used"] = margin_used
+        payload["margin_available"] = margin_available
+        payload["unrealized_pl"] = unrealized
+        payload["realized_pl"] = realized
+        payload["position_value"] = position_value
+        payload["margin_closeout_percent"] = margin_closeout
+        payload["margin_closeout_guard"] = guard_snapshot
+        payload["labels"] = self._position_analysis_metric_labels(payload)
+        return payload
+
+    def _build_position_analysis_html(self, payload):
+        broker_name = html.escape(str(payload.get("exchange", "-") or "-").upper())
+        labels = dict(payload.get("labels") or {})
+        equity_label = html.escape(str(labels.get("equity") or "Equity"))
+        balance_label = html.escape(str(labels.get("balance") or "Balance"))
+        available_label = html.escape(str(labels.get("available") or "Available Margin"))
+        used_label = html.escape(str(labels.get("used") or "Margin Used"))
+        ratio_label = html.escape(str(labels.get("ratio") or "Margin Ratio"))
+        financing_total = self._safe_float(payload.get("financing_total"), 0.0) or 0.0
+        fee_total = self._safe_float(payload.get("fee_total"), 0.0) or 0.0
+        fee_count = int(payload.get("fee_count") or 0)
+        fee_suffix = f" across <b>{fee_count}</b> recorded fills" if fee_count else ""
+        if not payload.get("available"):
+            return (
+                "<h3 style='margin-top:0;'>Position Analysis</h3>"
+                "<p>Connect a broker to see account metrics, open positions, exposure, and P/L analysis here.</p>"
+            )
+
+        positions = list(payload.get("positions", []) or [])
+        if not positions:
+            equity_text = self._format_currency(payload.get("nav"))
+            balance_text = self._format_currency(payload.get("balance"))
+            return (
+                "<h3 style='margin-top:0;'>Position Analysis</h3>"
+                f"<p>Broker <b>{broker_name}</b> is connected. No open positions were found.</p>"
+                f"<p>{equity_label}: <b>{equity_text}</b> | {balance_label}: <b>{balance_text}</b></p>"
+                f"<p>Open-position financing: <b>{self._format_currency(financing_total)}</b> | "
+                f"Tracked broker fees: <b>{self._format_currency(fee_total)}</b>{fee_suffix}</p>"
+            )
+
+        total_unrealized = sum(float(item.get("pnl", 0.0) or 0.0) for item in positions)
+        total_realized = sum(float(item.get("realized_pnl", 0.0) or 0.0) for item in positions)
+        total_margin = sum(float(item.get("margin_used", 0.0) or 0.0) for item in positions)
+        long_count = sum(1 for item in positions if item.get("side") != "short")
+        short_count = len(positions) - long_count
+        biggest_winner = max(positions, key=lambda item: float(item.get("pnl", 0.0) or 0.0))
+        biggest_loser = min(positions, key=lambda item: float(item.get("pnl", 0.0) or 0.0))
+        concentrated = max(positions, key=lambda item: float(item.get("value", 0.0) or 0.0))
+        nav = float(payload.get("nav", 0.0) or 0.0)
+        margin_available = self._safe_float(payload.get("margin_available"))
+        margin_closeout = payload.get("margin_closeout_percent")
+        margin_guard = dict(payload.get("margin_closeout_guard") or {})
+
+        bullets = [
+            f"Broker <b>{broker_name}</b> {equity_label.lower()} is <b>{self._format_currency(nav)}</b> with {balance_label.lower()} <b>{self._format_currency(payload.get('balance'))}</b>.",
+            f"Open positions: <b>{len(positions)}</b> total, with <b>{long_count}</b> long and <b>{short_count}</b> short exposures.",
+            f"Combined unrealized P/L is <b>{self._format_currency(total_unrealized)}</b>; realized P/L contribution in open positions is <b>{self._format_currency(total_realized)}</b>.",
+            f"Aggregate position {used_label.lower()} is <b>{self._format_currency(total_margin)}</b>.",
+            f"Open-position financing totals <b>{self._format_currency(financing_total)}</b>; tracked broker transaction fees total <b>{self._format_currency(fee_total)}</b>{fee_suffix}.",
+            f"Biggest winner: <b>{html.escape(biggest_winner.get('symbol', '-'))}</b> at <b>{self._format_currency(biggest_winner.get('pnl'))}</b>.",
+            f"Biggest loser: <b>{html.escape(biggest_loser.get('symbol', '-'))}</b> at <b>{self._format_currency(biggest_loser.get('pnl'))}</b>.",
+            f"Largest exposure by value is <b>{html.escape(concentrated.get('symbol', '-'))}</b> at <b>{self._format_currency(concentrated.get('value'))}</b>.",
+        ]
+        if margin_available is not None:
+            bullets.insert(1, f"{available_label} is <b>{self._format_currency(margin_available)}</b>.")
+        if margin_closeout is not None:
+            bullets.append(f"{ratio_label} is <b>{float(margin_closeout):.4f}</b>.")
+        else:
+            bullets.append("Broker did not expose a margin-ratio style metric in the current balance payload.")
+        if margin_guard.get("enabled"):
+            state = "blocking new trades" if margin_guard.get("blocked") else "monitoring"
+            bullets.append(
+                f"Margin closeout guard is <b>{state}</b> at <b>{float(margin_guard.get('threshold', 0.0) or 0.0):.2%}</b>."
+            )
+
+        return (
+            "<h3 style='margin-top:0;'>Position Analysis</h3>"
+            "<ul style='margin-top:6px;'>"
+            + "".join(f"<li>{item}</li>" for item in bullets)
+            + "</ul>"
+        )
+
+    def _refresh_position_analysis_window(self, window=None):
+        window = window or self.detached_tool_windows.get("position_analysis")
+        if not self._is_qt_object_alive(window):
             return
 
-        normalized_orders = []
-        for order in orders or []:
-            normalized = self._normalize_open_order_entry(order)
-            if normalized is not None:
-                normalized_orders.append(normalized)
+        summary = getattr(window, "_position_analysis_summary", None)
+        close_all_btn = getattr(window, "_position_analysis_close_all", None)
+        table = getattr(window, "_position_analysis_table", None)
+        details = getattr(window, "_position_analysis_details", None)
+        if summary is None or table is None or details is None:
+            return
 
-        normalized_orders.sort(key=lambda item: (item["symbol"], item["status"], item["order_id"]))
-        table.setRowCount(len(normalized_orders))
+        payload = self._position_analysis_window_payload()
+        window._position_analysis_payload = payload
 
-        for row, order in enumerate(normalized_orders):
-            price_text = "-" if order["price"] is None else f"{order['price']:.6f}".rstrip("0").rstrip(".")
-            mark_text = "-" if order["mark"] is None else f"{order['mark']:.6f}".rstrip("0").rstrip(".")
-            pnl_value = order["pnl"]
-            pnl_text = "-" if pnl_value is None else f"{float(pnl_value):.2f}"
+        if not payload.get("available"):
+            summary.setText("Position analysis is available after a broker is connected.")
+            table.setRowCount(0)
+            if close_all_btn is not None:
+                close_all_btn.setEnabled(False)
+            details.setHtml(self._build_position_analysis_html(payload))
+            return
 
-            values = [
-                order["symbol"],
-                order["side"].upper(),
-                order["type"].upper(),
-                price_text,
-                mark_text,
-                f"{order['amount']:.6f}".rstrip("0").rstrip("."),
-                f"{order['filled']:.6f}".rstrip("0").rstrip("."),
-                f"{order['remaining']:.6f}".rstrip("0").rstrip("."),
-                order["status"].replace("_", " ").upper(),
-                pnl_text,
-                order["order_id"],
-            ]
+        positions = list(payload.get("positions", []) or [])
+        if close_all_btn is not None:
+            close_all_btn.setEnabled(bool(positions))
+        exchange_label = str(payload.get("exchange") or "-").upper()
+        labels = dict(payload.get("labels") or {})
+        equity_label = str(labels.get("equity") or "Equity")
+        balance_label = str(labels.get("balance") or "Balance")
+        available_label = str(labels.get("available") or "Available Margin")
+        used_label = str(labels.get("used") or "Margin Used")
+        summary.setText(
+            f"Broker {exchange_label} | {equity_label} {self._format_currency(payload.get('nav'))} | {balance_label} {self._format_currency(payload.get('balance'))} | "
+            f"Unrealized P/L {self._format_currency(payload.get('unrealized_pl'))} | {used_label} {self._format_currency(payload.get('margin_used'))} | "
+            f"{available_label} {self._format_currency(payload.get('margin_available'))} | Financing {self._format_currency(payload.get('financing_total'))} | "
+            f"Fees {self._format_currency(payload.get('fee_total'))}"
+        )
 
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if col == 8:
-                    status_value = order["status"]
-                    if "partial" in status_value:
-                        item.setForeground(QColor("#f0a35e"))
-                    elif status_value in {"open", "pending", "submitted", "accepted", "new"}:
-                        item.setForeground(QColor("#65a3ff"))
-                elif col == 9 and pnl_value is not None:
-                    item.setForeground(QColor("#32d296" if float(pnl_value) >= 0 else "#ef5350"))
-                table.setItem(row, col, item)
+        columns = [
+            ("Symbol", "symbol"),
+            ("Side", "side"),
+            ("Units", "units"),
+            ("Amount", "amount"),
+            ("Entry", "entry_price"),
+            ("Mark", "mark_price"),
+            ("Value", "value"),
+            ("Unrealized P/L", "pnl"),
+            ("Realized P/L", "realized_pnl"),
+            ("Financing", "financing"),
+            ("Margin Used", "margin_used"),
+            ("Resettable P/L", "resettable_pl"),
+        ]
+        table.setRowCount(len(positions))
+        for row_index, position in enumerate(positions):
+            for col_index, (title, key) in enumerate(columns):
+                raw_value = position.get(key, "")
+                if isinstance(raw_value, float):
+                    if title in {"Symbol", "Side"}:
+                        text = str(raw_value)
+                    elif title in {"Units", "Amount"}:
+                        text = f"{raw_value:.6f}".rstrip("0").rstrip(".")
+                    elif title in {"Entry", "Mark"}:
+                        text = f"{raw_value:.6f}".rstrip("0").rstrip(".")
+                    else:
+                        text = f"{raw_value:.2f}"
+                else:
+                    text = str(raw_value).upper() if title == "Side" else str(raw_value)
+                item = QTableWidgetItem(text)
+                if title in {"Unrealized P/L", "Realized P/L"}:
+                    numeric = self._safe_float(raw_value, 0.0) or 0.0
+                    item.setForeground(QColor("#32d296" if numeric >= 0 else "#ef5350"))
+                table.setItem(row_index, col_index, item)
+            table.setCellWidget(row_index, len(columns), self._build_position_close_button(position, compact=False))
 
         table.resizeColumnsToContents()
         table.horizontalHeader().setStretchLastSection(True)
+        details.setHtml(self._build_position_analysis_html(payload))
 
-    async def _refresh_positions_async(self):
-        if self._ui_shutting_down:
-            return
-        broker = getattr(self.controller, "broker", None)
-        positions = []
-        if broker is not None and hasattr(broker, "fetch_positions"):
-            try:
-                positions = await broker.fetch_positions()
-            except Exception as exc:
-                self.logger.debug("Positions refresh failed: %s", exc)
-
-        if not positions:
-            positions = self._portfolio_positions_snapshot()
-
-        self._latest_positions_snapshot = positions or []
-        self._populate_positions_table(self._latest_positions_snapshot)
-
-    def _schedule_positions_refresh(self):
-        task = getattr(self, "_positions_refresh_task", None)
-        if task is not None and not task.done():
-            return
-
-        try:
-            self._positions_refresh_task = asyncio.get_event_loop().create_task(self._refresh_positions_async())
-        except Exception as exc:
-            self.logger.debug("Unable to schedule positions refresh: %s", exc)
-
-    async def _refresh_open_orders_async(self):
-        if self._ui_shutting_down:
-            return
-        broker = getattr(self.controller, "broker", None)
-        orders = []
-        if broker is not None and hasattr(broker, "fetch_open_orders"):
-            try:
-                orders = await broker.fetch_open_orders(limit=200)
-            except TypeError:
-                orders = await broker.fetch_open_orders()
-            except Exception as exc:
-                self.logger.debug("Open orders refresh failed: %s", exc)
-
-        self._latest_open_orders_snapshot = orders or []
-        self._populate_open_orders_table(self._latest_open_orders_snapshot)
-
-    def _schedule_open_orders_refresh(self):
-        task = getattr(self, "_open_orders_refresh_task", None)
-        if task is not None and not task.done():
-            return
-
-        try:
-            self._open_orders_refresh_task = asyncio.get_event_loop().create_task(self._refresh_open_orders_async())
-        except Exception as exc:
-            self.logger.debug("Unable to schedule open-orders refresh: %s", exc)
-
-    def _refresh_strategy_comparison_panel(self):
-        table = getattr(self, "strategy_table", None)
-        if table is None:
-            return
-
-        rows = []
-        params = dict(getattr(self.controller, "strategy_params", {}) or {})
-        active_name = Strategy.normalize_strategy_name(
-            getattr(self.controller, "strategy_name", None) or getattr(getattr(self.controller, "config", None), "strategy", "Trend Following")
+    def _open_position_analysis_window(self):
+        window = self._get_or_create_tool_window(
+            "position_analysis",
+            "Position Analysis",
+            width=1200,
+            height=680,
         )
-        rows.append({
-            "strategy": active_name,
-            "source": "Active",
-            "rsi_period": params.get("rsi_period", ""),
-            "ema_fast": params.get("ema_fast", ""),
-            "ema_slow": params.get("ema_slow", ""),
-            "atr_period": params.get("atr_period", ""),
-            "min_confidence": params.get("min_confidence", ""),
-            "total_profit": "",
-            "sharpe_ratio": "",
-        })
 
-        results = getattr(self, "optimization_results", None)
-        if results is not None and hasattr(results, "empty") and not results.empty:
-            for _, result in results.head(5).iterrows():
-                rows.append({
-                    "strategy": active_name,
-                    "source": "Optimized",
-                    "rsi_period": result.get("rsi_period", ""),
-                    "ema_fast": result.get("ema_fast", ""),
-                    "ema_slow": result.get("ema_slow", ""),
-                    "atr_period": result.get("atr_period", ""),
-                    "min_confidence": params.get("min_confidence", ""),
-                    "total_profit": result.get("total_profit", ""),
-                    "sharpe_ratio": result.get("sharpe_ratio", ""),
-                })
+        if getattr(window, "_position_analysis_table", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(10)
 
+            summary = QLabel("Loading broker position analysis.")
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; "
+                "border-radius: 12px; padding: 12px; font-size: 13px; font-weight: 600;"
+            )
+            layout.addWidget(summary)
+
+            actions = QHBoxLayout()
+            actions.setContentsMargins(0, 0, 0, 0)
+            actions.addStretch()
+            close_all_btn = QPushButton("Close All Positions")
+            close_all_btn.setStyleSheet(self._action_button_style())
+            close_all_btn.clicked.connect(self._close_all_positions)
+            actions.addWidget(close_all_btn)
+            layout.addLayout(actions)
+
+            table = QTableWidget()
+            table.setColumnCount(13)
+            table.setHorizontalHeaderLabels(
+                ["Symbol", "Side", "Units", "Amount", "Entry", "Mark", "Value", "Unrealized P/L", "Realized P/L", "Financing", "Margin Used", "Resettable P/L", "Action"]
+            )
+            layout.addWidget(table)
+
+            details = QTextBrowser()
+            details.setStyleSheet(
+                "QTextBrowser { background-color: #0b1220; color: #e6edf7; border: 1px solid #20324d; "
+                "border-radius: 10px; padding: 12px; }"
+            )
+            layout.addWidget(details)
+
+            window.setCentralWidget(container)
+            window._position_analysis_summary = summary
+            window._position_analysis_close_all = close_all_btn
+            window._position_analysis_table = table
+            window._position_analysis_details = details
+            window._position_analysis_payload = {}
+
+            sync_timer = QTimer(window)
+            sync_timer.timeout.connect(lambda: self._schedule_positions_refresh())
+            sync_timer.timeout.connect(lambda: self._refresh_position_analysis_window(window))
+            sync_timer.start(2500)
+            window._position_analysis_timer = sync_timer
+
+        self._schedule_positions_refresh()
+        self._refresh_position_analysis_window(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    # Backward-compatible aliases
+    def _oanda_position_window_payload(self):
+        return self._position_analysis_window_payload()
+
+    def _build_oanda_positions_analysis_html(self, payload):
+        return self._build_position_analysis_html(payload)
+
+    def _refresh_oanda_positions_window(self, window=None):
+        return self._refresh_position_analysis_window(window)
+
+    def _open_oanda_positions_window(self):
+        return self._open_position_analysis_window()
+
+    def _quant_pm_strategy_exposure_rows(self):
+        controller = self.controller
+        allocator = getattr(controller, "portfolio_allocator", None)
+        portfolio_manager = getattr(getattr(controller, "trading_system", None), "portfolio", None)
+        portfolio = getattr(portfolio_manager, "portfolio", None)
+        market_prices = getattr(portfolio_manager, "market_prices", {}) or {}
+        positions = getattr(portfolio, "positions", {}) or {}
+        symbol_map = dict(getattr(allocator, "_symbol_strategy_map", {}) or {})
+        current_strategy = str(getattr(controller, "strategy_name", "") or "Unassigned").strip() or "Unassigned"
+        rows = {}
+        total_exposure = 0.0
+
+        for symbol, position in positions.items():
+            quantity = self._safe_float(getattr(position, "quantity", 0.0), 0.0) or 0.0
+            if quantity == 0:
+                continue
+            symbol_text = str(symbol or "").upper().strip()
+            price = self._safe_float(market_prices.get(symbol_text), getattr(position, "avg_price", 0.0)) or 0.0
+            exposure = abs(quantity * price)
+            total_exposure += exposure
+            strategy_name = str(symbol_map.get(symbol_text) or current_strategy).strip() or "Unassigned"
+            bucket = rows.setdefault(
+                strategy_name,
+                {"strategy": strategy_name, "symbols": 0, "exposure": 0.0, "weight": 0.0},
+            )
+            bucket["symbols"] += 1
+            bucket["exposure"] += exposure
+
+        if total_exposure > 0:
+            for item in rows.values():
+                item["weight"] = item["exposure"] / total_exposure
+
+        ordered = sorted(
+            rows.values(),
+            key=lambda item: (
+                self._safe_float(item.get("exposure"), 0.0) or 0.0,
+                self._safe_float(item.get("weight"), 0.0) or 0.0,
+            ),
+            reverse=True,
+        )
+        return ordered, total_exposure
+
+    def _quant_pm_position_rows(self):
+        controller = self.controller
+        allocator = getattr(controller, "portfolio_allocator", None)
+        portfolio_manager = getattr(getattr(controller, "trading_system", None), "portfolio", None)
+        portfolio = getattr(portfolio_manager, "portfolio", None)
+        market_prices = getattr(portfolio_manager, "market_prices", {}) or {}
+        positions = getattr(portfolio, "positions", {}) or {}
+        symbol_map = dict(getattr(allocator, "_symbol_strategy_map", {}) or {})
+        current_strategy = str(getattr(controller, "strategy_name", "") or "Unassigned").strip() or "Unassigned"
+        rows = []
+
+        for symbol, position in positions.items():
+            quantity = self._safe_float(getattr(position, "quantity", 0.0), 0.0) or 0.0
+            if quantity == 0:
+                continue
+            symbol_text = str(symbol or "").upper().strip()
+            avg_price = self._safe_float(getattr(position, "avg_price", 0.0), 0.0) or 0.0
+            mark_price = self._safe_float(market_prices.get(symbol_text), avg_price) or avg_price
+            exposure = quantity * mark_price
+            rows.append(
+                {
+                    "symbol": symbol_text,
+                    "strategy": str(symbol_map.get(symbol_text) or current_strategy).strip() or "Unassigned",
+                    "quantity": quantity,
+                    "entry": avg_price,
+                    "mark": mark_price,
+                    "exposure": exposure,
+                    "abs_exposure": abs(exposure),
+                    "direction": "LONG" if quantity > 0 else "SHORT",
+                }
+            )
+
+        rows.sort(key=lambda item: item.get("abs_exposure", 0.0), reverse=True)
+        return rows
+
+    async def _quant_pm_correlation_rows(self, symbols, timeframe="1h", limit=160):
+        trading_system = getattr(self.controller, "trading_system", None)
+        data_hub = getattr(trading_system, "data_hub", None)
+        if data_hub is None:
+            return [], "Quant data hub is not active yet."
+
+        unique_symbols = []
+        for symbol in symbols:
+            normalized = str(symbol or "").upper().strip()
+            if normalized and normalized not in unique_symbols:
+                unique_symbols.append(normalized)
+        unique_symbols = unique_symbols[:6]
+        if len(unique_symbols) < 2:
+            return [], "At least two active symbols with market data are needed for correlation analysis."
+
+        series_map = {}
+        for symbol in unique_symbols:
+            try:
+                dataset = await data_hub.get_symbol_dataset(symbol=symbol, timeframe=timeframe, limit=limit, prefer_live=False)
+            except Exception as exc:
+                self.logger.debug("Quant PM dataset load failed for %s: %s", symbol, exc)
+                continue
+            frame = getattr(dataset, "frame", None)
+            if frame is None or frame.empty or "close" not in frame.columns:
+                continue
+            closes = pd.to_numeric(frame["close"], errors="coerce").dropna()
+            returns = closes.pct_change().dropna()
+            if len(returns) < 8:
+                continue
+            series_map[symbol] = returns.reset_index(drop=True)
+
+        ordered_symbols = [symbol for symbol in unique_symbols if symbol in series_map]
+        if len(ordered_symbols) < 2:
+            return [], "Not enough historical data is available yet for a stable correlation matrix."
+
+        matrix = []
+        for left in ordered_symbols:
+            row = {"symbol": left}
+            left_series = series_map[left]
+            for right in ordered_symbols:
+                aligned = pd.concat([left_series, series_map[right]], axis=1).dropna()
+                if len(aligned) < 6:
+                    corr = 0.0
+                else:
+                    corr = aligned.iloc[:, 0].corr(aligned.iloc[:, 1])
+                    if pd.isna(corr):
+                        corr = 0.0
+                row[right] = float(corr)
+            matrix.append(row)
+
+        return matrix, ""
+
+    async def _quant_pm_payload(self):
+        controller = self.controller
+        trading_system = getattr(controller, "trading_system", None)
+        allocator = getattr(controller, "portfolio_allocator", None)
+        risk_engine = getattr(controller, "institutional_risk_engine", None)
+        behavior_guard = getattr(controller, "behavior_guard", None)
+        available = trading_system is not None and allocator is not None and risk_engine is not None
+
+        strategy_rows, strategy_total_exposure = self._quant_pm_strategy_exposure_rows()
+        position_rows = self._quant_pm_position_rows()
+        live_mode = bool(getattr(controller, "is_live_mode", lambda: False)())
+        account_label = str(getattr(controller, "current_account_label", lambda: "Not set")() or "").strip()
+        if not account_label or account_label.lower() == "not set":
+            account_label = "Profile unavailable"
+
+        equity = None
+        equity_source = "unavailable"
+        extract_equity = getattr(controller, "_extract_balance_equity_value", None)
+        if callable(extract_equity):
+            try:
+                equity = self._safe_float(extract_equity(getattr(controller, "balances", {}) or {}))
+            except Exception:
+                equity = None
+            if equity is not None:
+                equity_source = "broker"
+
+        portfolio_manager = getattr(trading_system, "portfolio", None) if trading_system is not None else None
+        if equity is None and portfolio_manager is not None and not live_mode:
+            try:
+                equity = self._safe_float(portfolio_manager.equity())
+            except Exception:
+                equity = None
+            if equity is not None:
+                equity_source = "portfolio"
+        if equity is None and not live_mode:
+            equity = self._safe_float(getattr(controller, "initial_capital", None))
+            if equity is not None:
+                equity_source = "initial_capital"
+
+        allocation_snapshot = dict(getattr(controller, "quant_allocation_snapshot", {}) or {})
+        risk_snapshot = dict(getattr(controller, "quant_risk_snapshot", {}) or {})
+        allocator_status = allocator.status_snapshot() if allocator is not None else {}
+        institutional_status = risk_engine.status_snapshot() if risk_engine is not None else {}
+        behavior_status = behavior_guard.status_snapshot() if behavior_guard is not None else {}
+        health_report = []
+        health_report_getter = getattr(controller, "get_health_check_report", None)
+        if callable(health_report_getter):
+            try:
+                health_report = list(health_report_getter() or [])
+            except Exception:
+                health_report = []
+        health_attention = []
+        for item in health_report:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "").strip().lower()
+            if status not in {"fail", "warn"}:
+                continue
+            name = str(item.get("name") or "Check").strip() or "Check"
+            detail = str(item.get("detail") or "").strip()
+            health_attention.append(f"{name}: {detail}" if detail else name)
+
+        active_symbols = [row.get("symbol") for row in position_rows[:6]]
+        if len(active_symbols) < 2:
+            active_symbols.extend(list(getattr(controller, "symbols", []) or [])[: max(0, 6 - len(active_symbols))])
+        correlation_rows, correlation_note = await self._quant_pm_correlation_rows(
+            active_symbols,
+            timeframe=str(getattr(controller, "time_frame", "1h") or "1h"),
+            limit=160,
+        )
+
+        return {
+            "available": available,
+            "exchange": self._active_exchange_name() or "-",
+            "account": account_label,
+            "mode": "LIVE" if live_mode else "PAPER",
+            "health": getattr(controller, "get_health_check_summary", lambda: "Not run")(),
+            "equity": equity,
+            "equity_source": equity_source,
+            "health_attention": health_attention,
+            "strategy_rows": strategy_rows,
+            "strategy_total_exposure": strategy_total_exposure,
+            "position_rows": position_rows,
+            "allocation_snapshot": allocation_snapshot,
+            "allocator_status": allocator_status,
+            "risk_snapshot": risk_snapshot,
+            "institutional_status": institutional_status,
+            "behavior_status": behavior_status,
+            "correlation_rows": correlation_rows,
+            "correlation_note": correlation_note,
+        }
+
+    def _build_quant_pm_html(self, payload):
+        if not payload.get("available"):
+            return (
+                "<h3 style='margin-top:0;'>Quant PM</h3>"
+                "<p>Start the trading system to view allocator budgets, institutional risk, exposure, and correlation analysis.</p>"
+            )
+
+        allocation = dict(payload.get("allocation_snapshot") or {})
+        risk = dict(payload.get("risk_snapshot") or {})
+        behavior = dict(payload.get("behavior_status") or {})
+        top_strategy = next(iter(payload.get("strategy_rows") or []), None)
+        correlation_note = str(payload.get("correlation_note") or "").strip()
+        health_attention = [str(item).strip() for item in (payload.get("health_attention") or []) if str(item).strip()]
+        equity_source = str(payload.get("equity_source") or "unavailable").strip().lower()
+        equity_text = f"Equity snapshot is <b>{html.escape(self._format_currency(payload.get('equity')))}</b>"
+        if equity_source == "broker":
+            equity_text = f"Live broker equity snapshot is <b>{html.escape(self._format_currency(payload.get('equity')))}</b>"
+        elif equity_source == "unavailable" and str(payload.get("mode") or "").upper() == "LIVE":
+            equity_text = "Live broker equity snapshot is <b>unavailable</b>"
+        bullets = [
+            f"Mode <b>{html.escape(str(payload.get('mode') or '-'))}</b> on broker <b>{html.escape(str(payload.get('exchange') or '-').upper())}</b> for account <b>{html.escape(str(payload.get('account') or '-'))}</b>.",
+            f"{equity_text} with health check <b>{html.escape(str(payload.get('health') or 'Not run'))}</b>.",
+            f"Allocator model is <b>{html.escape(str((payload.get('allocator_status') or {}).get('allocation_model') or '-'))}</b>; latest target weight is <b>{html.escape(self._format_percent_text(allocation.get('target_weight')))}</b> for strategy <b>{html.escape(str(allocation.get('strategy_name') or '-'))}</b>.",
+            f"Institutional risk headline: <b>{html.escape(str(risk.get('reason') or 'No recent risk decision'))}</b>.",
+            f"Behavior guard state is <b>{html.escape(str(behavior.get('state') or 'UNKNOWN'))}</b> with summary <b>{html.escape(str(behavior.get('summary') or '-'))}</b>.",
+        ]
+        if health_attention:
+            bullets.append(f"Health attention: <b>{html.escape(' | '.join(health_attention[:3]))}</b>.")
+        if top_strategy is not None:
+            bullets.append(
+                f"Top deployed strategy is <b>{html.escape(str(top_strategy.get('strategy') or '-'))}</b> at <b>{html.escape(self._format_currency(top_strategy.get('exposure')))}</b> exposure."
+            )
+        if correlation_note:
+            bullets.append(html.escape(correlation_note))
+
+        return "<h3 style='margin-top:0;'>Quant PM</h3><ul>" + "".join(f"<li>{item}</li>" for item in bullets) + "</ul>"
+
+    def _populate_quant_pm_strategy_table(self, table, rows):
+        if table is None or not self._is_qt_object_alive(table):
+            return
+        rows = list(rows or [])
         table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
             values = [
-                row["strategy"],
-                row["source"],
-                row["rsi_period"],
-                row["ema_fast"],
-                row["ema_slow"],
-                row["atr_period"],
-                row["min_confidence"],
-                row["total_profit"],
-                row["sharpe_ratio"],
+                row.get("strategy", ""),
+                str(int(row.get("symbols", 0) or 0)),
+                self._format_currency(row.get("exposure")),
+                self._format_percent_text(row.get("weight")),
             ]
-            for col, value in enumerate(values):
-                if isinstance(value, float):
-                    text = f"{value:.4f}" if col == 6 else f"{value:.2f}"
-                else:
-                    text = str(value)
-                table.setItem(row_index, col, QTableWidgetItem(text))
-
+            for col_index, value in enumerate(values):
+                table.setItem(row_index, col_index, QTableWidgetItem(str(value)))
         table.resizeColumnsToContents()
         table.horizontalHeader().setStretchLastSection(True)
 
-    def _normalize_trade_log_entry(self, trade):
-        if not isinstance(trade, dict):
-            return None
+    def _populate_quant_pm_position_table(self, table, rows, equity):
+        if table is None or not self._is_qt_object_alive(table):
+            return
+        rows = list(rows or [])
+        table.setRowCount(len(rows))
+        equity_value = self._safe_float(equity, 0.0) or 0.0
+        for row_index, row in enumerate(rows):
+            exposure = self._safe_float(row.get("exposure"), 0.0) or 0.0
+            exposure_pct = (abs(exposure) / equity_value) if equity_value > 0 else None
+            values = [
+                row.get("symbol", ""),
+                row.get("strategy", ""),
+                row.get("direction", ""),
+                f"{self._safe_float(row.get('quantity'), 0.0) or 0.0:.6f}".rstrip("0").rstrip("."),
+                f"{self._safe_float(row.get('entry'), 0.0) or 0.0:.6f}".rstrip("0").rstrip("."),
+                f"{self._safe_float(row.get('mark'), 0.0) or 0.0:.6f}".rstrip("0").rstrip("."),
+                self._format_currency(exposure),
+                self._format_percent_text(exposure_pct),
+            ]
+            for col_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if col_index == 6:
+                    item.setForeground(QColor("#32d296" if exposure >= 0 else "#ef5350"))
+                table.setItem(row_index, col_index, item)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
 
-        normalized = {
-            "timestamp": trade.get("timestamp", ""),
-            "symbol": trade.get("symbol", ""),
-            "side": trade.get("side", ""),
-            "price": trade.get("price", ""),
-            "size": trade.get("size", trade.get("amount", "")),
-            "order_type": trade.get("order_type", trade.get("type", "")),
-            "status": trade.get("status", ""),
-            "order_id": trade.get("order_id", trade.get("id", "")),
-            "pnl": trade.get("pnl", ""),
-            "stop_loss": trade.get("stop_loss", trade.get("sl", "")),
-            "take_profit": trade.get("take_profit", trade.get("tp", "")),
-        }
-        return normalized
-
-    def _format_trade_log_value(self, value):
-        if value is None:
-            return ""
-        return str(value)
-
-    def _trade_log_row_for_entry(self, entry):
-        order_id = str(entry.get("order_id") or "").strip()
-        if not order_id:
-            return None
-
-        for row in range(self.trade_log.rowCount()):
-            item = self.trade_log.item(row, 7)
-            if item is not None and item.text() == order_id:
-                return row
-
-        return None
-
-    def _update_trade_log(self, trade):
-        entry = self._normalize_trade_log_entry(trade)
-        if entry is None:
+    def _populate_quant_pm_correlation_table(self, table, rows):
+        if table is None or not self._is_qt_object_alive(table):
+            return
+        rows = list(rows or [])
+        if not rows:
+            table.clear()
+            table.setRowCount(0)
+            table.setColumnCount(0)
             return
 
-        row = self._trade_log_row_for_entry(entry)
-        if row is None:
-            row = self.trade_log.rowCount()
+        symbols = [str(item.get("symbol") or "").upper().strip() for item in rows]
+        table.clear()
+        table.setColumnCount(len(symbols))
+        table.setRowCount(len(symbols))
+        table.setHorizontalHeaderLabels(symbols)
+        table.setVerticalHeaderLabels(symbols)
+        for row_index, row in enumerate(rows):
+            for col_index, symbol in enumerate(symbols):
+                corr = self._safe_float(row.get(symbol), 0.0) or 0.0
+                item = QTableWidgetItem(f"{corr:.2f}")
+                intensity = min(255, int(abs(corr) * 160) + 40)
+                if corr >= 0:
+                    item.setBackground(QColor(40, 70, 40 + intensity // 3, min(220, intensity)))
+                    item.setForeground(QColor("#d7ffe9"))
+                else:
+                    item.setBackground(QColor(80 + intensity // 3, 35, 35, min(220, intensity)))
+                    item.setForeground(QColor("#ffe4e8"))
+                table.setItem(row_index, col_index, item)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
 
-        if row == self.trade_log.rowCount() and row >= self.MAX_LOG_ROWS:
-            self.trade_log.removeRow(0)
-            row = self.trade_log.rowCount()
+    def _schedule_quant_pm_refresh(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
+        task = getattr(window, "_quant_pm_refresh_task", None)
+        if task is not None and not task.done():
+            return
+        try:
+            window._quant_pm_refresh_task = asyncio.get_event_loop().create_task(
+                self._refresh_quant_pm_async(window)
+            )
+        except Exception as exc:
+            self.logger.error("Unable to schedule Quant PM refresh: %s", exc)
 
-        if row == self.trade_log.rowCount():
-            self.trade_log.insertRow(row)
+    async def _refresh_quant_pm_async(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
 
-        column_values = [
-            entry["timestamp"],
-            entry["symbol"],
-            entry["side"],
-            entry["price"],
-            entry["size"],
-            entry["order_type"],
-            entry["status"],
-            entry["order_id"],
-            entry["pnl"],
-        ]
-        for column, value in enumerate(column_values):
-            self.trade_log.setItem(row, column, QTableWidgetItem(self._format_trade_log_value(value)))
-
-        tooltip_parts = []
-        if entry["stop_loss"] not in ("", None):
-            tooltip_parts.append(f"SL: {entry['stop_loss']}")
-        if entry["take_profit"] not in ("", None):
-            tooltip_parts.append(f"TP: {entry['take_profit']}")
-        if tooltip_parts:
-            tooltip = " | ".join(tooltip_parts)
-            for column in range(self.trade_log.columnCount()):
-                item = self.trade_log.item(row, column)
-                if item is not None:
-                    item.setToolTip(tooltip)
-
-        self.trade_log.horizontalHeader().setStretchLastSection(True)
-        self._refresh_performance_views()
-
-    async def load_persisted_runtime_data(self):
-        loader = getattr(self.controller, "_load_recent_trades", None)
-        if loader is None:
+        summary = getattr(window, "_quant_pm_summary", None)
+        strategy_table = getattr(window, "_quant_pm_strategy_table", None)
+        position_table = getattr(window, "_quant_pm_position_table", None)
+        correlation_table = getattr(window, "_quant_pm_correlation_table", None)
+        details = getattr(window, "_quant_pm_details", None)
+        if (
+            summary is None
+            or strategy_table is None
+            or position_table is None
+            or correlation_table is None
+            or details is None
+        ):
             return
 
         try:
-            trades = await loader(limit=min(int(self.MAX_LOG_ROWS or 200), 200))
-        except Exception:
-            self.logger.exception("Failed to load persisted trade history")
+            payload = await self._quant_pm_payload()
+        except Exception as exc:
+            self.logger.debug("Quant PM refresh failed: %s", exc)
             return
 
-        for trade in trades:
-            self._update_trade_log(trade)
+        if window is None or not self._is_qt_object_alive(window):
+            return
+
+        window._quant_pm_payload = payload
+        allocation = dict(payload.get("allocation_snapshot") or {})
+        risk = dict(payload.get("risk_snapshot") or {})
+        behavior = dict(payload.get("behavior_status") or {})
+        summary.setText(
+            f"{payload.get('mode', 'PAPER')} | {str(payload.get('exchange') or '-').upper()} | "
+            f"Equity {self._format_currency(payload.get('equity'))} | "
+            f"Allocator {self._format_percent_text(allocation.get('target_weight'))} | "
+            f"Risk VaR {self._format_percent_text(risk.get('trade_var_pct'))} | "
+            f"Behavior {behavior.get('state', 'UNKNOWN')}"
+        )
+        self._populate_quant_pm_strategy_table(strategy_table, payload.get("strategy_rows"))
+        self._populate_quant_pm_position_table(position_table, payload.get("position_rows"), payload.get("equity"))
+        self._populate_quant_pm_correlation_table(correlation_table, payload.get("correlation_rows"))
+        details.setHtml(self._build_quant_pm_html(payload))
+
+    def _open_quant_pm_window(self):
+        window = self._get_or_create_tool_window(
+            "quant_pm",
+            "Quant PM",
+            width=1240,
+            height=760,
+        )
+
+        if getattr(window, "_quant_pm_summary", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(10)
+
+            summary = QLabel("Loading quant PM dashboard.")
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; "
+                "border-radius: 12px; padding: 12px; font-size: 13px; font-weight: 600;"
+            )
+            layout.addWidget(summary)
+
+            top_row = QHBoxLayout()
+            top_row.setSpacing(10)
+
+            strategy_table = QTableWidget()
+            strategy_table.setColumnCount(4)
+            strategy_table.setHorizontalHeaderLabels(["Strategy", "Symbols", "Exposure", "Weight"])
+            top_row.addWidget(strategy_table, 1)
+
+            correlation_table = QTableWidget()
+            top_row.addWidget(correlation_table, 1)
+            layout.addLayout(top_row)
+
+            position_table = QTableWidget()
+            position_table.setColumnCount(8)
+            position_table.setHorizontalHeaderLabels(
+                ["Symbol", "Strategy", "Direction", "Qty", "Entry", "Mark", "Exposure", "% Equity"]
+            )
+            layout.addWidget(position_table)
+
+            details = QTextBrowser()
+            details.setStyleSheet(
+                "QTextBrowser { background-color: #101a2d; color: #d8e6ff; border: 1px solid #20324d; border-radius: 12px; padding: 12px; }"
+            )
+            layout.addWidget(details)
+
+            window.setCentralWidget(container)
+            window._quant_pm_summary = summary
+            window._quant_pm_strategy_table = strategy_table
+            window._quant_pm_position_table = position_table
+            window._quant_pm_correlation_table = correlation_table
+            window._quant_pm_details = details
+            window._quant_pm_payload = {}
+
+            sync_timer = QTimer(window)
+            sync_timer.timeout.connect(lambda: self._schedule_quant_pm_refresh(window))
+            sync_timer.start(3000)
+            window._quant_pm_timer = sync_timer
+
+        self._schedule_quant_pm_refresh(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    async def _refresh_open_orders_async(self):
+        await refresh_open_orders_async(self)
+
+    async def _refresh_broker_status_async(self):
+        if self._ui_shutting_down:
+            return
+
+        broker = getattr(self.controller, "broker", None)
+        if broker is None:
+            self._latest_broker_status_snapshot = {"status": "disconnected", "summary": "Disconnected"}
+            return
+
+        try:
+            status = await broker.fetch_status()
+            if isinstance(status, dict):
+                status_text = str(status.get("status") or "ok").strip() or "ok"
+                broker_label = str(status.get("broker") or getattr(broker, "exchange_name", "") or "").strip().upper()
+                summary = f"{broker_label + ' ' if broker_label else ''}{status_text.upper()}".strip()
+                self._latest_broker_status_snapshot = {
+                    "status": status_text.lower(),
+                    "summary": summary or "Connected",
+                    "detail": status,
+                }
+            else:
+                summary = str(status or "Connected").strip() or "Connected"
+                self._latest_broker_status_snapshot = {
+                    "status": summary.lower(),
+                    "summary": summary,
+                    "detail": status,
+                }
+        except NotImplementedError:
+            summary = "Connected" if getattr(self.controller, "connected", False) else "Unknown"
+            self._latest_broker_status_snapshot = {
+                "status": summary.lower(),
+                "summary": summary,
+            }
+        except Exception as exc:
+            self._latest_broker_status_snapshot = {
+                "status": "error",
+                "summary": "Error",
+                "detail": str(exc),
+            }
+
+    def _schedule_broker_status_refresh(self, force=False):
+        task = getattr(self, "_broker_status_refresh_task", None)
+        if task is not None and not task.done():
+            return
+
+        now = time.monotonic()
+        if not force and (now - float(getattr(self, "_last_broker_status_refresh_at", 0.0) or 0.0)) < 15.0:
+            return
+
+        self._last_broker_status_refresh_at = now
+        try:
+            self._broker_status_refresh_task = asyncio.get_event_loop().create_task(self._refresh_broker_status_async())
+        except Exception as exc:
+            self.logger.debug("Unable to schedule broker-status refresh: %s", exc)
+
+    def _schedule_open_orders_refresh(self):
+        schedule_open_orders_refresh(self)
+
+    def _refresh_strategy_comparison_panel(self):
+        refresh_strategy_comparison_panel(self)
+
+    def _normalize_trade_log_entry(self, trade):
+        return normalize_trade_log_entry(self, trade)
+
+    def _format_trade_log_value(self, value):
+        return format_trade_log_value(self, value)
+
+    def _format_trade_source_label(self, value):
+        return format_trade_source_label(self, value)
+
+    def _trade_log_row_for_entry(self, entry):
+        return trade_log_row_for_entry(self, entry)
+
+    def _update_trade_log(self, trade):
+        update_trade_log(self, trade)
+
+    def _handle_agent_runtime_event(self, payload):
+        if getattr(self, "_ui_shutting_down", False) or not isinstance(payload, dict):
+            return
+
+        symbol = str(payload.get("symbol") or "").strip().upper().replace("-", "/").replace("_", "/")
+        timeline_window = getattr(self, "detached_tool_windows", {}).get("agent_timeline")
+        if timeline_window is not None and self._is_qt_object_alive(timeline_window) and hasattr(self, "_refresh_agent_timeline_window"):
+            self._refresh_agent_timeline_window(window=timeline_window)
+        window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+        selected_symbol = ""
+        if window is not None:
+            selected_symbol = str(getattr(window, "_strategy_assignment_selected_symbol", "") or "").strip().upper().replace("-", "/").replace("_", "/")
+            if not selected_symbol:
+                picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+                if picker is not None:
+                    selected_symbol = str(picker.currentText() or "").strip().upper().replace("-", "/").replace("_", "/")
+
+        kind = str(payload.get("kind") or "").strip().lower()
+        event_type = str(payload.get("event_type") or "").strip()
+        reason = str(payload.get("reason") or payload.get("message") or "").strip()
+
+        if window is not None and symbol and symbol == selected_symbol:
+            message = str(payload.get("message") or "").strip()
+            if not message and kind == "memory":
+                agent_name = str(payload.get("agent_name") or "Agent").strip() or "Agent"
+                stage = str(payload.get("stage") or "updated").strip() or "updated"
+                message = f"Live agent update: {agent_name} {stage} for {symbol}."
+                if reason:
+                    message = f"{message} {reason}"
+            self._refresh_strategy_assignment_window(window=window, message=message or None)
+
+        if kind == "bus" and event_type == EventType.RISK_ALERT:
+            detail = reason or f"Risk blocked the trade for {symbol or 'the selected symbol'}."
+            if hasattr(self, "_push_notification"):
+                self._push_notification(
+                    "Agent risk blocked",
+                    detail,
+                    level="WARN",
+                    source="risk",
+                    dedupe_seconds=10.0,
+                )
+            if hasattr(self, "system_console"):
+                self.system_console.log(
+                    f"Agent risk blocked for {symbol or 'symbol'}: {detail}",
+                    "WARN",
+                )
+
+    async def load_persisted_runtime_data(self):
+        await load_persisted_runtime_data(self)
 
     def _update_ticker(self, symbol, bid, ask):
         if self._ui_shutting_down:
@@ -2295,55 +4345,35 @@ class Terminal(QMainWindow):
 
     def _create_market_watch_panel(self):
         dock = QDockWidget("Market Watch", self)
+        dock.setObjectName("market_watch_dock")
+        self.market_watch_dock = dock
         self.symbols_table = QTableWidget()
         self._configure_market_watch_table()
         self.symbols_table.itemChanged.connect(self._handle_market_watch_item_changed)
         dock.setWidget(self.symbols_table)
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
         self.tick_chart = pg.PlotWidget()
         self.tick_chart_curve = self.tick_chart.plot(pen="y")
         self.tick_prices = []
 
         tick_dock = QDockWidget("Tick Chart", self)
+        tick_dock.setObjectName("tick_chart_dock")
+        self.tick_chart_dock = tick_dock
         tick_dock.setWidget(self.tick_chart)
-        self.addDockWidget(Qt.LeftDockWidgetArea, tick_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, tick_dock)
 
     def _create_positions_panel(self):
-        dock = QDockWidget("Positions", self)
-        self.positions_table = QTableWidget()
-        self.positions_table.setColumnCount(7)
-        self.positions_table.setHorizontalHeaderLabels(
-            ["Symbol", "Side", "Amount", "Entry", "Mark", "Value", "PnL"]
-        )
-        dock.setWidget(self.positions_table)
-        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+        create_positions_panel(self)
 
     def _create_open_orders_panel(self):
-        dock = QDockWidget("Open Orders", self)
-        self.open_orders_table = QTableWidget()
-        self.open_orders_table.setColumnCount(11)
-        self.open_orders_table.setHorizontalHeaderLabels(
-            ["Symbol", "Side", "Type", "Price", "Mark", "Amount", "Filled", "Remaining", "Status", "PnL", "Order ID"]
-        )
-        dock.setWidget(self.open_orders_table)
-        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+        create_open_orders_panel(self)
 
     def _create_orderbook_panel(self):
-        dock = QDockWidget("Orderbook", self)
-        self.orderbook_panel = OrderBookPanel()
-        dock.setWidget(self.orderbook_panel)
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        create_orderbook_panel(self)
 
     def _create_trade_log_panel(self):
-        dock = QDockWidget("Trade Log", self)
-        self.trade_log = QTableWidget()
-        self.trade_log.setColumnCount(9)
-        self.trade_log.setHorizontalHeaderLabels(
-            ["Timestamp", "Symbol", "Side", "Price", "Size", "Order Type", "Status", "Order ID", "PnL"]
-        )
-        dock.setWidget(self.trade_log)
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        create_trade_log_panel(self)
 
     def _create_equity_panel(self):
 
@@ -2356,8 +4386,8 @@ class Terminal(QMainWindow):
         self.equity_summary_label.setStyleSheet("color: #dce7f8; font-size: 15px; font-weight: 700;")
         layout.addWidget(self.equity_summary_label)
 
-        self.equity_chart = pg.PlotWidget()
-        self._style_performance_plot(self.equity_chart, left_label="Equity")
+        self.equity_chart = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")})
+        self._style_performance_plot(self.equity_chart, left_label="Equity", bottom_label="Time")
         self.equity_curve = self.equity_chart.plot(pen="g")
 
         layout.addWidget(self.equity_chart)
@@ -2366,7 +4396,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(container)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
     def _show_system_status_panel(self):
         dock = getattr(self, "system_status_dock", None)
@@ -2402,14 +4432,14 @@ class Terminal(QMainWindow):
             "Sharpe Ratio",
             "Win Rate",
             "Profit Factor",
-            "Realized Trades",
-            "Pending Orders",
+            "Fees",
+            "Avg Slippage",
         ]
         metrics_grid, metric_labels = self._build_performance_metric_grid(metric_names, columns=2)
         layout.addLayout(metrics_grid)
 
-        plot = pg.PlotWidget()
-        self._style_performance_plot(plot, left_label="Equity")
+        plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")})
+        self._style_performance_plot(plot, left_label="Equity", bottom_label="Time")
         plot.setMinimumHeight(180)
         curve = plot.plot(pen=pg.mkPen("#2a7fff", width=2.2))
         layout.addWidget(plot)
@@ -2434,7 +4464,7 @@ class Terminal(QMainWindow):
 
         container.setLayout(layout)
         dock.setWidget(container)
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
     def _build_performance_metric_grid(self, metric_names, columns=2):
         grid = QGridLayout()
@@ -2467,7 +4497,7 @@ class Terminal(QMainWindow):
 
         return grid, labels
 
-    def _style_performance_plot(self, plot, left_label=None):
+    def _style_performance_plot(self, plot, left_label=None, bottom_label="Samples"):
         if plot is None:
             return
         plot.setBackground("#0b1220")
@@ -2482,15 +4512,15 @@ class Terminal(QMainWindow):
             axis.setTextPen(text_pen)
         if left_label:
             plot.setLabel("left", left_label, color="#8fa7c6")
-        plot.setLabel("bottom", "Samples", color="#8fa7c6")
+        plot.setLabel("bottom", bottom_label, color="#8fa7c6")
 
-    def _safe_float(self, value):
+    def _safe_float(self, value, default=None):
         try:
             numeric = float(value)
         except Exception:
-            return None
+            return default
         if not np.isfinite(numeric):
-            return None
+            return default
         return numeric
 
     def _format_currency(self, value):
@@ -2554,336 +4584,42 @@ class Terminal(QMainWindow):
                 {
                     "timestamp": table.item(row, 0).text() if table.item(row, 0) else "",
                     "symbol": table.item(row, 1).text() if table.item(row, 1) else "",
-                    "side": table.item(row, 2).text() if table.item(row, 2) else "",
-                    "price": table.item(row, 3).text() if table.item(row, 3) else "",
-                    "size": table.item(row, 4).text() if table.item(row, 4) else "",
-                    "order_type": table.item(row, 5).text() if table.item(row, 5) else "",
-                    "status": table.item(row, 6).text() if table.item(row, 6) else "",
-                    "order_id": table.item(row, 7).text() if table.item(row, 7) else "",
-                    "pnl": table.item(row, 8).text() if table.item(row, 8) else "",
+                    "source": table.item(row, 2).text() if table.item(row, 2) else "",
+                    "side": table.item(row, 3).text() if table.item(row, 3) else "",
+                    "price": table.item(row, 4).text() if table.item(row, 4) else "",
+                    "size": table.item(row, 5).text() if table.item(row, 5) else "",
+                    "order_type": table.item(row, 6).text() if table.item(row, 6) else "",
+                    "status": table.item(row, 7).text() if table.item(row, 7) else "",
+                    "order_id": table.item(row, 8).text() if table.item(row, 8) else "",
+                    "pnl": table.item(row, 9).text() if table.item(row, 9) else "",
                 }
             )
         return fallback
 
+    def _strategy_scorecard_rows(self):
+        return strategy_scorecard_rows(self)
+
     def _performance_snapshot(self):
-        equity_series = []
-        for value in self._performance_series():
-            numeric = self._safe_float(value)
-            if numeric is not None:
-                equity_series.append(numeric)
-
-        perf = getattr(self.controller, "performance_engine", None)
-        report = {}
-        if perf is not None and hasattr(perf, "report"):
-            try:
-                report = perf.report() or {}
-            except Exception:
-                report = {}
-
-        initial_equity = equity_series[0] if equity_series else None
-        latest_equity = equity_series[-1] if equity_series else None
-        net_pnl = None
-        if initial_equity is not None and latest_equity is not None:
-            net_pnl = latest_equity - initial_equity
-
-        drawdown_series = []
-        current_drawdown = None
-        max_drawdown = self._safe_float(report.get("max_drawdown"))
-        if equity_series:
-            equity_array = np.asarray(equity_series, dtype=float)
-            running_peak = np.maximum.accumulate(equity_array)
-            safe_peaks = np.where(running_peak == 0, 1.0, running_peak)
-            drawdown_series = ((equity_array / safe_peaks) - 1.0).tolist()
-            current_drawdown = abs(drawdown_series[-1]) if drawdown_series else 0.0
-            if max_drawdown is None:
-                max_drawdown = abs(min(drawdown_series))
-
-        trades = self._performance_trade_records()
-        trade_count = len(trades)
-        pending_statuses = {"submitted", "open", "new", "pending", "partially_filled"}
-        rejected_statuses = {"rejected", "failed", "error"}
-        canceled_statuses = {"canceled", "cancelled"}
-        pending_orders = 0
-        rejected_orders = 0
-        canceled_orders = 0
-        symbol_stats = {}
-        realized_pnls = []
-
-        for trade in trades:
-            status = str(trade.get("status") or "").strip().lower()
-            symbol = str(trade.get("symbol") or "-").strip() or "-"
-            pnl = self._safe_float(trade.get("pnl"))
-
-            stats = symbol_stats.setdefault(
-                symbol,
-                {"symbol": symbol, "orders": 0, "realized": 0, "wins": 0, "pnl": 0.0}
-            )
-            stats["orders"] += 1
-
-            if status in pending_statuses:
-                pending_orders += 1
-            elif status in rejected_statuses:
-                rejected_orders += 1
-            elif status in canceled_statuses:
-                canceled_orders += 1
-
-            if pnl is not None:
-                realized_pnls.append({"symbol": symbol, "pnl": pnl})
-                stats["realized"] += 1
-                stats["pnl"] += pnl
-                if pnl > 0:
-                    stats["wins"] += 1
-
-        realized_trade_count = len(realized_pnls)
-        pnl_values = [entry["pnl"] for entry in realized_pnls]
-        gross_profit = sum(value for value in pnl_values if value > 0)
-        gross_loss = sum(value for value in pnl_values if value < 0)
-        win_count = sum(1 for value in pnl_values if value > 0)
-        loss_count = sum(1 for value in pnl_values if value < 0)
-        win_rate = (win_count / realized_trade_count) if realized_trade_count else None
-        avg_trade = (sum(pnl_values) / realized_trade_count) if realized_trade_count else None
-        best_trade = max(pnl_values) if pnl_values else None
-        worst_trade = min(pnl_values) if pnl_values else None
-        if gross_loss < 0:
-            profit_factor = gross_profit / abs(gross_loss)
-        elif gross_profit > 0:
-            profit_factor = float("inf")
-        else:
-            profit_factor = None
-
-        symbol_rows = []
-        for symbol, stats in symbol_stats.items():
-            realized = int(stats["realized"])
-            symbol_rows.append(
-                {
-                    "symbol": symbol,
-                    "orders": int(stats["orders"]),
-                    "realized": realized,
-                    "win_rate": (stats["wins"] / realized) if realized else None,
-                    "net_pnl": stats["pnl"],
-                    "avg_pnl": (stats["pnl"] / realized) if realized else None,
-                }
-            )
-        symbol_rows.sort(key=lambda item: (item["net_pnl"], item["realized"], item["orders"]), reverse=True)
-
-        sharpe_ratio = self._safe_float(report.get("sharpe_ratio"))
-        sortino_ratio = self._safe_float(report.get("sortino_ratio"))
-        volatility = self._safe_float(report.get("volatility"))
-        value_at_risk = self._safe_float(report.get("value_at_risk"))
-        conditional_var = self._safe_float(report.get("conditional_var"))
-        cumulative_return = self._safe_float(report.get("cumulative_return"))
-        if cumulative_return is None and initial_equity not in (None, 0) and latest_equity is not None:
-            cumulative_return = (latest_equity / initial_equity) - 1.0
-
-        if realized_trade_count == 0 and len(equity_series) < 2:
-            health = "Not enough data"
-        elif (sharpe_ratio is not None and sharpe_ratio >= 1.0) and (max_drawdown is not None and max_drawdown <= 0.08):
-            health = "Strong risk-adjusted performance"
-        elif (net_pnl is not None and net_pnl >= 0) and (max_drawdown is None or max_drawdown <= 0.15):
-            health = "Constructive but still developing"
-        else:
-            health = "Needs closer risk review"
-
-        best_symbol = symbol_rows[0] if symbol_rows else None
-        summary_bits = []
-        if net_pnl is not None:
-            summary_bits.append(f"net PnL {self._format_currency(net_pnl)}")
-        if cumulative_return is not None:
-            summary_bits.append(f"return {self._format_percent_text(cumulative_return)}")
-        if max_drawdown is not None:
-            summary_bits.append(f"max drawdown {self._format_percent_text(max_drawdown)}")
-        if win_rate is not None:
-            summary_bits.append(f"win rate {self._format_percent_text(win_rate)}")
-        headline = health
-        if summary_bits:
-            headline = f"{health}. Current read: " + ", ".join(summary_bits[:4]) + "."
-
-        insights = []
-        if latest_equity is not None and initial_equity is not None:
-            insights.append(
-                f"Equity moved from <b>{self._format_currency(initial_equity)}</b> to <b>{self._format_currency(latest_equity)}</b>, for a net change of <b>{self._format_currency(net_pnl)}</b>."
-            )
-        if realized_trade_count:
-            trade_quality = f"{realized_trade_count} realized trades"
-            if win_rate is not None:
-                trade_quality += f", <b>{self._format_percent_text(win_rate)}</b> win rate"
-            if profit_factor is not None:
-                profit_factor_text = "infinite" if profit_factor == float("inf") else self._format_ratio_text(profit_factor)
-                trade_quality += f", profit factor <b>{profit_factor_text}</b>"
-            insights.append(trade_quality + ".")
-        else:
-            insights.append("No realized PnL history yet, so trade-quality metrics are still warming up.")
-
-        if best_symbol is not None and best_symbol.get("realized", 0) > 0:
-            insights.append(
-                f"Best contributing symbol so far is <b>{html.escape(best_symbol['symbol'])}</b> with {best_symbol['realized']} realized trades and <b>{self._format_currency(best_symbol['net_pnl'])}</b> net PnL."
-            )
-
-        execution_notes = []
-        if pending_orders:
-            execution_notes.append(f"{pending_orders} pending/open orders")
-        if rejected_orders:
-            execution_notes.append(f"{rejected_orders} rejected orders")
-        if canceled_orders:
-            execution_notes.append(f"{canceled_orders} canceled orders")
-        if execution_notes:
-            insights.append("Execution state: " + ", ".join(execution_notes) + ".")
-
-        if max_drawdown is not None and max_drawdown >= 0.15:
-            insights.append("Drawdown is elevated relative to the current sample; position sizing or strategy selectivity may need tightening.")
-        elif max_drawdown is not None:
-            insights.append("Drawdown remains contained relative to the current sample, which is a healthier sign than raw PnL alone.")
-
-        metrics = {
-            "Equity": {"text": self._format_currency(latest_equity), "tone": "neutral"},
-            "Starting Equity": {"text": self._format_currency(initial_equity), "tone": "muted"},
-            "Net PnL": {"text": self._format_currency(net_pnl), "tone": "positive" if (net_pnl or 0) > 0 else "negative" if (net_pnl or 0) < 0 else "neutral"},
-            "Return": {"text": self._format_percent_text(cumulative_return), "tone": "positive" if (cumulative_return or 0) > 0 else "negative" if (cumulative_return or 0) < 0 else "neutral"},
-            "Samples": {"text": str(len(equity_series)), "tone": "muted"},
-            "Trades": {"text": str(trade_count), "tone": "muted"},
-            "Realized Trades": {"text": str(realized_trade_count), "tone": "muted"},
-            "Pending Orders": {"text": str(pending_orders), "tone": "warning" if pending_orders else "muted"},
-            "Win Rate": {"text": self._format_percent_text(win_rate), "tone": "positive" if (win_rate or 0) >= 0.5 and win_rate is not None else "neutral"},
-            "Profit Factor": {"text": "infinite" if profit_factor == float("inf") else self._format_ratio_text(profit_factor), "tone": "positive" if profit_factor not in (None, float("inf")) and profit_factor >= 1.2 else "neutral"},
-            "Volatility": {"text": self._format_percent_text(volatility), "tone": "warning" if (volatility or 0) > 0.4 else "neutral"},
-            "Sharpe Ratio": {"text": self._format_ratio_text(sharpe_ratio), "tone": "positive" if (sharpe_ratio or 0) >= 1.0 else "negative" if sharpe_ratio is not None and sharpe_ratio < 0 else "neutral"},
-            "Sortino Ratio": {"text": self._format_ratio_text(sortino_ratio), "tone": "positive" if (sortino_ratio or 0) >= 1.0 else "negative" if sortino_ratio is not None and sortino_ratio < 0 else "neutral"},
-            "Max Drawdown": {"text": self._format_percent_text(max_drawdown), "tone": "negative" if (max_drawdown or 0) >= 0.1 else "positive" if max_drawdown is not None else "neutral"},
-            "Current Drawdown": {"text": self._format_percent_text(current_drawdown), "tone": "negative" if (current_drawdown or 0) >= 0.05 else "neutral"},
-            "VaR (95%)": {"text": self._format_percent_text(value_at_risk), "tone": "warning" if value_at_risk is not None and value_at_risk < 0 else "neutral"},
-            "CVaR (95%)": {"text": self._format_percent_text(conditional_var), "tone": "warning" if conditional_var is not None and conditional_var < 0 else "neutral"},
-            "Best Trade": {"text": self._format_currency(best_trade), "tone": "positive" if best_trade is not None and best_trade > 0 else "neutral"},
-            "Worst Trade": {"text": self._format_currency(worst_trade), "tone": "negative" if worst_trade is not None and worst_trade < 0 else "neutral"},
-            "Avg Trade": {"text": self._format_currency(avg_trade), "tone": "positive" if avg_trade is not None and avg_trade > 0 else "negative" if avg_trade is not None and avg_trade < 0 else "neutral"},
-        }
-
-        return {
-            "headline": headline,
-            "insights": insights,
-            "metrics": metrics,
-            "equity_series": equity_series,
-            "drawdown_series": [abs(value) for value in drawdown_series],
-            "symbol_rows": symbol_rows[:8],
-        }
+        return performance_snapshot(self)
 
     def _populate_performance_symbol_table(self, table, symbol_rows):
-        if table is None:
-            return
-        table.setRowCount(0)
-        for row_data in symbol_rows:
-            row = table.rowCount()
-            table.insertRow(row)
-            values = [
-                row_data.get("symbol", "-"),
-                str(int(row_data.get("orders", 0) or 0)),
-                str(int(row_data.get("realized", 0) or 0)),
-                self._format_percent_text(row_data.get("win_rate")),
-                self._format_currency(row_data.get("net_pnl")),
-                self._format_currency(row_data.get("avg_pnl")),
-            ]
-            for column, value in enumerate(values):
-                table.setItem(row, column, QTableWidgetItem(str(value)))
-        table.horizontalHeader().setStretchLastSection(True)
+        populate_performance_symbol_table(self, table, symbol_rows)
 
     def _populate_performance_view(self, widgets, snapshot):
-        if not widgets:
-            return
-
-        summary = widgets.get("summary")
-        if summary is not None:
-            summary.setText(snapshot.get("headline", "Performance snapshot unavailable."))
-
-        metric_labels = widgets.get("metric_labels", {})
-        for name, label in metric_labels.items():
-            meta = snapshot.get("metrics", {}).get(name, {"text": "-", "tone": "neutral"})
-            label.setText(meta.get("text", "-"))
-            label.setStyleSheet(self._performance_metric_style(meta.get("tone", "neutral")))
-
-        curve = widgets.get("equity_curve")
-        if curve is not None:
-            curve.setData(snapshot.get("equity_series", []))
-
-        drawdown_curve = widgets.get("drawdown_curve")
-        if drawdown_curve is not None:
-            drawdown_curve.setData(snapshot.get("drawdown_series", []))
-
-        insights = widgets.get("insights")
-        if insights is not None:
-            lines = "".join(f"<li>{line}</li>" for line in snapshot.get("insights", []))
-            insights.setHtml(f"<ul style='margin-top:4px;'>{lines}</ul>")
-
-        self._populate_performance_symbol_table(widgets.get("symbol_table"), snapshot.get("symbol_rows", []))
+        populate_performance_view(self, widgets, snapshot)
 
     def _refresh_performance_views(self):
-        snapshot = self._performance_snapshot()
-        panel_widgets = getattr(self, "_performance_panel_widgets", None)
-        if panel_widgets:
-            self._populate_performance_view(panel_widgets, snapshot)
-
-        window = getattr(self, "detached_tool_windows", {}).get("performance_analytics")
-        if self._is_qt_object_alive(window):
-            self._populate_performance_view(getattr(window, "_performance_widgets", None), snapshot)
+        refresh_performance_views(self)
 
     def _create_strategy_comparison(self):
-        dock = QDockWidget("Strategy Comparison", self)
-        self.strategy_table = QTableWidget()
-        self.strategy_table.setColumnCount(9)
-        self.strategy_table.setHorizontalHeaderLabels(
-            ["Strategy", "Source", "RSI", "EMA Fast", "EMA Slow", "ATR", "Min Conf", "Profit", "Sharpe"]
-        )
-        dock.setWidget(self.strategy_table)
-        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+        create_strategy_scorecard_panel(self)
 
     # ==========================================================
     # BACKTEST
     # ==========================================================
 
     async def run_backtest_clicked(self):
-
-     try:
-      if self.controller.orchestrator:
-        # Initialize backtest engine
-        self.backtest_engine = BacktestEngine(
-            strategy=self.controller.orchestrator,
-            data=self.historical_data,
-            initial_capital=self.controller.initial_capital,
-            slippage=self.controller.slippage,
-            commission=self.controller.commission
-        )
-
-        # Buttons
-        start_btn = QPushButton("Start Backtest")
-        stop_btn = QPushButton("Stop Backtest")
-
-        start_btn.clicked.connect(self.start_backtest)
-        stop_btn.clicked.connect(self.stop_backtest)
-
-        # Layout
-        layout = QVBoxLayout()
-        layout.addWidget(start_btn)
-        layout.addWidget(stop_btn)
-
-        # Backtest widget
-        backtest_widget = QWidget()
-        backtest_widget.setLayout(layout)
-
-        # Dock widget
-        self.backtest_dock = QDockWidget("Backtest Results", self)
-        self.backtest_dock.setWidget(backtest_widget)
-
-        self.addDockWidget(Qt.RightDockWidgetArea, self.backtest_dock)
-      else:
-
-          raise RuntimeError(
-              "Please start trading first"
-          )
-
-     except Exception as e:
-
-        self.system_console.log(
-            f"Backtest initialization error: {e.__str__()}",
-            "ERROR"
-        )
+        await _hotfix_run_backtest_clicked(self)
 
 
 
@@ -2908,16 +4644,8 @@ class Terminal(QMainWindow):
     # ==========================================================
 
     def take_screen_shot(self):
-        pixmap = self.grab()
-        timestamp = QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")
-        filename = f"Sopotek_Screenshot_{timestamp}.png"
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Screenshot", filename, "PNG Files (*.png)"
-        )
-
+        path = prompt_and_save_widget_screenshot(self, self)
         if path:
-            pixmap.save(path, "PNG")
             self.system_console.log("Screenshot saved", "INFO")
 
 
@@ -2927,7 +4655,38 @@ class Terminal(QMainWindow):
     # Start BackTesting
     #######################################################
     def start_backtest(self):
-      self.results= engine.run()
+        start_backtest(self)
+
+    def stop_backtest(self):
+        stop_backtest(self)
+
+    def _refresh_active_chart_data(self):
+        _hotfix_refresh_active_chart_data(self)
+
+    def _refresh_active_orderbook(self):
+        _hotfix_refresh_active_orderbook(self)
+
+    def _reload_balance(self):
+        _hotfix_reload_balance(self)
+
+    def _open_settings(self):
+        _hotfix_open_settings(self)
+
+    def _open_ml_research_window(self):
+        _hotfix_show_ml_research_window(self)
+
+    def _open_strategy_assignment_window(self):
+        _hotfix_show_strategy_assignment_window(self)
+
+    def _refresh_strategy_assignment_window(self, window=None, message=None):
+        return _hotfix_refresh_strategy_assignment_window(self, window=window, message=message)
+
+    def _refresh_agent_timeline_window(self, window=None):
+        _ = window
+        return None
+
+    def _push_notification(self, *_args, **_kwargs):
+        return None
 
 
 
@@ -2972,15 +4731,122 @@ class Terminal(QMainWindow):
         if geometry:
             self.restoreGeometry(geometry)
 
+        restored_state = False
         state = self.settings.value("windowState")
         if state:
-            self.restoreState(state)
+            try:
+                restored_state = bool(self.restoreState(state))
+            except Exception:
+                restored_state = False
+
+        if restored_state:
+            self._queue_terminal_layout_fit()
+        else:
+            QTimer.singleShot(0, self._apply_default_dock_layout)
 
         self._apply_candle_colors_to_all_charts()
+
+    def _queue_terminal_layout_fit(self):
+        QTimer.singleShot(0, self._apply_terminal_table_sizing)
+
+    def _apply_terminal_table_sizing(self):
+        market_watch = getattr(self, "symbols_table", None)
+        if market_watch is not None:
+            market_watch.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            market_watch.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            market_watch.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            header = market_watch.horizontalHeader()
+            header.setMinimumSectionSize(40)
+            header.setSectionResizeMode(self._market_watch_watch_column(), QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(self._market_watch_symbol_column(), QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(self._market_watch_bid_column(), QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(self._market_watch_ask_column(), QHeaderView.ResizeMode.ResizeToContents)
+            usd_column = self._market_watch_usd_column()
+            if usd_column is not None:
+                header.setSectionResizeMode(usd_column, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(self._market_watch_status_column(), QHeaderView.ResizeMode.ResizeToContents)
+
+        for table_name in (
+            "positions_table",
+            "open_orders_table",
+            "trade_log",
+            "strategy_table",
+            "debug_table",
+            "ai_table",
+        ):
+            table = getattr(self, table_name, None)
+            if table is None:
+                continue
+            table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            table.setWordWrap(False)
+            table.horizontalHeader().setStretchLastSection(True)
+
+    def _safe_tabify_docks(self, primary, secondary):
+        if primary is None or secondary is None or primary is secondary:
+            return False
+        try:
+            self.tabifyDockWidget(primary, secondary)
+        except RuntimeError:
+            return False
+        return True
+
+    def _apply_default_dock_layout(self):
+        self._safe_tabify_docks(self.positions_dock, self.open_orders_dock)
+        self._safe_tabify_docks(self.trade_log_dock, self.orderbook_dock)
+        self._safe_tabify_docks(self.trade_log_dock, self.risk_heatmap_dock)
+        self._safe_tabify_docks(self.trade_log_dock, self.ai_signal_dock)
+
+        if self.trade_log_dock is not None:
+            self.trade_log_dock.raise_()
+        if self.positions_dock is not None:
+            self.positions_dock.raise_()
+        if self.market_watch_dock is not None:
+            self.market_watch_dock.raise_()
+
+        try:
+            self.resizeDocks([dock for dock in (self.market_watch_dock, self.trade_log_dock) if dock is not None], [320, 420], Qt.Orientation.Horizontal)
+            self.resizeDocks([dock for dock in (self.positions_dock, self.open_orders_dock) if dock is not None], [280, 220], Qt.Orientation.Vertical)
+        except Exception:
+            pass
+
+        self._queue_terminal_layout_fit()
+
+    def _show_workspace_dock(self, dock):
+        if not self._is_qt_object_alive(dock):
+            return
+        dock.show()
+        dock.raise_()
+
+    def _open_strategy_scorecard_dock(self):
+        self._show_workspace_dock(getattr(self, "strategy_scorecard_dock", None))
+
+    def _open_strategy_debug_dock(self):
+        self._show_workspace_dock(getattr(self, "strategy_debug_dock", None))
+
+    def _open_system_console_dock(self):
+        self._show_workspace_dock(getattr(self, "system_console_dock", None))
+
+    def _open_system_status_dock(self):
+        self._show_workspace_dock(getattr(self, "system_status_dock", None))
 
     def _apply_candle_colors_to_all_charts(self):
         for chart in self._iter_chart_widgets():
             chart.set_candle_colors(self.candle_up_color, self.candle_down_color)
+
+    def _chart_theme_kwargs(self):
+        return {
+            "chart_background": getattr(self, "chart_background_color", "#11161f"),
+            "grid_color": getattr(self, "chart_grid_color", "#8290a0"),
+            "axis_color": getattr(self, "chart_axis_color", "#9aa4b2"),
+        }
+
+    def _apply_chart_theme_to_all_charts(self):
+        theme_kwargs = self._chart_theme_kwargs()
+        for chart in self._iter_chart_widgets():
+            if hasattr(chart, "set_visual_theme"):
+                chart.set_visual_theme(**theme_kwargs)
 
     def _choose_candle_colors(self):
         up = QColorDialog.getColor(QColor(self.candle_up_color), self, "Select Bullish Candle Color")
@@ -3120,61 +4986,136 @@ class Terminal(QMainWindow):
         # Force redraw using existing candle cache for this symbol/timeframe.
         asyncio.get_event_loop().create_task(self._reload_chart_data(chart.symbol, chart.timeframe))
 
-    def _update_orderbook(self, symbol, bids, asks):
-        if self._ui_shutting_down:
+    def _chart_indicator_display_name(self, spec):
+        indicator_type = str((spec or {}).get("type") or "").strip().upper()
+        raw_period = (spec or {}).get("period")
+        try:
+            period = int(raw_period) if raw_period is not None else None
+        except (TypeError, ValueError):
+            period = None
+        label_map = {
+            "SMA": "Moving Average",
+            "EMA": "EMA",
+            "SMMA": "SMMA",
+            "LWMA": "LWMA",
+            "VWAP": "VWAP",
+            "BB": "Bollinger Bands",
+            "ENVELOPES": "Envelopes",
+            "ICHIMOKU": "Ichimoku",
+            "SAR": "Parabolic SAR",
+            "STDDEV": "Standard Deviation",
+            "AC": "Accelerator Oscillator",
+            "AO": "Awesome Oscillator",
+            "CCI": "CCI",
+            "DEMARKER": "DeMarker",
+            "MACD": "MACD",
+            "MOMENTUM": "Momentum",
+            "OSMA": "OsMA",
+            "RSI": "RSI",
+            "RVI": "RVI",
+            "STOCHASTIC": "Stochastic Oscillator",
+            "WPR": "Williams' Percent Range",
+            "AD": "Accumulation/Distribution",
+            "MFI": "Money Flow Index",
+            "OBV": "On Balance Volume",
+            "VOLUMES": "Volumes",
+            "ALLIGATOR": "Alligator",
+            "FRACTAL": "Fractal",
+            "GATOR": "Gator Oscillator",
+            "BW_MFI": "Market Facilitation Index",
+            "BULLS POWER": "Bulls Power",
+            "BEARS POWER": "Bears Power",
+            "FORCE INDEX": "Force Index",
+            "DONCHIAN": "Donchian Channel",
+            "KELTNER": "Keltner Channel",
+            "ZIGZAG": "ZigZag",
+            "FIBO": "Fibonacci Retracement",
+            "ADX": "ADX",
+            "ATR": "ATR",
+        }
+        label = label_map.get(indicator_type, indicator_type.title() if indicator_type else "Indicator")
+        singleton_indicators = {
+            "ICHIMOKU",
+            "SAR",
+            "AC",
+            "AO",
+            "MACD",
+            "OSMA",
+            "AD",
+            "OBV",
+            "VOLUMES",
+            "ALLIGATOR",
+            "GATOR",
+            "BW_MFI",
+            "BULLS POWER",
+            "BEARS POWER",
+        }
+        if indicator_type in singleton_indicators or period is None:
+            return label
+        return f"{label} ({period})"
+
+    def _remove_indicator_from_current_chart(self):
+        chart = self._current_chart_widget()
+        if not isinstance(chart, ChartWidget):
+            QMessageBox.warning(self, "Chart", "Select a chart first.")
             return
 
-        active_symbol = self._current_chart_symbol()
+        indicator_specs = [
+            spec
+            for spec in list(getattr(chart, "indicators", []) or [])
+            if isinstance(spec, dict) and str(spec.get("key") or "").strip()
+        ]
+        if not indicator_specs:
+            QMessageBox.information(self, "Indicator", "This chart has no indicators to remove.")
+            return
 
-        if hasattr(self, "orderbook_panel") and active_symbol == symbol:
-            self.orderbook_panel.update_orderbook(bids, asks)
+        options = []
+        option_map = {}
+        for spec in indicator_specs:
+            key = str(spec.get("key") or "").strip()
+            option = f"{self._chart_indicator_display_name(spec)} [{key}]"
+            options.append(option)
+            option_map[option] = key
 
+        selection, ok = QInputDialog.getItem(
+            self,
+            "Remove Indicator",
+            "Indicator:",
+            options,
+            0,
+            False,
+        )
+        if not ok or not selection:
+            return
+
+        if not chart.remove_indicator(option_map.get(selection, "")):
+            QMessageBox.warning(self, "Indicator", "Unable to remove the selected indicator.")
+            return
+
+        chart.updateGeometry()
+        chart.repaint()
+
+    def _update_orderbook(self, symbol, bids, asks):
+        update_orderbook(self, symbol, bids, asks)
+
+    def _update_recent_trades(self, symbol, trades):
+        update_recent_trades(self, symbol, trades)
+
+    def _update_news(self, symbol, events):
+        normalized = str(symbol or "").upper().strip()
         for chart in self._iter_chart_widgets():
-            if chart.symbol == symbol:
-                chart.update_orderbook_heatmap(bids, asks)
+            if str(getattr(chart, "symbol", "")).upper() != normalized:
+                continue
+            if getattr(self.controller, "news_draw_on_chart", False):
+                chart.set_news_events(events or [])
+            else:
+                chart.clear_news_events()
 
     def _create_strategy_debug_panel(self):
-
-        dock = QDockWidget("Strategy Debug", self)
-
-        self.debug_table = QTableWidget()
-        self.debug_table.setColumnCount(7)
-        self.debug_table.setHorizontalHeaderLabels([
-            "Index", "Signal", "RSI",
-            "EMA Fast", "EMA Slow",
-            "ML Prob", "Reason"
-        ])
-
-        dock.setWidget(self.debug_table)
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        create_strategy_debug_panel(self)
 
     def _handle_strategy_debug(self, debug):
-        if self._ui_shutting_down:
-            return
-
-        if debug is None:
-            print("DEBUG IS NONE")
-            return
-
-        row = self.debug_table.rowCount()
-        self.debug_table.insertRow(row)
-
-        self.debug_table.setItem(row, 0, QTableWidgetItem(str(debug["index"])))
-        self.debug_table.setItem(row, 1, QTableWidgetItem(debug["signal"]))
-        self.debug_table.setItem(row, 2, QTableWidgetItem(str(debug["rsi"])))
-        self.debug_table.setItem(row, 3, QTableWidgetItem(str(debug["ema_fast"])))
-        self.debug_table.setItem(row, 4, QTableWidgetItem(str(debug["ema_slow"])))
-        self.debug_table.setItem(row, 5, QTableWidgetItem(str(debug["ml_probability"])))
-        self.debug_table.setItem(row, 6, QTableWidgetItem(debug["reason"]))
-
-        # Add to chart
-        for chart in self._iter_chart_widgets():
-            if chart.symbol == debug["symbol"]:
-                chart.add_strategy_signal(
-                    debug["index"],
-                    debug.get("price", debug["ema_fast"]),
-                    debug["signal"]
-                )
+        handle_strategy_debug(self, debug)
 
     def _update_training_status(self, symbol, status):
         status_column = self._market_watch_status_column()
@@ -3206,35 +5147,34 @@ class Terminal(QMainWindow):
                 break
 
     def _rotate_spinner(self):
+        try:
+            self._spinner_index += 1
+            self._update_trading_activity_indicator()
+            self._update_autotrade_button()
 
-     try:
-        self._update_trading_activity_indicator()
+            # Lightweight spinner update: only touch existing rows that are in training state.
+            if not hasattr(self, "symbols_table") or self.symbols_table is None:
+                return
 
-        # Lightweight spinner update: only touch existing rows that are in training state.
-        if not hasattr(self, "symbols_table") or self.symbols_table is None:
-            return
+            icon = self._spinner_frames[self._spinner_index % len(self._spinner_frames)]
 
-        self._spinner_index += 1
-        icon = self._spinner_frames[self._spinner_index % len(self._spinner_frames)]
+            rows = self.symbols_table.rowCount()
+            status_column = self._market_watch_status_column()
 
-        rows = self.symbols_table.rowCount()
-        status_column = self._market_watch_status_column()
+            for row in range(rows):
+                status_item = self.symbols_table.item(row, status_column)
 
-        for row in range(rows):
-            status_item = self.symbols_table.item(row, status_column)
+                if not status_item:
+                    continue
 
-            if not status_item:
-                continue
+                text = status_item.text() or ""
 
-            text = status_item.text() or ""
+                if "Training" in text or "?" in text or "?" in text:
+                    status_item.setText(f"{icon} Training...")
+                    status_item.setForeground(QColor("yellow"))
 
-            if "Training" in text or "?" in text or "?" in text:
-                status_item.setText(f"{icon} Training...")
-                status_item.setForeground(QColor("yellow"))
-
-     except Exception as e:
-
-        self.logger.error(e)
+        except Exception as e:
+            self.logger.error(e)
 
     def _connect_signals(self):
 
@@ -3242,43 +5182,42 @@ class Terminal(QMainWindow):
         self.controller.equity_signal.connect(self._update_equity)
         self.controller.trade_signal.connect(self._update_trade_log)
         self.controller.ticker_signal.connect(self._update_ticker)
+        if hasattr(self.controller, "news_signal"):
+            self.controller.news_signal.connect(self._update_news)
 
         self.controller.orderbook_signal.connect(
             self._update_orderbook
         )
+        if hasattr(self.controller, "recent_trades_signal"):
+            self.controller.recent_trades_signal.connect(self._update_recent_trades)
 
         if hasattr(self.controller, "ai_signal_monitor"):
             self.controller.ai_signal_monitor.connect(self._update_ai_signal)
 
         self.controller.strategy_debug_signal.connect(self._handle_strategy_debug)
+        if hasattr(self.controller, "agent_runtime_signal"):
+            self.controller.agent_runtime_signal.connect(self._handle_agent_runtime_event)
 
         self.controller.training_status_signal.connect(
             self._update_training_status
         )
 
     def _setup_panels(self):
-
-        self.system_console = SystemConsole()
-
-        console_dock = QDockWidget("System Console", self)
-        console_dock.setWidget(self.system_console)
-
-        self.addDockWidget(
-            Qt.BottomDockWidgetArea,
-            console_dock
-        )
+        self._create_system_console_panel()
 
         self._create_market_watch_panel()
         self._create_orderbook_panel()
         self._create_positions_panel()
         self._create_open_orders_panel()
         self._create_trade_log_panel()
-        self._create_performance_panel()
         self._create_strategy_comparison()
         self._create_strategy_debug_panel()
         self._create_system_status_panel()
         self._create_risk_heatmap()
         self._create_ai_signal_panel()
+
+    def _create_system_console_panel(self):
+        create_system_console_panel(self)
 
     def _current_chart_symbol(self):
         chart = self._current_chart_widget()
@@ -3291,12 +5230,17 @@ class Terminal(QMainWindow):
             return
 
         symbol = self._current_chart_symbol()
-        if not symbol or not hasattr(self.controller, "request_orderbook"):
+        if not symbol:
             return
 
-        asyncio.get_event_loop().create_task(
-            self.controller.request_orderbook(symbol=symbol, limit=20)
-        )
+        if hasattr(self.controller, "request_orderbook"):
+            asyncio.get_event_loop().create_task(
+                self.controller.request_orderbook(symbol=symbol, limit=20)
+            )
+        if hasattr(self.controller, "request_recent_trades"):
+            asyncio.get_event_loop().create_task(
+                self.controller.request_recent_trades(symbol=symbol, limit=40)
+            )
 
     def _setup_spinner(self):
 
@@ -3332,127 +5276,148 @@ class Terminal(QMainWindow):
         self.symbols_table.blockSignals(blocked)
         self._reorder_market_watch_rows()
 
-    def _open_manual_trade(self):
+    def _manual_trade_default_payload(self, prefill=None):
+        return manual_trade_default_payload(self, prefill=prefill)
+
+    def _chart_for_symbol(self, symbol):
+        target = str(symbol or "").strip()
+        if not target:
+            return None
+        current_chart = self._current_chart_widget()
+        if isinstance(current_chart, ChartWidget) and getattr(current_chart, "symbol", "") == target:
+            return current_chart
+        for chart in self._all_chart_widgets():
+            if getattr(chart, "symbol", "") == target:
+                return chart
+        return None
+
+    def _default_entry_price_for_symbol(self, symbol, side="buy"):
+        return default_entry_price_for_symbol(self, symbol, side=side)
+
+    def _suggest_manual_trade_levels(self, symbol, side="buy", entry_price=None):
+        return suggest_manual_trade_levels(self, symbol, side=side, entry_price=entry_price)
+
+    def _manual_trade_format_context(self, symbol):
+        return manual_trade_format_context(self, symbol)
+
+    def _normalize_manual_trade_quantity_mode(self, value):
+        return normalize_manual_trade_quantity_mode(self, value)
+
+    def _manual_trade_quantity_context(self, symbol):
+        return manual_trade_quantity_context(self, symbol)
+
+    def _normalize_manual_trade_amount(self, symbol, amount, quantity_mode="units"):
+        return normalize_manual_trade_amount(self, symbol, amount, quantity_mode=quantity_mode)
+
+    def _validate_manual_trade_amount(self, symbol, amount, quantity_mode="units"):
+        return validate_manual_trade_amount(self, symbol, amount, quantity_mode=quantity_mode)
+
+    def _normalize_manual_trade_price(self, symbol, value):
+        return normalize_manual_trade_price(self, symbol, value)
+
+    def _apply_manual_trade_price_field_format(self, window, attr_name):
+        field = getattr(window, attr_name, None)
+        symbol_picker = getattr(window, "_manual_trade_symbol_picker", None)
+        if field is None or symbol_picker is None:
+            return
+        text = str(field.text() or "").strip()
+        if not text:
+            return
+        normalized = self._normalize_manual_trade_price(str(symbol_picker.currentText() or "").strip(), text)
+        field.blockSignals(True)
+        field.setText("" if normalized is None else str(normalized))
+        field.blockSignals(False)
+
+    def _manual_trade_target_charts(self, symbol):
+        target = str(symbol or "").strip()
+        if not target:
+            return []
+        return [chart for chart in self._all_chart_widgets() if getattr(chart, "symbol", "") == target]
+
+    def _clear_trade_overlays(self, symbol=None):
+        charts = self._manual_trade_target_charts(symbol) if symbol else self._all_chart_widgets()
+        for chart in charts:
+            try:
+                chart.clear_trade_overlay()
+            except Exception:
+                pass
+
+    def _sync_manual_trade_ticket_to_chart(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
+        symbol_picker = getattr(window, "_manual_trade_symbol_picker", None)
+        side_picker = getattr(window, "_manual_trade_side_picker", None)
+        type_picker = getattr(window, "_manual_trade_type_picker", None)
+        price_input = getattr(window, "_manual_trade_price_input", None)
+        stop_loss_input = getattr(window, "_manual_trade_stop_loss_input", None)
+        take_profit_input = getattr(window, "_manual_trade_take_profit_input", None)
+
+        symbol = str(symbol_picker.currentText() or "").strip() if symbol_picker is not None else ""
+        if not symbol:
+            self._clear_trade_overlays()
+            return
+
+        side = str(side_picker.currentText() or "buy").strip().lower() if side_picker is not None else "buy"
+        order_type = str(type_picker.currentText() or "market").strip().lower() if type_picker is not None else "market"
+        entry = self._safe_float(price_input.text()) if (price_input is not None and order_type in {"limit", "stop_limit"}) else None
+        stop_loss = self._safe_float(stop_loss_input.text()) if stop_loss_input is not None else None
+        take_profit = self._safe_float(take_profit_input.text()) if take_profit_input is not None else None
+
+        for chart in self._all_chart_widgets():
+            try:
+                if getattr(chart, "symbol", "") == symbol:
+                    chart.set_trade_overlay(entry=entry, stop_loss=stop_loss, take_profit=take_profit, side=side)
+                else:
+                    chart.clear_trade_overlay()
+            except Exception:
+                continue
+
+    def _set_manual_trade_text_field(self, window, attr_name, value):
+        field = getattr(window, attr_name, None)
+        if field is None:
+            return
+        field.blockSignals(True)
+        field.setText("" if value in (None, "") else str(value))
+        field.blockSignals(False)
+        self._refresh_manual_trade_ticket(window)
+
+    def _set_manual_trade_order_type(self, window, value):
+        picker = getattr(window, "_manual_trade_type_picker", None)
+        if picker is None:
+            return
+        picker.blockSignals(True)
+        picker.setCurrentText(str(value or "market"))
+        picker.blockSignals(False)
+        self._refresh_manual_trade_ticket(window)
+
+    def _submit_manual_trade_side(self, window, side):
+        submit_manual_trade_side(self, window, side)
+
+    def _refresh_manual_trade_ticket(self, window):
+        refresh_manual_trade_ticket(self, window)
+
+    def _populate_manual_trade_ticket(self, window, prefill=None):
+        populate_manual_trade_ticket(self, window, prefill=prefill)
+
+    def _open_manual_trade(self, prefill=None):
         if not getattr(self.controller, "broker", None):
             QMessageBox.warning(self, "Manual Order", "Connect a broker before placing an order.")
             return
-
-        symbol_options = list(getattr(self.controller, "symbols", []) or [])
-        default_symbol = self._current_chart_symbol() or getattr(self, "symbol", None) or ""
-        if default_symbol and default_symbol not in symbol_options:
-            symbol_options.insert(0, default_symbol)
-        if not symbol_options:
-            symbol_options = [default_symbol] if default_symbol else []
-
-        if symbol_options:
-            default_index = max(symbol_options.index(default_symbol), 0) if default_symbol in symbol_options else 0
-            symbol, ok = QInputDialog.getItem(
-                self,
-                "Manual Order",
-                "Symbol:",
-                symbol_options,
-                default_index,
-                True,
-            )
-            if not ok:
-                return
-            symbol = str(symbol).strip()
-        else:
-            symbol, ok = QInputDialog.getText(self, "Manual Order", "Symbol:")
-            if not ok:
-                return
-            symbol = str(symbol).strip()
-
-        if not symbol:
-            QMessageBox.warning(self, "Manual Order", "A symbol is required.")
-            return
-
-        side, ok = QInputDialog.getItem(
-            self,
-            "Manual Order",
-            "Side:",
-            ["buy", "sell"],
-            0,
-            False,
+        window = self._get_or_create_tool_window(
+            "manual_trade_ticket",
+            "Manual Trade Ticket",
+            width=560,
+            height=460,
         )
-        if not ok:
-            return
+        ensure_manual_trade_ticket_window(self, window)
 
-        order_type, ok = QInputDialog.getItem(
-            self,
-            "Manual Order",
-            "Order Type:",
-            ["market", "limit"],
-            0,
-            False,
-        )
-        if not ok:
-            return
+        self._populate_manual_trade_ticket(window, prefill=prefill)
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
-        amount, ok = QInputDialog.getDouble(
-            self,
-            "Manual Order",
-            "Amount:",
-            1.0,
-            0.0,
-            1_000_000_000.0,
-            8,
-        )
-        if not ok:
-            return
-
-        price = None
-        if order_type == "limit":
-            price, ok = QInputDialog.getDouble(
-                self,
-                "Manual Order",
-                "Limit Price:",
-                0.0,
-                0.0,
-                1_000_000_000.0,
-                8,
-            )
-            if not ok:
-                return
-            if price <= 0:
-                QMessageBox.warning(self, "Manual Order", "Limit orders require a positive price.")
-                return
-
-        stop_loss, ok = QInputDialog.getDouble(
-            self,
-            "Manual Order",
-            "Stop Loss (0 to skip):",
-            0.0,
-            0.0,
-            1_000_000_000.0,
-            8,
-        )
-        if not ok:
-            return
-
-        take_profit, ok = QInputDialog.getDouble(
-            self,
-            "Manual Order",
-            "Take Profit (0 to skip):",
-            0.0,
-            0.0,
-            1_000_000_000.0,
-            8,
-        )
-        if not ok:
-            return
-
-        asyncio.get_event_loop().create_task(
-            self._submit_manual_trade(
-                symbol=symbol,
-                side=side,
-                amount=amount,
-                order_type=order_type,
-                price=price,
-                stop_loss=stop_loss or None,
-                take_profit=take_profit or None,
-            )
-        )
+    def _submit_manual_trade_from_ticket(self, window):
+        submit_manual_trade_from_ticket(self, window)
 
     def _optimize_strategy(self):
         self._open_text_window(
@@ -3469,8 +5434,8 @@ class Terminal(QMainWindow):
             height=420,
         )
 
-    def _get_or_create_tool_window(self, key, title, width=900, height=560):
-        window = self.detached_tool_windows.get(key)
+    def _get_or_create_tool_window(self, key, title, width=900, height=560) -> Any:
+        window: Any = self.detached_tool_windows.get(key)
 
         if window is not None:
             window.showNormal()
@@ -3491,105 +5456,85 @@ class Terminal(QMainWindow):
         return window
 
     def _clone_table_widget(self, source, target):
-        target.clear()
-        target.setColumnCount(source.columnCount())
-        target.setRowCount(source.rowCount())
-
-        headers = []
-        for col in range(source.columnCount()):
-            header_item = source.horizontalHeaderItem(col)
-            headers.append(header_item.text() if header_item else f"Column {col + 1}")
-        target.setHorizontalHeaderLabels(headers)
-
-        for row in range(source.rowCount()):
-            for col in range(source.columnCount()):
-                source_item = source.item(row, col)
-                if source_item is None:
-                    continue
-                target.setItem(row, col, source_item.clone())
-
-        target.resizeColumnsToContents()
-        target.horizontalHeader().setStretchLastSection(True)
-
-    def _sync_logs_window(self, editor):
-        source_text = self.system_console.console.toPlainText()
-        if editor.toPlainText() == source_text:
+        if not self._is_qt_object_alive(source) or not self._is_qt_object_alive(target):
+            return
+        if self._monitor_table_is_busy(target):
             return
 
-        editor.setPlainText(source_text)
-        editor.moveCursor(QTextCursor.MoveOperation.End)
+        blocked = target.blockSignals(True)
+        target.setUpdatesEnabled(False)
+        try:
+            target.clearContents()
+            target.setColumnCount(source.columnCount())
+            target.setRowCount(source.rowCount())
+
+            headers = []
+            for col in range(source.columnCount()):
+                header_item = source.horizontalHeaderItem(col)
+                headers.append(header_item.text() if header_item else f"Column {col + 1}")
+            target.setHorizontalHeaderLabels(headers)
+
+            for row in range(source.rowCount()):
+                for col in range(source.columnCount()):
+                    source_item = source.item(row, col)
+                    if source_item is None:
+                        continue
+                    target.setItem(row, col, source_item.clone())
+
+            target.resizeColumnsToContents()
+            target.horizontalHeader().setStretchLastSection(True)
+        finally:
+            target.setUpdatesEnabled(True)
+            target.blockSignals(blocked)
+
+    def _configure_monitor_table(self, table):
+        if table is None or not self._is_qt_object_alive(table):
+            return
+
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+        table.setDragEnabled(False)
+        table.setSortingEnabled(False)
+        table.setWordWrap(False)
+        table.setCornerButtonEnabled(False)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, False)
+        if table.viewport() is not None:
+            table.viewport().setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, False)
+        table.setStyleSheet(
+            "QTableWidget { background-color: #0f1726; color: #d9e6f7; gridline-color: #20324d; }"
+            "QTableWidget::item:selected { background-color: #1c3150; color: #ffffff; }"
+        )
+
+    def _monitor_table_is_busy(self, table):
+        if table is None or not self._is_qt_object_alive(table):
+            return True
+
+        try:
+            viewport = table.viewport()
+        except Exception:
+            viewport = None
+
+        mouse_pressed = QApplication.mouseButtons() != Qt.MouseButton.NoButton
+        if mouse_pressed and (table.underMouse() or (viewport is not None and viewport.underMouse())):
+            return True
+
+        return bool(table.hasFocus() or (viewport is not None and viewport.hasFocus()))
+
+    def _sync_logs_window(self, editor):
+        sync_logs_window(self, editor)
 
     def _open_logs(self):
-        window = self._get_or_create_tool_window(
-            "system_logs",
-            "System Logs",
-            width=980,
-            height=620,
-        )
-
-        editor = getattr(window, "_logs_editor", None)
-        if editor is None:
-            editor = QTextEdit()
-            editor.setReadOnly(True)
-            editor.setStyleSheet(self.system_console.console.styleSheet())
-            window.setCentralWidget(editor)
-            window._logs_editor = editor
-
-            sync_timer = QTimer(window)
-            sync_timer.timeout.connect(lambda: self._sync_logs_window(editor))
-            sync_timer.start(700)
-            window._sync_timer = sync_timer
-
-        self._sync_logs_window(editor)
-        window.show()
-        window.raise_()
-        window.activateWindow()
+        open_logs(self)
 
     def _open_ml_monitor(self):
-        window = self._get_or_create_tool_window(
-            "ml_monitor",
-            "ML Signal Monitor",
-            width=880,
-            height=520,
-        )
-
-        table = getattr(window, "_monitor_table", None)
-        if table is None:
-            table = QTableWidget()
-            table.setAlternatingRowColors(True)
-            window.setCentralWidget(table)
-            window._monitor_table = table
-
-            sync_timer = QTimer(window)
-            sync_timer.timeout.connect(
-                lambda: self._clone_table_widget(self.ai_table, table)
-            )
-            sync_timer.start(900)
-            window._sync_timer = sync_timer
-
-        self._clone_table_widget(self.ai_table, table)
-        window.show()
-        window.raise_()
-        window.activateWindow()
+        open_ml_monitor(self)
 
     def _open_text_window(self, key, title, html, width=760, height=520):
-        window = self._get_or_create_tool_window(key, title, width=width, height=height)
-
-        browser = getattr(window, "_browser", None)
-        if browser is None:
-            browser = QTextBrowser()
-            browser.setOpenExternalLinks(True)
-            browser.setStyleSheet(
-                "QTextBrowser { background-color: #0b1220; color: #e6edf7; padding: 16px; }"
-            )
-            window.setCentralWidget(browser)
-            window._browser = browser
-
-        browser.setHtml(html)
-        window.show()
-        window.raise_()
-        window.activateWindow()
-        return window
+        return open_text_window(self, key, title, html, width=width, height=height)
 
     def _format_backtest_timestamp(self, value):
         if value in (None, ""):
@@ -3664,6 +5609,8 @@ class Terminal(QMainWindow):
         initial_deposit = float(getattr(self.controller, "initial_capital", 10000) or 10000)
         spread_pct = float(getattr(self.controller, "spread_pct", 0.0) or 0.0)
         equity_curve = getattr(getattr(self, "backtest_engine", None), "equity_curve", []) or []
+        requested_range_text = _hotfix_backtest_requested_range_text(context=context)
+        requested_bars = _hotfix_backtest_requested_limit(context=context, fallback=getattr(self.controller, "limit", 50000))
 
         report = report or {}
         total_profit = float(report.get("total_profit", 0.0) or 0.0)
@@ -3694,6 +5641,8 @@ class Terminal(QMainWindow):
             f"Spread: {spread_pct:.4f}%",
             f"Initial Deposit: {initial_deposit:.2f}",
             f"Bars in Test: {bars}",
+            f"Target Bars: {requested_bars}",
+            f"Selected Dates: {requested_range_text}",
             f"Range: {self._format_backtest_range(context.get('data'))}",
             "",
             f"Total Net Profit: {total_profit:.2f}",
@@ -3710,248 +5659,10 @@ class Terminal(QMainWindow):
         return "\n".join(lines)
 
     def _show_backtest_window(self):
-        window = self._get_or_create_tool_window(
-            "backtesting_workspace",
-            "Strategy Tester",
-            width=1180,
-            height=760,
-        )
-
-        if getattr(window, "_backtest_container", None) is None:
-            container = QWidget()
-            layout = QVBoxLayout(container)
-
-            status = QLabel("Strategy tester ready.")
-            status.setStyleSheet("color: #e6edf7; font-weight: 700; font-size: 14px;")
-            layout.addWidget(status)
-
-            summary = QLabel("-")
-            summary.setWordWrap(True)
-            summary.setStyleSheet("color: #9fb0c7;")
-            layout.addWidget(summary)
-
-            settings_frame = QFrame()
-            settings_frame.setStyleSheet(
-                "QFrame { background-color: #101b2d; border: 1px solid #24344f; border-radius: 10px; }"
-                "QLabel { color: #d7dfeb; }"
-            )
-            settings_layout = QGridLayout(settings_frame)
-            settings_layout.setContentsMargins(14, 12, 14, 12)
-            settings_layout.setHorizontalSpacing(16)
-            settings_layout.setVerticalSpacing(8)
-
-            setting_names = [
-                "Expert",
-                "Symbol",
-                "Period",
-                "Model",
-                "Spread",
-                "Initial Deposit",
-                "Bars",
-                "Range",
-            ]
-            setting_labels = {}
-            for index, name in enumerate(setting_names):
-                title = QLabel(name)
-                title.setStyleSheet("color: #8fa3bf; font-weight: 700;")
-                value = QLabel("-")
-                value.setStyleSheet("color: #f4f8ff; font-weight: 600;")
-                row = index // 4
-                col = (index % 4) * 2
-                settings_layout.addWidget(title, row, col)
-                settings_layout.addWidget(value, row, col + 1)
-                setting_labels[name] = value
-            layout.addWidget(settings_frame)
-
-            controls = QHBoxLayout()
-            toggle_btn = QPushButton("Start Backtest")
-            report_btn = QPushButton("Generate Report")
-            toggle_btn.clicked.connect(self.start_backtest)
-            report_btn.clicked.connect(self._generate_report)
-            controls.addWidget(toggle_btn)
-            controls.addWidget(report_btn)
-            controls.addStretch()
-            layout.addLayout(controls)
-
-            metrics_frame = QFrame()
-            metrics_frame.setStyleSheet(
-                "QFrame { background-color: #0f1727; border: 1px solid #24344f; border-radius: 10px; }"
-            )
-            metrics_layout = QGridLayout(metrics_frame)
-            metrics_layout.setContentsMargins(12, 10, 12, 10)
-            metrics_layout.setHorizontalSpacing(18)
-            metrics_layout.setVerticalSpacing(6)
-
-            metric_names = [
-                "Total Net Profit",
-                "Trades",
-                "Win Rate",
-                "Max Drawdown",
-                "Final Equity",
-            ]
-            metric_labels = {}
-            for index, name in enumerate(metric_names):
-                title = QLabel(name)
-                title.setStyleSheet("color: #8fa3bf; font-weight: 700;")
-                value = QLabel("-")
-                value.setStyleSheet("color: #f5fbff; font-weight: 700; font-size: 16px;")
-                metrics_layout.addWidget(title, 0, index)
-                metrics_layout.addWidget(value, 1, index)
-                metric_labels[name] = value
-            layout.addWidget(metrics_frame)
-
-            tabs = QTabWidget()
-
-            results_table = QTableWidget()
-            results_table.setAlternatingRowColors(True)
-            tabs.addTab(results_table, "Results")
-
-            graph_tab = QWidget()
-            graph_layout = QVBoxLayout(graph_tab)
-            graph_layout.setContentsMargins(8, 8, 8, 8)
-            graph_plot = pg.PlotWidget()
-            graph_plot.setBackground("#0b1220")
-            graph_plot.showGrid(x=True, y=True, alpha=0.2)
-            graph_plot.setLabel("left", "Equity")
-            graph_plot.setLabel("bottom", "Bar")
-            graph_curve = graph_plot.plot(pen=pg.mkPen("#2a7fff", width=2))
-            graph_layout.addWidget(graph_plot)
-            tabs.addTab(graph_tab, "Graph")
-
-            report_text = QTextEdit()
-            report_text.setReadOnly(True)
-            report_text.setStyleSheet(
-                "QTextEdit { background-color: #0b1220; color: #d7dfeb; font-family: Consolas; }"
-            )
-            tabs.addTab(report_text, "Report")
-
-            journal_text = QTextEdit()
-            journal_text.setReadOnly(True)
-            journal_text.setStyleSheet(
-                "QTextEdit { background-color: #0b1220; color: #d7dfeb; font-family: Consolas; }"
-            )
-            tabs.addTab(journal_text, "Journal")
-
-            layout.addWidget(tabs)
-
-            window.setCentralWidget(container)
-            window._backtest_container = container
-            window._backtest_status = status
-            window._backtest_summary = summary
-            window._backtest_setting_labels = setting_labels
-            window._backtest_metric_labels = metric_labels
-            window._backtest_tabs = tabs
-            window._backtest_results = results_table
-            window._backtest_graph_curve = graph_curve
-            window._backtest_report = report_text
-            window._backtest_journal = journal_text
-            window._backtest_toggle_btn = toggle_btn
-            window._backtest_report_btn = report_btn
-
-        self._refresh_backtest_window(window)
-        window.show()
-        window.raise_()
-        window.activateWindow()
-        return window
+        return show_backtest_window(self)
 
     def _refresh_backtest_window(self, window=None, message=None):
-        window = window or self.detached_tool_windows.get("backtesting_workspace")
-        if window is None:
-            return
-
-        status = getattr(window, "_backtest_status", None)
-        summary = getattr(window, "_backtest_summary", None)
-        results = getattr(window, "_backtest_results", None)
-        settings = getattr(window, "_backtest_setting_labels", None)
-        metrics = getattr(window, "_backtest_metric_labels", None)
-        graph_curve = getattr(window, "_backtest_graph_curve", None)
-        report_view = getattr(window, "_backtest_report", None)
-        journal_view = getattr(window, "_backtest_journal", None)
-        toggle_btn = getattr(window, "_backtest_toggle_btn", None)
-        report_btn = getattr(window, "_backtest_report_btn", None)
-        if (
-            status is None
-            or summary is None
-            or results is None
-            or settings is None
-            or metrics is None
-            or graph_curve is None
-            or report_view is None
-            or journal_view is None
-        ):
-            return
-
-        backtest_context = getattr(self, "_backtest_context", {}) or {}
-        dataset = backtest_context.get("data")
-        candle_count = len(dataset) if hasattr(dataset, "__len__") else 0
-        has_engine = hasattr(self, "backtest_engine")
-        symbol = backtest_context.get("symbol", "-")
-        timeframe = backtest_context.get("timeframe", "-")
-        strategy_name = backtest_context.get("strategy_name") or getattr(self.controller, "strategy_name", None) or getattr(getattr(self.controller, "config", None), "strategy", "Trend Following")
-        spread_pct = float(getattr(self.controller, "spread_pct", 0.0) or 0.0)
-        initial_deposit = float(getattr(self.controller, "initial_capital", 10000) or 10000)
-        range_text = self._format_backtest_range(dataset)
-        running = bool(getattr(self, "_backtest_running", False))
-        stop_requested = bool(getattr(self, "_backtest_stop_requested", False))
-
-        if toggle_btn is not None:
-            toggle_btn.setText("Stop Backtest" if running else "Start Backtest")
-        if report_btn is not None:
-            report_btn.setEnabled((not running) and getattr(self, "results", None) is not None)
-
-        default_message = "Backtest stop requested..." if stop_requested else ("Backtest running..." if running else ("Strategy tester ready." if has_engine else "Backtest engine not initialized."))
-        status.setText(message or default_message)
-        summary.setText(
-            f"Expert: {strategy_name} | Symbol: {symbol} | Period: {timeframe} | Bars: {candle_count}"
-        )
-
-        settings["Expert"].setText(str(strategy_name))
-        settings["Symbol"].setText(str(symbol))
-        settings["Period"].setText(str(timeframe))
-        settings["Model"].setText("Bar-close simulation")
-        settings["Spread"].setText(f"{spread_pct:.4f}%")
-        settings["Initial Deposit"].setText(f"{initial_deposit:.2f}")
-        settings["Bars"].setText(str(candle_count))
-        settings["Range"].setText(range_text)
-
-        results_df = getattr(self, "results", None)
-        report = getattr(self, "backtest_report", None)
-        equity_curve = getattr(getattr(self, "backtest_engine", None), "equity_curve", []) or []
-
-        if results_df is None:
-            self._populate_backtest_results_table(results, None)
-            graph_curve.setData([])
-            metrics["Total Net Profit"].setText("-")
-            metrics["Trades"].setText("-")
-            metrics["Win Rate"].setText("-")
-            metrics["Max Drawdown"].setText("-")
-            metrics["Final Equity"].setText("-")
-            report_view.setPlainText("No backtest results yet.")
-            journal_view.setPlainText("\n".join(getattr(self, "_backtest_journal_lines", []) or []))
-            journal_view.moveCursor(QTextCursor.MoveOperation.End)
-            return
-
-        try:
-            self._populate_backtest_results_table(results, results_df)
-
-            if not isinstance(report, dict):
-                report = ReportGenerator(
-                    trades=results_df,
-                    equity_history=equity_curve,
-                ).generate()
-
-            metrics["Total Net Profit"].setText(f"{float(report.get('total_profit', 0.0) or 0.0):.2f}")
-            metrics["Trades"].setText(str(int(report.get("total_trades", 0) or 0)))
-            metrics["Win Rate"].setText(f"{float(report.get('win_rate', 0.0) or 0.0) * 100.0:.2f}%")
-            metrics["Max Drawdown"].setText(f"{float(report.get('max_drawdown', 0.0) or 0.0):.2f}")
-            metrics["Final Equity"].setText(f"{float(report.get('final_equity', initial_deposit) or initial_deposit):.2f}")
-
-            graph_curve.setData(equity_curve)
-            report_view.setPlainText(self._build_backtest_report_text(backtest_context, report, results_df))
-            journal_view.setPlainText("\n".join(getattr(self, "_backtest_journal_lines", []) or []))
-            journal_view.moveCursor(QTextCursor.MoveOperation.End)
-        except Exception as exc:
-            report_view.setPlainText(f"Unable to render backtest results: {exc}")
+        refresh_backtest_window(self, window=window, message=message)
 
     def _show_risk_settings_window(self):
         risk_engine = getattr(self.controller, "risk_engine", None)
@@ -4037,37 +5748,23 @@ class Terminal(QMainWindow):
             self.logger.error(f"Risk settings error: {exc}")
 
     def _populate_portfolio_exposure_table(self, table):
-        positions = []
-        portfolio = getattr(self.controller, "portfolio", None)
-        if portfolio is None:
-            return
-
-        if hasattr(portfolio, "get_positions"):
-            try:
-                positions = portfolio.get_positions() or []
-            except Exception:
-                positions = []
-        elif hasattr(portfolio, "positions"):
-            raw_positions = getattr(portfolio, "positions", {})
-            if isinstance(raw_positions, dict):
-                positions = list(raw_positions.values())
-
+        positions = self._active_positions_snapshot()
+        if table.columnCount() < 4:
+            table.setColumnCount(4)
+            table.setHorizontalHeaderLabels(
+                ["Symbol", "Size", "Value (USD)", "Portfolio %"]
+            )
         table.setRowCount(len(positions))
-        total_value = 0.0
-        for pos in positions:
-            try:
-                total_value += float(pos.get("value", 0))
-            except Exception:
-                continue
+        total_value = sum(float(pos.get("value", 0) or 0) for pos in positions)
 
-        for row, pos in enumerate(positions):
+        for row, pos in enumerate((positions)):
             symbol = pos.get("symbol", "-")
-            size = pos.get("size", pos.get("amount", "-"))
+            size = pos.get("amount", pos.get("size", "-"))
             value = float(pos.get("value", 0) or 0)
             pct = (value / total_value * 100) if total_value else 0
 
             table.setItem(row, 0, QTableWidgetItem(str(symbol)))
-            table.setItem(row, 1, QTableWidgetItem(str(size)))
+            table.setItem(row, 1, QTableWidgetItem(f"{float(size or 0):.6f}".rstrip("0").rstrip(".")))
             table.setItem(row, 2, QTableWidgetItem(f"{value:.2f}"))
             table.setItem(row, 3, QTableWidgetItem(f"{pct:.2f}%"))
 
@@ -4107,6 +5804,13 @@ class Terminal(QMainWindow):
 
     def _show_about(self):
         version_text = html.escape(self._app_version_text())
+        license_status = {}
+        if hasattr(self.controller, "get_license_status"):
+            try:
+                license_status = self.controller.get_license_status()
+            except Exception:
+                license_status = {}
+        license_summary = html.escape(str(license_status.get("summary", "License status unavailable") or "License status unavailable"))
         self._open_text_window(
             "about_window",
             "About Sopotek Trading",
@@ -4114,6 +5818,7 @@ class Terminal(QMainWindow):
             <h2>Sopotek Trading Platform</h2>
             <p><b>Built by:</b> Sopotek Corporation</p>
             <p><b>Version:</b> {version_text}</p>
+            <p><b>License:</b> {license_summary}</p>
             <p><b>Purpose:</b> AI-assisted multi-broker trading workstation for live trading, paper trading, analytics, and historical testing.</p>
             <p><b>Main capabilities:</b> live charts, AI signal monitoring, orderbook analysis, risk controls, backtesting, strategy optimization, and broker abstraction across crypto, stocks, forex, paper, and Stellar.</p>
             <p><b>Best use:</b> start in paper mode, validate charts and signals, confirm balances and risk limits, then move into live trading only after the setup looks stable.</p>
@@ -4123,6 +5828,10 @@ class Terminal(QMainWindow):
             width=700,
             height=520,
         )
+
+    def _open_license_manager(self):
+        if hasattr(self.controller, "show_license_dialog"):
+            self.controller.show_license_dialog(self)
 
     def _app_version_text(self):
         repo_root = Path(__file__).resolve().parents[3]
@@ -4143,12 +5852,9 @@ class Terminal(QMainWindow):
             return None
 
         try:
-            with pyproject_path.open("rb") as handle:
-                data = tomllib.load(handle)
-            project = data.get("project", {})
-            version = project.get("version")
+            version = _read_pyproject_version(pyproject_path)
             if version:
-                return str(version)
+                return version
         except Exception:
             return None
         return None
@@ -4179,135 +5885,82 @@ class Terminal(QMainWindow):
             return None
 
     def _close_all_positions(self):
-        broker = getattr(self.controller, "broker", None)
-        if broker is None:
-            QMessageBox.warning(self, "Close Positions", "Connect a broker before closing positions.")
-            return
-
-        confirm = QMessageBox.question(
-            self,
-            "Close Positions",
-            "Close all tracked positions with market orders?",
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-
-        asyncio.get_event_loop().create_task(self._close_all_positions_async())
+        close_all_positions(self)
 
     def _export_trades(self):
-        try:
-            try:
-                import pandas as pd
-            except Exception:
-                pd = None
-
-            trades = getattr(self, "results", None)
-            if trades is None or getattr(trades, "empty", True):
-                QMessageBox.information(self, "Export Trades", "No trades are available to export yet.")
-                return
-
-            path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Export Trades",
-                "trades.csv",
-                "CSV Files (*.csv)",
-            )
-            if not path:
-                return
-
-            # Backtest results are already dataframe-like, but we normalize defensively
-            # so export still works if the table source changes later.
-            if pd is not None and not hasattr(trades, "to_csv"):
-                trades = pd.DataFrame(trades)
-            trades.to_csv(path, index=False)
-            self.system_console.log(f"Trades exported to {path}", "INFO")
-            QMessageBox.information(self, "Export Trades", f"Trades exported to:\n{path}")
-        except Exception as exc:
-            self.logger.exception("Export trades failed")
-            self.system_console.log(f"Trade export failed: {exc}", "ERROR")
-            QMessageBox.critical(self, "Export Trades Failed", str(exc))
+        export_trades(self)
 
     def _cancel_all_orders(self):
-        broker = getattr(self.controller, "broker", None)
-        if broker is None:
-            QMessageBox.warning(self, "Cancel Orders", "Connect a broker before canceling orders.")
-            return
-
-        confirm = QMessageBox.question(
-            self,
-            "Cancel Orders",
-            "Cancel all open orders for the connected broker?",
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-
-        asyncio.get_event_loop().create_task(self._cancel_all_orders_async())
+        cancel_all_orders(self)
 
     def _show_async_message(self, title, text, icon=QMessageBox.Icon.Information):
-        def _open():
-            if self._ui_shutting_down:
-                return
-            box = QMessageBox(self)
-            box.setIcon(icon)
-            box.setWindowTitle(title)
-            box.setText(str(text))
-            box.setStandardButtons(QMessageBox.StandardButton.Ok)
-            box.setModal(False)
-            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-            box.open()
-
-        QTimer.singleShot(0, _open)
+        show_async_message(self, title, text, icon=icon)
 
     async def _submit_manual_trade(
         self,
         symbol,
         side,
         amount,
+        requested_amount=None,
+        quantity_mode="units",
         order_type="market",
         price=None,
+        stop_price=None,
         stop_loss=None,
         take_profit=None,
     ):
         try:
-            trading_system = getattr(self.controller, "trading_system", None)
-            execution_manager = getattr(trading_system, "execution_manager", None)
-            if execution_manager is not None:
-                order = await execution_manager.execute(
-                    symbol=symbol,
-                    side=side,
-                    amount=amount,
-                    type=order_type,
-                    price=price,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                )
-            else:
-                order = await self.controller.broker.create_order(
-                    symbol=symbol,
-                    side=side,
-                    amount=amount,
-                    type=order_type,
-                    price=price,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                )
-
-            if not order:
-                self._show_async_message(
-                    "Manual Order",
-                    f"The order for {symbol} was skipped by broker safety checks.",
-                    QMessageBox.Icon.Information,
-                )
-                return
-
+            submit_amount = requested_amount if requested_amount is not None else amount
+            order = await self.controller.submit_trade_with_preflight(
+                symbol=symbol,
+                side=side,
+                amount=submit_amount,
+                quantity_mode=quantity_mode,
+                order_type=order_type,
+                price=price,
+                stop_price=stop_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                source="manual",
+                strategy_name="Manual",
+                reason="Manual order",
+            )
             status_text = str(order.get("status") or "submitted").replace("_", " ").upper()
+            display_amount = order.get(
+                "applied_requested_mode_amount",
+                requested_amount if requested_amount is not None else amount,
+            )
+            requested_display_amount = order.get(
+                "requested_amount",
+                requested_amount if requested_amount is not None else amount,
+            )
+            display_mode = self._normalize_manual_trade_quantity_mode(quantity_mode)
+            sizing_summary = str(order.get("sizing_summary") or "").strip()
+            ai_sizing_reason = str(order.get("ai_sizing_reason") or "").strip()
+            requested_suffix = (
+                f" | requested {requested_display_amount} {display_mode}"
+                if bool(order.get("size_adjusted"))
+                else ""
+            )
+            sizing_suffix = f" | {sizing_summary}" if sizing_summary else ""
+            ai_suffix = f" | ChatGPT size note: {ai_sizing_reason}" if ai_sizing_reason else ""
             self.system_console.log(
-                f"Manual order {status_text}: {side.upper()} {amount} {symbol} ({order_type})",
+                (
+                    f"Manual order {status_text}: {side.upper()} {display_amount} {display_mode} "
+                    f"{symbol} ({order_type}){requested_suffix}{sizing_suffix}{ai_suffix}"
+                ),
                 "INFO",
             )
+            message = f"{status_text.title()} {side.upper()} {display_amount} {display_mode} {symbol}."
+            if bool(order.get("size_adjusted")):
+                message += f"\nRequested: {requested_display_amount} {display_mode}"
+            if sizing_summary:
+                message += f"\nSizing: {sizing_summary}"
+            if ai_sizing_reason:
+                message += f"\nChatGPT size note: {ai_sizing_reason}"
             self._show_async_message(
                 "Manual Order",
-                f"{status_text.title()} {side.upper()} {amount} {symbol}.",
+                message,
                 QMessageBox.Icon.Information,
             )
         except Exception as exc:
@@ -4337,163 +5990,14 @@ class Terminal(QMainWindow):
             )
         return tracked
 
-    async def _close_all_positions_async(self):
-        broker = getattr(self.controller, "broker", None)
-        if broker is None:
-            return
+    async def _close_all_positions_async(self, show_dialog=True):
+        await close_all_positions_async(self, show_dialog=show_dialog)
 
-        try:
-            results = []
-            if hasattr(broker, "close_all_positions"):
-                results = await broker.close_all_positions()
-
-            if not results:
-                for position in self._tracked_app_positions():
-                    symbol = position.get("symbol")
-                    amount = float(position.get("amount", 0) or 0)
-                    if not symbol or amount <= 0:
-                        continue
-                    close_side = "sell" if position.get("side") != "short" else "buy"
-                    order = await broker.create_order(
-                        symbol=symbol,
-                        side=close_side,
-                        amount=amount,
-                        type="market",
-                    )
-                    if order:
-                        results.append(order)
-
-            count = len(results or [])
-            if count == 0:
-                QMessageBox.information(
-                    self,
-                    "Close Positions",
-                    "No open positions were found to close.",
-                )
-                return
-
-            self.system_console.log(f"Closed {count} position(s).", "INFO")
-            QMessageBox.information(
-                self,
-                "Close Positions",
-                f"Submitted {count} closing order(s).",
-            )
-        except Exception as exc:
-            self.logger.exception("Close-all positions failed")
-            self.system_console.log(f"Close positions failed: {exc}", "ERROR")
-            QMessageBox.critical(self, "Close Positions Failed", str(exc))
-
-    async def _cancel_all_orders_async(self):
-        broker = getattr(self.controller, "broker", None)
-        if broker is None:
-            return
-
-        try:
-            results = await broker.cancel_all_orders()
-            if results is True:
-                count = 1
-            elif isinstance(results, list):
-                count = len(results)
-            elif results:
-                count = 1
-            else:
-                count = 0
-
-            self.system_console.log(f"Canceled {count} open order(s).", "INFO")
-            self._latest_open_orders_snapshot = []
-            self._populate_open_orders_table(self._latest_open_orders_snapshot)
-            self._schedule_open_orders_refresh()
-            QMessageBox.information(
-                self,
-                "Cancel Orders",
-                "Canceled all open orders." if count else "No open orders were found.",
-            )
-        except Exception as exc:
-            self.logger.exception("Cancel-all orders failed")
-            self.system_console.log(f"Cancel orders failed: {exc}", "ERROR")
-            QMessageBox.critical(self, "Cancel Orders Failed", str(exc))
+    async def _cancel_all_orders_async(self, show_dialog=True):
+        await cancel_all_orders_async(self, show_dialog=show_dialog)
 
     def _open_docs(self):
-        self._open_text_window(
-            "help_documentation",
-            "Documentation",
-            """
-            <h2>Documentation</h2>
-            <h3>1. What This App Does</h3>
-            <p>Sopotek is a trading workstation that combines broker access, live charting, AI-driven signal monitoring, orderbook views, execution controls, risk settings, historical backtesting, and strategy optimization.</p>
-
-            <h3>2. Quick Start</h3>
-            <p><b>Step 1:</b> Open the dashboard and choose a broker type, exchange, mode, strategy, and risk budget.</p>
-            <p><b>Step 2:</b> Use paper mode first whenever you are testing a new broker, strategy, or market.</p>
-            <p><b>Step 3:</b> Launch the terminal, open a symbol tab from the toolbar, and confirm candles are loading.</p>
-            <p><b>Step 4:</b> Review system status, balances, training states, and application settings before turning on AI trading.</p>
-            <p><b>Step 5:</b> Use backtesting and optimization before trusting a strategy in live conditions.</p>
-
-            <h3>3. Main Layout</h3>
-            <p><b>Toolbar:</b> symbol picker, timeframe controls, AI trading toggle, and chart actions.</p>
-            <p><b>Chart tabs:</b> one tab per symbol and timeframe, with candlesticks, indicators, and bid/ask overlays.</p>
-            <p><b>Orderbook:</b> bid/ask ladders plus depth view for the active chart symbol.</p>
-            <p><b>AI Signal Monitor:</b> latest model decisions, confidence, regime, and volatility readout.</p>
-            <p><b>Strategy Debug:</b> indicator values and strategy reasoning for generated signals.</p>
-            <p><b>System Status:</b> connection state, websocket state, balances, and session health summary.</p>
-            <p><b>Logs:</b> runtime messages, broker responses, and error diagnostics.</p>
-
-            <h3>4. Charts</h3>
-            <p>Use the symbol selector in the toolbar to open a new chart tab. If the symbol already exists, the app focuses the existing tab instead of duplicating it.</p>
-            <p>Timeframe buttons reload candles for the active tab. Indicators can be added from the <b>Charts</b> menu. Bid and ask dashed price lines can be toggled from <b>Charts -&gt; Show Bid/Ask Lines</b>.</p>
-            <p>The candlestick chart is intentionally the largest area and can be resized where splitters are available.</p>
-
-            <h3>5. AI Trading</h3>
-            <p>The AI trading button enables the automated worker loop. It does not guarantee that orders will be sent every cycle; signals still pass through broker checks, balance checks, market-status checks, and exchange minimum filters.</p>
-            <p>If AI trading is on but no trades occur, check the logs, AI Signal Monitor, Strategy Debug, and account balances first.</p>
-
-            <h3>6. Orders and Safety</h3>
-            <p>The execution path checks available balances before sending orders, trims amounts when necessary, and skips symbols on cooldown after exchange rejections such as closed markets, insufficient balance, or minimum notional failures.</p>
-            <p>For live sessions, always confirm that you have enough quote currency for buys and enough base currency for sells.</p>
-
-            <h3>7. Backtesting</h3>
-            <p>Open a chart that already has candles loaded, then use <b>Backtesting -&gt; Run Backtest</b>. This initializes the backtest with the active chart symbol, timeframe, and strategy context.</p>
-            <p>In the backtesting workspace, click <b>Start Backtest</b> to run the historical simulation and <b>Generate Report</b> to export PDF and spreadsheet results.</p>
-            <p>If backtesting says no data is available, reload the chart candles first.</p>
-
-            <h3>8. Strategy Optimization</h3>
-            <p>Use <b>Backtesting -&gt; Strategy Optimization</b> to run a parameter sweep over core strategy settings such as RSI, EMA fast, EMA slow, and ATR periods.</p>
-            <p>The optimization table ranks results by performance metrics. Use <b>Apply Best Params</b> to push the top result into the active strategy object.</p>
-            <p>Optimization depends on historical candle data being available for the active chart.</p>
-
-            <h3>9. Settings and Risk Controls</h3>
-            <p>The <b>Settings</b> menu is the main configuration area for trading defaults, chart behavior, refresh intervals, backtesting capital, and all risk limits.</p>
-            <p>Portfolio exposure is also available from <b>Settings</b> so you can keep configuration and risk context in one place.</p>
-
-            <h3>10. Tools Windows</h3>
-            <p>The <b>Tools</b> menu opens detached utility windows so you can keep charts large while monitoring logs, AI signals, and performance analytics in parallel.</p>
-
-            <h3>11. Supported Broker Concepts</h3>
-            <p><b>Crypto:</b> CCXT-compatible exchanges and Stellar.</p>
-            <p><b>Forex:</b> Oanda.</p>
-            <p><b>Stocks:</b> Alpaca.</p>
-            <p><b>Paper:</b> local simulated execution path.</p>
-
-            <h3>12. Stellar Notes</h3>
-            <p>For Stellar, use the public key in the dashboard API field and the secret seed in the secret field. Market data currently uses polling via Horizon rather than websocket streaming.</p>
-            <p>Non-native assets may require issuer-aware configuration if the code is ambiguous.</p>
-
-            <h3>13. Troubleshooting</h3>
-            <p><b>No candles:</b> confirm the symbol exists on the broker and try changing timeframe.</p>
-            <p><b>No orderbook:</b> open a chart tab first and wait for the orderbook refresh timer to update the active symbol.</p>
-            <p><b>No AI signals:</b> verify that the strategy can compute features from the loaded candles and that AI trading is enabled when required.</p>
-            <p><b>Orders rejected:</b> check exchange minimums, market status, insufficient balance, and broker-specific rules in the logs.</p>
-            <p><b>Backtest/optimization blank:</b> make sure the active chart already has historical data loaded.</p>
-
-            <h3>14. Recommended Workflow</h3>
-            <p>Use this order: dashboard setup -> paper session -> verify charts and signals -> run backtest -> run optimization -> confirm application and risk settings -> move to live trading.</p>
-
-            <h3>15. Where To Look Next</h3>
-            <p>For broker-specific and integration-level details, open <b>Help -&gt; API Reference</b>.</p>
-            """,
-            width=940,
-            height=760,
-        )
+        open_docs(self)
 
     def _open_api_docs(self):
         self._open_text_window(
@@ -4506,6 +6010,7 @@ class Terminal(QMainWindow):
             <p><b>Common market-data methods:</b> fetch_ticker, fetch_orderbook, fetch_ohlcv, fetch_trades, fetch_symbols, fetch_markets, fetch_status.</p>
             <p><b>Common trading methods:</b> create_order, cancel_order, cancel_all_orders.</p>
             <p><b>Common account methods:</b> fetch_balance, fetch_positions, fetch_orders, fetch_open_orders, fetch_closed_orders, fetch_order.</p>
+            <p><b>Controller refresh surfaces:</b> candles, order book, recent public trades, ticker updates, and chart market-context views are all normalized through the controller before the terminal renders them.</p>
 
             <h3>Broker Types in This App</h3>
             <p><b>CCXTBroker:</b> crypto exchanges using the CCXT unified API.</p>
@@ -4520,7 +6025,7 @@ class Terminal(QMainWindow):
             <p><b>mode:</b> live or paper.</p>
             <p><b>api_key / secret:</b> broker credentials. For Stellar this maps to public key and secret seed.</p>
             <p><b>account_id:</b> required for Oanda.</p>
-            <p><b>password / passphrase:</b> required on some exchanges.</p>
+            <p><b>password / passphrase:</b> required on some exchanges. Coinbase Advanced Trade in this app uses API key name plus private key instead.</p>
             <p><b>sandbox:</b> enables testnet or practice behavior where supported.</p>
             <p><b>options / params:</b> broker-specific advanced settings.</p>
 
@@ -4552,31 +6057,53 @@ class Terminal(QMainWindow):
     def _multi_chart_layout(self):
 
         try:
-            if self._chart_tabs_ready():
-                for index in reversed(range(self.chart_tabs.count())):
-                    page = self.chart_tabs.widget(index)
-                    if getattr(page, "objectName", lambda: "")() == "multi_chart_page":
-                        self._close_chart_tab(index)
-
-            symbols = list(dict.fromkeys((getattr(self.controller, "symbols", []) or [])[:4]))
+            symbols = self._multi_chart_symbols(max_count=4)
             if not symbols:
+                if hasattr(self, "system_console") and self.system_console is not None:
+                    self.system_console.log("No symbols are available to build a multi-chart workspace.", "INFO")
                 return
+
+            timeframe = str(self.current_timeframe or "1h").strip().lower() or "1h"
+            self._close_multi_chart_pages()
 
             screen = QApplication.primaryScreen()
             available = screen.availableGeometry() if screen is not None else self.geometry()
-            width = max(420, available.width() // 2)
-            height = max(320, available.height() // 2)
+            count = len(symbols)
+            columns = 1 if count == 1 else 2
+            rows = max(1, int(np.ceil(count / columns)))
+            width = max(420, available.width() // columns)
+            height = max(320, available.height() // rows)
 
-            positions = [
-                (available.x(), available.y()),
-                (available.x() + width, available.y()),
-                (available.x(), available.y() + height),
-                (available.x() + width, available.y() + height),
-            ]
+            opened_windows = []
+            preferred_window = None
+            preferred_symbol = str(self._current_chart_symbol() or getattr(self, "symbol", "")).strip().upper()
 
-            for symbol, (x, y) in zip(symbols, positions):
-                rect = type(available)(x, y, width, height)
-                self._open_or_focus_detached_chart(symbol, self.current_timeframe, geometry=rect)
+            for index, symbol in enumerate(symbols):
+                row = index // columns
+                column = index % columns
+                rect = QRect(
+                    available.x() + (column * width),
+                    available.y() + (row * height),
+                    width,
+                    height,
+                )
+                window = self._open_or_focus_detached_chart(
+                    symbol,
+                    timeframe,
+                    geometry=rect,
+                    compact_view=True,
+                )
+                if self._is_qt_object_alive(window):
+                    opened_windows.append(window)
+                    if preferred_window is None or str(symbol).upper() == preferred_symbol:
+                        preferred_window = window
+
+            if self._is_qt_object_alive(preferred_window):
+                preferred_window.raise_()
+                preferred_window.activateWindow()
+            elif opened_windows:
+                opened_windows[-1].raise_()
+                opened_windows[-1].activateWindow()
 
         except Exception as e:
 
@@ -4614,6 +6141,10 @@ class Terminal(QMainWindow):
                 "Realized Trades",
                 "Win Rate",
                 "Profit Factor",
+                "Fees",
+                "Execution Drag",
+                "Avg Spread",
+                "Avg Slippage",
                 "Sharpe Ratio",
                 "Sortino Ratio",
                 "Max Drawdown",
@@ -4622,14 +6153,14 @@ class Terminal(QMainWindow):
             stats_grid, metric_labels = self._build_performance_metric_grid(metric_names, columns=4)
             layout.addLayout(stats_grid)
 
-            equity_plot = pg.PlotWidget()
-            self._style_performance_plot(equity_plot, left_label="Equity")
+            equity_plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")})
+            self._style_performance_plot(equity_plot, left_label="Equity", bottom_label="Time")
             equity_plot.setMinimumHeight(230)
             curve = equity_plot.plot(pen=pg.mkPen("#2a7fff", width=2.4))
             layout.addWidget(equity_plot)
 
-            drawdown_plot = pg.PlotWidget()
-            self._style_performance_plot(drawdown_plot, left_label="Drawdown")
+            drawdown_plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")})
+            self._style_performance_plot(drawdown_plot, left_label="Drawdown", bottom_label="Time")
             drawdown_plot.setMinimumHeight(170)
             drawdown_curve = drawdown_plot.plot(
                 pen=pg.mkPen("#ef5350", width=1.8),
@@ -4679,6 +6210,1745 @@ class Terminal(QMainWindow):
         window.raise_()
         window.activateWindow()
 
+    def _populate_closed_journal_table(self, table, rows):
+        if table is None or not self._is_qt_object_alive(table):
+            return
+        table.setRowCount(len(rows or []))
+        for row_index, row in enumerate(rows or []):
+            values = [
+                row.get("timestamp", ""),
+                row.get("symbol", ""),
+                self._format_trade_source_label(row.get("source", "")),
+                row.get("side", ""),
+                row.get("price", ""),
+                row.get("size", ""),
+                row.get("order_type", ""),
+                row.get("status", ""),
+                row.get("order_id", ""),
+                row.get("pnl", ""),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self._format_trade_log_value(value))
+                table.setItem(row_index, column, item)
+            tooltip_lines = []
+            if row.get("strategy_name"):
+                tooltip_lines.append(f"Strategy: {row.get('strategy_name')}")
+            if row.get("reason"):
+                tooltip_lines.append(f"Reason: {row.get('reason')}")
+            if row.get("setup"):
+                tooltip_lines.append(f"Setup: {row.get('setup')}")
+            if row.get("outcome"):
+                tooltip_lines.append(f"Outcome: {row.get('outcome')}")
+            if row.get("lessons"):
+                tooltip_lines.append(f"Lessons: {row.get('lessons')}")
+            if self._safe_float(row.get("stop_loss")) is not None:
+                tooltip_lines.append(f"Stop Loss: {self._format_trade_log_value(row.get('stop_loss'))}")
+            if self._safe_float(row.get("take_profit")) is not None:
+                tooltip_lines.append(f"Take Profit: {self._format_trade_log_value(row.get('take_profit'))}")
+            if self._safe_float(row.get("confidence")) is not None:
+                tooltip_lines.append(f"Confidence: {float(row.get('confidence')) * 100.0:.1f}%")
+            if self._safe_float(row.get("spread_bps")) is not None:
+                tooltip_lines.append(f"Spread: {float(row.get('spread_bps')):.2f} bps")
+            if self._safe_float(row.get("slippage_bps")) is not None:
+                tooltip_lines.append(f"Slippage: {float(row.get('slippage_bps')):.2f} bps")
+            if self._safe_float(row.get("fee")) is not None:
+                tooltip_lines.append(f"Fee: {self._format_currency(row.get('fee'))}")
+            tooltip = "\n".join(tooltip_lines)
+            if tooltip:
+                for column in range(table.columnCount()):
+                    item = table.item(row_index, column)
+                    if item is not None:
+                        item.setToolTip(tooltip)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+
+    def _schedule_closed_journal_refresh(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
+        task = getattr(window, "_closed_refresh_task", None)
+        if task is not None and not task.done():
+            return
+        try:
+            window._closed_refresh_task = asyncio.get_event_loop().create_task(
+                self._refresh_closed_journal_async(window)
+            )
+        except Exception as exc:
+            self.logger.debug("Unable to schedule closed journal refresh: %s", exc)
+
+    async def _refresh_closed_journal_async(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
+        controller = self.controller
+        table = getattr(window, "_closed_journal_table", None)
+        summary = getattr(window, "_closed_journal_summary", None)
+        if (
+            table is None
+            or summary is None
+            or not self._is_qt_object_alive(table)
+            or not self._is_qt_object_alive(summary)
+        ):
+            return
+        try:
+            rows = await controller.fetch_trade_history(limit=220)
+        except Exception as exc:
+            rows = []
+            self.logger.debug("Closed journal refresh failed: %s", exc)
+        if (
+            window is None
+            or not self._is_qt_object_alive(window)
+            or not self._is_qt_object_alive(table)
+            or not self._is_qt_object_alive(summary)
+        ):
+            return
+        window._closed_journal_rows = list(rows or [])
+        self._populate_closed_journal_table(table, rows)
+        summary.setText(
+            f"Closed journal shows {len(rows)} merged broker and local trade-history rows. Double-click a row for post-trade review."
+        )
+
+    def _open_closed_journal_window(self):
+        window = self._get_or_create_tool_window(
+            "closed_trade_journal",
+            "Closed Trade Journal",
+            width=1120,
+            height=620,
+        )
+
+        if getattr(window, "_closed_journal_table", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(10)
+
+            summary = QLabel("Loading closed-trade history from broker and local trade records.")
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; "
+                "border-radius: 12px; padding: 12px; font-size: 13px; font-weight: 600;"
+            )
+            layout.addWidget(summary)
+
+            controls = QHBoxLayout()
+            refresh_btn = QPushButton("Refresh")
+            refresh_btn.clicked.connect(lambda: self._schedule_closed_journal_refresh(window))
+            review_btn = QPushButton("Review Trade")
+            review_btn.clicked.connect(lambda: self._open_trade_review_from_journal(window))
+            summary_btn = QPushButton("Weekly/Monthly Review")
+            summary_btn.clicked.connect(self._open_trade_journal_review_window)
+            controls.addWidget(refresh_btn)
+            controls.addWidget(review_btn)
+            controls.addWidget(summary_btn)
+            controls.addStretch()
+            layout.addLayout(controls)
+
+            table = QTableWidget()
+            table.setColumnCount(10)
+            table.setHorizontalHeaderLabels(
+                ["Timestamp", "Symbol", "Source", "Side", "Price", "Size", "Order Type", "Status", "Order ID", "PnL"]
+            )
+            table.cellDoubleClicked.connect(lambda *_: self._open_trade_review_from_journal(window))
+            layout.addWidget(table)
+
+            window.setCentralWidget(container)
+            window._closed_journal_summary = summary
+            window._closed_journal_table = table
+            window._closed_journal_rows = []
+            window._closed_journal_review_btn = review_btn
+            window._closed_journal_summary_btn = summary_btn
+
+            sync_timer = QTimer(window)
+            sync_timer.timeout.connect(lambda: self._schedule_closed_journal_refresh(window))
+            sync_timer.start(4000)
+            window._closed_journal_timer = sync_timer
+
+        self._schedule_closed_journal_refresh(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _default_trade_checklist_snapshot(self):
+        mode = "live" if str(getattr(getattr(self.controller, "config", None), "mode", "demo") or "demo").strip().lower() == "live" else "demo"
+        timeframe = str(getattr(self, "current_timeframe", getattr(self.controller, "time_frame", "1h")) or "1h").strip() or "1h"
+        symbol = str(self._current_chart_symbol() or getattr(self, "symbol", "") or "").strip()
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        current_time = datetime.now().strftime("%H:%M")
+        watch_symbols = [symbol] if symbol else []
+        while len(watch_symbols) < 4:
+            watch_symbols.append("")
+        return {
+            "account": str(getattr(self.controller, "current_account_label", lambda: "")() or "").strip(),
+            "date": current_date,
+            "time": current_time,
+            "timeframe": timeframe,
+            "mode": mode,
+            "watch_symbols": watch_symbols[:4],
+            "news_bias": "",
+            "strategy_setup": "",
+            "setup_timeframe": timeframe,
+            "higher_tf_confirmed": "",
+            "entry_trigger": "",
+            "stop_loss_reason": "",
+            "take_profit_reason": "",
+            "risk_reward_target": "",
+            "account_equity": "",
+            "risk_per_trade": "",
+            "risk_dollar": "",
+            "stop_distance": "",
+            "position_formula": "Position lots = Risk $ / (Stop distance * pip/point value per lot)",
+            "exit_reason": "",
+            "actual_pnl": "",
+            "actual_pnl_pct": "",
+            "trade_duration": "",
+            "action_items": "",
+            "daily_max_loss": "",
+            "ai_enabled": "Y" if getattr(self, "autotrading_enabled", False) else "N",
+            "telegram_alerts": "Y" if getattr(self.controller, "telegram_enabled", False) else "N",
+            "journal_coverage": "Y",
+            "trader_name": "",
+            "signature": "",
+            "review_date": current_date,
+            "checkboxes": {
+                "economic_calendar": False,
+                "market_session": False,
+                "recent_news": False,
+                "spread_slippage": False,
+                "orders_placed_on_chart": False,
+                "size_matches_risk": False,
+                "planned_screenshot": False,
+                "stop_adjustment_rule": False,
+                "close_on_invalidation": False,
+                "no_averaging": False,
+                "journal_logged": False,
+                "weekly_review": False,
+                "daily_max_loss_rule": False,
+                "avoid_major_news": False,
+                "fixed_position_sizing": False,
+            },
+        }
+
+    def _trade_checklist_snapshot(self, window):
+        snapshot = self._default_trade_checklist_snapshot()
+        snapshot.update(
+            {
+                "account": window._trade_checklist_account.text().strip(),
+                "date": window._trade_checklist_date.text().strip(),
+                "time": window._trade_checklist_time.text().strip(),
+                "timeframe": window._trade_checklist_timeframe.text().strip(),
+                "mode": str(window._trade_checklist_mode.currentData() or "demo"),
+                "watch_symbols": [
+                    window._trade_checklist_watch_1.text().strip(),
+                    window._trade_checklist_watch_2.text().strip(),
+                    window._trade_checklist_watch_3.text().strip(),
+                    window._trade_checklist_watch_4.text().strip(),
+                ],
+                "news_bias": window._trade_checklist_news_bias.text().strip(),
+                "strategy_setup": window._trade_checklist_strategy_setup.toPlainText().strip(),
+                "setup_timeframe": window._trade_checklist_setup_timeframe.text().strip(),
+                "higher_tf_confirmed": window._trade_checklist_higher_tf.text().strip(),
+                "entry_trigger": window._trade_checklist_entry_trigger.toPlainText().strip(),
+                "stop_loss_reason": window._trade_checklist_stop_loss.toPlainText().strip(),
+                "take_profit_reason": window._trade_checklist_take_profit.toPlainText().strip(),
+                "risk_reward_target": window._trade_checklist_rr_target.text().strip(),
+                "account_equity": window._trade_checklist_equity.text().strip(),
+                "risk_per_trade": window._trade_checklist_risk_per_trade.text().strip(),
+                "risk_dollar": window._trade_checklist_risk_dollar.text().strip(),
+                "stop_distance": window._trade_checklist_stop_distance.text().strip(),
+                "position_formula": window._trade_checklist_position_formula.text().strip(),
+                "exit_reason": window._trade_checklist_exit_reason.text().strip(),
+                "actual_pnl": window._trade_checklist_actual_pnl.text().strip(),
+                "actual_pnl_pct": window._trade_checklist_actual_pnl_pct.text().strip(),
+                "trade_duration": window._trade_checklist_trade_duration.text().strip(),
+                "action_items": window._trade_checklist_action_items.toPlainText().strip(),
+                "daily_max_loss": window._trade_checklist_daily_max_loss.text().strip(),
+                "ai_enabled": window._trade_checklist_ai_enabled.text().strip(),
+                "telegram_alerts": window._trade_checklist_telegram_alerts.text().strip(),
+                "journal_coverage": window._trade_checklist_journal_coverage.text().strip(),
+                "trader_name": window._trade_checklist_trader_name.text().strip(),
+                "signature": window._trade_checklist_signature.text().strip(),
+                "review_date": window._trade_checklist_review_date.text().strip(),
+                "checkboxes": {
+                    key: checkbox.isChecked()
+                    for key, checkbox in getattr(window, "_trade_checklist_checkboxes", {}).items()
+                },
+            }
+        )
+        return snapshot
+
+    def _apply_trade_checklist_snapshot(self, window, snapshot):
+        data = self._default_trade_checklist_snapshot()
+        if isinstance(snapshot, dict):
+            data.update(snapshot)
+        watch_symbols = list(data.get("watch_symbols") or ["", "", "", ""])
+        while len(watch_symbols) < 4:
+            watch_symbols.append("")
+
+        window._trade_checklist_account.setText(str(data.get("account") or ""))
+        window._trade_checklist_date.setText(str(data.get("date") or ""))
+        window._trade_checklist_time.setText(str(data.get("time") or ""))
+        window._trade_checklist_timeframe.setText(str(data.get("timeframe") or ""))
+        mode_index = window._trade_checklist_mode.findData(str(data.get("mode") or "demo"))
+        window._trade_checklist_mode.setCurrentIndex(mode_index if mode_index >= 0 else 0)
+        window._trade_checklist_watch_1.setText(str(watch_symbols[0] or ""))
+        window._trade_checklist_watch_2.setText(str(watch_symbols[1] or ""))
+        window._trade_checklist_watch_3.setText(str(watch_symbols[2] or ""))
+        window._trade_checklist_watch_4.setText(str(watch_symbols[3] or ""))
+        window._trade_checklist_news_bias.setText(str(data.get("news_bias") or ""))
+        window._trade_checklist_strategy_setup.setPlainText(str(data.get("strategy_setup") or ""))
+        window._trade_checklist_setup_timeframe.setText(str(data.get("setup_timeframe") or ""))
+        window._trade_checklist_higher_tf.setText(str(data.get("higher_tf_confirmed") or ""))
+        window._trade_checklist_entry_trigger.setPlainText(str(data.get("entry_trigger") or ""))
+        window._trade_checklist_stop_loss.setPlainText(str(data.get("stop_loss_reason") or ""))
+        window._trade_checklist_take_profit.setPlainText(str(data.get("take_profit_reason") or ""))
+        window._trade_checklist_rr_target.setText(str(data.get("risk_reward_target") or ""))
+        window._trade_checklist_equity.setText(str(data.get("account_equity") or ""))
+        window._trade_checklist_risk_per_trade.setText(str(data.get("risk_per_trade") or ""))
+        window._trade_checklist_risk_dollar.setText(str(data.get("risk_dollar") or ""))
+        window._trade_checklist_stop_distance.setText(str(data.get("stop_distance") or ""))
+        window._trade_checklist_position_formula.setText(str(data.get("position_formula") or ""))
+        window._trade_checklist_exit_reason.setText(str(data.get("exit_reason") or ""))
+        window._trade_checklist_actual_pnl.setText(str(data.get("actual_pnl") or ""))
+        window._trade_checklist_actual_pnl_pct.setText(str(data.get("actual_pnl_pct") or ""))
+        window._trade_checklist_trade_duration.setText(str(data.get("trade_duration") or ""))
+        window._trade_checklist_action_items.setPlainText(str(data.get("action_items") or ""))
+        window._trade_checklist_daily_max_loss.setText(str(data.get("daily_max_loss") or ""))
+        window._trade_checklist_ai_enabled.setText(str(data.get("ai_enabled") or ""))
+        window._trade_checklist_telegram_alerts.setText(str(data.get("telegram_alerts") or ""))
+        window._trade_checklist_journal_coverage.setText(str(data.get("journal_coverage") or ""))
+        window._trade_checklist_trader_name.setText(str(data.get("trader_name") or ""))
+        window._trade_checklist_signature.setText(str(data.get("signature") or ""))
+        window._trade_checklist_review_date.setText(str(data.get("review_date") or ""))
+
+        checkbox_values = data.get("checkboxes") if isinstance(data.get("checkboxes"), dict) else {}
+        for key, checkbox in getattr(window, "_trade_checklist_checkboxes", {}).items():
+            checkbox.setChecked(bool(checkbox_values.get(key, False)))
+        self._update_trade_checklist_status(window)
+
+    def _update_trade_checklist_status(self, window, message=None):
+        if not self._is_qt_object_alive(window):
+            return
+        warning = getattr(window, "_trade_checklist_warning", None)
+        status = getattr(window, "_trade_checklist_status", None)
+        if warning is not None:
+            mode = str(window._trade_checklist_mode.currentData() or "demo")
+            equity_text = str(window._trade_checklist_equity.text() or "").replace("$", "").replace(",", "").strip()
+            equity = self._safe_float(equity_text)
+            if mode == "live" and equity is not None and equity < 100:
+                warning.setText("Live mode with equity under $100: strongly consider demo or micro-lots only.")
+                warning.setStyleSheet("color:#ffd7a8; background-color:#2a1d12; border:1px solid #8b5a2b; border-radius:10px; padding:8px 10px;")
+            else:
+                warning.setText("Checklist ready. Use it before entry, during management, and in post-trade review.")
+                warning.setStyleSheet("color:#9fd6c2; background-color:#11241d; border:1px solid #285746; border-radius:10px; padding:8px 10px;")
+        if status is not None and message is not None:
+            status.setText(message)
+
+    def _save_trade_checklist(self, window):
+        self.settings.setValue("trade_checklist/latest", json.dumps(self._trade_checklist_snapshot(window)))
+        self._update_trade_checklist_status(window, "Trade checklist saved.")
+
+    def _prefill_trade_checklist(self, window):
+        snapshot = self._default_trade_checklist_snapshot()
+        current = self._trade_checklist_snapshot(window)
+        for key in ("trader_name", "signature", "daily_max_loss", "risk_per_trade", "risk_dollar", "position_formula"):
+            snapshot[key] = current.get(key, snapshot.get(key, ""))
+        self._apply_trade_checklist_snapshot(window, snapshot)
+        self._update_trade_checklist_status(window, "Checklist prefilled from current app context.")
+
+    def _reset_trade_checklist(self, window):
+        self._apply_trade_checklist_snapshot(window, self._default_trade_checklist_snapshot())
+        self._update_trade_checklist_status(window, "Checklist reset to defaults.")
+
+    def _open_trade_checklist_window(self):
+        window = self._get_or_create_tool_window(
+            "trade_checklist",
+            "Trade Checklist",
+            width=980,
+            height=840,
+        )
+
+        if getattr(window, "_trade_checklist_container", None) is None:
+            container = QWidget()
+            root_layout = QVBoxLayout(container)
+            root_layout.setContentsMargins(12, 12, 12, 12)
+            root_layout.setSpacing(10)
+
+            intro = QLabel("Use this checklist to validate the trade before entry, manage it consistently, and review it afterward.")
+            intro.setWordWrap(True)
+            intro.setStyleSheet("color:#d9e6f7; font-weight:600; padding:4px 0;")
+            root_layout.addWidget(intro)
+
+            warning = QLabel("")
+            warning.setWordWrap(True)
+            root_layout.addWidget(warning)
+
+            button_row = QHBoxLayout()
+            prefill_btn = QPushButton("Prefill Current")
+            save_btn = QPushButton("Save Checklist")
+            reset_btn = QPushButton("Reset")
+            button_row.addWidget(prefill_btn)
+            button_row.addWidget(save_btn)
+            button_row.addWidget(reset_btn)
+            button_row.addStretch(1)
+            root_layout.addLayout(button_row)
+
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            form_holder = QWidget()
+            form_layout = QVBoxLayout(form_holder)
+            form_layout.setSpacing(12)
+
+            def section(title):
+                frame = QFrame()
+                frame.setStyleSheet(
+                    "QFrame { background-color:#101a2d; border:1px solid #20324d; border-radius:12px; }"
+                    "QLabel { color:#d8e6ff; }"
+                    "QLineEdit, QTextEdit, QComboBox { background-color:#09111f; color:#e7f0ff; border:1px solid #24344f; border-radius:8px; padding:6px; }"
+                    "QCheckBox { color:#d8e6ff; spacing:8px; }"
+                )
+                layout = QVBoxLayout(frame)
+                layout.setContentsMargins(12, 12, 12, 12)
+                layout.setSpacing(8)
+                title_label = QLabel(title)
+                title_label.setStyleSheet("font-size:14px; font-weight:700; color:#f4f8ff;")
+                layout.addWidget(title_label)
+                form_layout.addWidget(frame)
+                return layout
+
+            account_layout = section("Account & Setup")
+            account_grid = QGridLayout()
+            account = QLineEdit()
+            date_input = QLineEdit()
+            time_input = QLineEdit()
+            timeframe_input = QLineEdit()
+            mode = QComboBox()
+            mode.addItem("Demo", "demo")
+            mode.addItem("Live", "live")
+            watch_1 = QLineEdit()
+            watch_2 = QLineEdit()
+            watch_3 = QLineEdit()
+            watch_4 = QLineEdit()
+            account_grid.addWidget(QLabel("Account"), 0, 0)
+            account_grid.addWidget(account, 0, 1)
+            account_grid.addWidget(QLabel("Date"), 0, 2)
+            account_grid.addWidget(date_input, 0, 3)
+            account_grid.addWidget(QLabel("Time"), 1, 0)
+            account_grid.addWidget(time_input, 1, 1)
+            account_grid.addWidget(QLabel("Timeframe"), 1, 2)
+            account_grid.addWidget(timeframe_input, 1, 3)
+            account_grid.addWidget(QLabel("Mode"), 2, 0)
+            account_grid.addWidget(mode, 2, 1)
+            account_grid.addWidget(QLabel("Watch 1"), 3, 0)
+            account_grid.addWidget(watch_1, 3, 1)
+            account_grid.addWidget(QLabel("Watch 2"), 3, 2)
+            account_grid.addWidget(watch_2, 3, 3)
+            account_grid.addWidget(QLabel("Watch 3"), 4, 0)
+            account_grid.addWidget(watch_3, 4, 1)
+            account_grid.addWidget(QLabel("Watch 4"), 4, 2)
+            account_grid.addWidget(watch_4, 4, 3)
+            account_layout.addLayout(account_grid)
+
+            pretrade_layout = section("Pre-market / Pre-trade")
+            pretrade_checks = {
+                "economic_calendar": QCheckBox("Check economic calendar — avoid high-impact events for this trade"),
+                "market_session": QCheckBox("Confirm market session & liquidity for symbol"),
+                "recent_news": QCheckBox("Check recent news for symbol"),
+            }
+            for checkbox in pretrade_checks.values():
+                pretrade_layout.addWidget(checkbox)
+            news_bias = QLineEdit()
+            pretrade_layout.addWidget(QLabel("Recent news bias"))
+            pretrade_layout.addWidget(news_bias)
+
+            trade_layout = section("Trade Idea & Rule")
+            strategy_setup = QTextEdit()
+            strategy_setup.setMaximumHeight(70)
+            setup_timeframe = QLineEdit()
+            higher_tf = QLineEdit()
+            entry_trigger = QTextEdit()
+            entry_trigger.setMaximumHeight(60)
+            stop_loss = QTextEdit()
+            stop_loss.setMaximumHeight(60)
+            take_profit = QTextEdit()
+            take_profit.setMaximumHeight(60)
+            rr_target = QLineEdit()
+            trade_layout.addWidget(QLabel("Strategy / Setup"))
+            trade_layout.addWidget(strategy_setup)
+            trade_grid = QGridLayout()
+            trade_grid.addWidget(QLabel("Timeframe"), 0, 0)
+            trade_grid.addWidget(setup_timeframe, 0, 1)
+            trade_grid.addWidget(QLabel("Higher TF confirmed (Y/N)"), 0, 2)
+            trade_grid.addWidget(higher_tf, 0, 3)
+            trade_layout.addLayout(trade_grid)
+            trade_layout.addWidget(QLabel("Entry trigger (exact)"))
+            trade_layout.addWidget(entry_trigger)
+            trade_layout.addWidget(QLabel("Stop Loss (level & reason)"))
+            trade_layout.addWidget(stop_loss)
+            trade_layout.addWidget(QLabel("Take Profit (level & reason)"))
+            trade_layout.addWidget(take_profit)
+            trade_layout.addWidget(QLabel("Risk / Reward target (min)"))
+            trade_layout.addWidget(rr_target)
+
+            sizing_layout = section("Position Sizing")
+            sizing_grid = QGridLayout()
+            equity = QLineEdit()
+            risk_per_trade = QLineEdit()
+            risk_dollar = QLineEdit()
+            stop_distance = QLineEdit()
+            position_formula = QLineEdit()
+            sizing_grid.addWidget(QLabel("Account equity"), 0, 0)
+            sizing_grid.addWidget(equity, 0, 1)
+            sizing_grid.addWidget(QLabel("Risk per trade % or $"), 0, 2)
+            sizing_grid.addWidget(risk_per_trade, 0, 3)
+            sizing_grid.addWidget(QLabel("Calculated risk $"), 1, 0)
+            sizing_grid.addWidget(risk_dollar, 1, 1)
+            sizing_grid.addWidget(QLabel("Stop distance"), 1, 2)
+            sizing_grid.addWidget(stop_distance, 1, 3)
+            sizing_grid.addWidget(QLabel("Position size formula"), 2, 0)
+            sizing_grid.addWidget(position_formula, 2, 1, 1, 3)
+            sizing_layout.addLayout(sizing_grid)
+            sizing_layout.addWidget(QLabel("For small accounts: trade demo / micro-lots only"))
+
+            execution_layout = section("Execution / During Trade / Post-trade")
+            execution_checks = {
+                "spread_slippage": QCheckBox("Re-check spread & slippage risk"),
+                "orders_placed_on_chart": QCheckBox("Limit entry / take-profit / stop placed on chart"),
+                "size_matches_risk": QCheckBox("Confirm order size matches risk calc"),
+                "planned_screenshot": QCheckBox("Save / chart a screenshot of planned trade"),
+                "stop_adjustment_rule": QCheckBox("Do not adjust stop unless plan allows"),
+                "close_on_invalidation": QCheckBox("If invalidation is hit, close immediately"),
+                "no_averaging": QCheckBox("No averaging into a losing trade unless pre-planned"),
+            }
+            for checkbox in execution_checks.values():
+                execution_layout.addWidget(checkbox)
+            exit_grid = QGridLayout()
+            exit_reason = QLineEdit()
+            actual_pnl = QLineEdit()
+            actual_pnl_pct = QLineEdit()
+            trade_duration = QLineEdit()
+            exit_grid.addWidget(QLabel("Exit reason"), 0, 0)
+            exit_grid.addWidget(exit_reason, 0, 1, 1, 3)
+            exit_grid.addWidget(QLabel("Actual P&L $"), 1, 0)
+            exit_grid.addWidget(actual_pnl, 1, 1)
+            exit_grid.addWidget(QLabel("P&L %"), 1, 2)
+            exit_grid.addWidget(actual_pnl_pct, 1, 3)
+            exit_grid.addWidget(QLabel("Trade duration"), 2, 0)
+            exit_grid.addWidget(trade_duration, 2, 1)
+            execution_layout.addLayout(exit_grid)
+
+            review_layout = section("Journal & Review / Risk & Behavior Controls / Sopotek")
+            review_checks = {
+                "journal_logged": QCheckBox("Log trade in journal (entry, exit, size, screenshots)"),
+                "weekly_review": QCheckBox("Weekly review: Win rate, Avg RR, Expectancy, Max DD"),
+                "daily_max_loss_rule": QCheckBox("Daily max loss rule enforced"),
+                "avoid_major_news": QCheckBox("Avoid major news unless strategy is news-based"),
+                "fixed_position_sizing": QCheckBox("Keep position sizing fixed to plan"),
+            }
+            for checkbox in review_checks.values():
+                review_layout.addWidget(checkbox)
+            action_items = QTextEdit()
+            action_items.setMaximumHeight(80)
+            daily_max_loss = QLineEdit()
+            ai_enabled = QLineEdit()
+            telegram_alerts = QLineEdit()
+            journal_coverage = QLineEdit()
+            review_layout.addWidget(QLabel("Action items for improvement"))
+            review_layout.addWidget(action_items)
+            review_grid = QGridLayout()
+            review_grid.addWidget(QLabel("Daily max loss rule"), 0, 0)
+            review_grid.addWidget(daily_max_loss, 0, 1)
+            review_grid.addWidget(QLabel("AI Trading enabled?"), 1, 0)
+            review_grid.addWidget(ai_enabled, 1, 1)
+            review_grid.addWidget(QLabel("Telegram alerts set?"), 1, 2)
+            review_grid.addWidget(telegram_alerts, 1, 3)
+            review_grid.addWidget(QLabel("Journal coverage enabled?"), 2, 0)
+            review_grid.addWidget(journal_coverage, 2, 1)
+            review_layout.addLayout(review_grid)
+
+            signoff_layout = section("Sign-off")
+            signoff_grid = QGridLayout()
+            trader_name = QLineEdit()
+            signature = QLineEdit()
+            review_date = QLineEdit()
+            signoff_grid.addWidget(QLabel("Trader name"), 0, 0)
+            signoff_grid.addWidget(trader_name, 0, 1)
+            signoff_grid.addWidget(QLabel("Signature"), 0, 2)
+            signoff_grid.addWidget(signature, 0, 3)
+            signoff_grid.addWidget(QLabel("Review date"), 1, 0)
+            signoff_grid.addWidget(review_date, 1, 1)
+            signoff_layout.addLayout(signoff_grid)
+
+            form_layout.addStretch(1)
+            scroll.setWidget(form_holder)
+            root_layout.addWidget(scroll, 1)
+
+            status = QLabel("Checklist ready.")
+            status.setWordWrap(True)
+            status.setStyleSheet("color:#9fb0c7; padding-top:4px;")
+            root_layout.addWidget(status)
+
+            window.setCentralWidget(container)
+            window._trade_checklist_container = container
+            window._trade_checklist_warning = warning
+            window._trade_checklist_status = status
+            window._trade_checklist_account = account
+            window._trade_checklist_date = date_input
+            window._trade_checklist_time = time_input
+            window._trade_checklist_timeframe = timeframe_input
+            window._trade_checklist_mode = mode
+            window._trade_checklist_watch_1 = watch_1
+            window._trade_checklist_watch_2 = watch_2
+            window._trade_checklist_watch_3 = watch_3
+            window._trade_checklist_watch_4 = watch_4
+            window._trade_checklist_news_bias = news_bias
+            window._trade_checklist_strategy_setup = strategy_setup
+            window._trade_checklist_setup_timeframe = setup_timeframe
+            window._trade_checklist_higher_tf = higher_tf
+            window._trade_checklist_entry_trigger = entry_trigger
+            window._trade_checklist_stop_loss = stop_loss
+            window._trade_checklist_take_profit = take_profit
+            window._trade_checklist_rr_target = rr_target
+            window._trade_checklist_equity = equity
+            window._trade_checklist_risk_per_trade = risk_per_trade
+            window._trade_checklist_risk_dollar = risk_dollar
+            window._trade_checklist_stop_distance = stop_distance
+            window._trade_checklist_position_formula = position_formula
+            window._trade_checklist_exit_reason = exit_reason
+            window._trade_checklist_actual_pnl = actual_pnl
+            window._trade_checklist_actual_pnl_pct = actual_pnl_pct
+            window._trade_checklist_trade_duration = trade_duration
+            window._trade_checklist_action_items = action_items
+            window._trade_checklist_daily_max_loss = daily_max_loss
+            window._trade_checklist_ai_enabled = ai_enabled
+            window._trade_checklist_telegram_alerts = telegram_alerts
+            window._trade_checklist_journal_coverage = journal_coverage
+            window._trade_checklist_trader_name = trader_name
+            window._trade_checklist_signature = signature
+            window._trade_checklist_review_date = review_date
+            window._trade_checklist_checkboxes = {}
+            window._trade_checklist_checkboxes.update(pretrade_checks)
+            window._trade_checklist_checkboxes.update(execution_checks)
+            window._trade_checklist_checkboxes.update(review_checks)
+
+            prefill_btn.clicked.connect(lambda: self._prefill_trade_checklist(window))
+            save_btn.clicked.connect(lambda: self._save_trade_checklist(window))
+            reset_btn.clicked.connect(lambda: self._reset_trade_checklist(window))
+            mode.currentIndexChanged.connect(lambda *_: self._update_trade_checklist_status(window))
+            equity.textChanged.connect(lambda *_: self._update_trade_checklist_status(window))
+
+        raw_snapshot = self.settings.value("trade_checklist/latest", "")
+        try:
+            snapshot = json.loads(_json_text(raw_snapshot, "{}")) if raw_snapshot else {}
+        except Exception:
+            snapshot = {}
+        if not snapshot:
+            snapshot = self._default_trade_checklist_snapshot()
+        self._apply_trade_checklist_snapshot(window, snapshot)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _trade_review_selected_row(self, window):
+        table = getattr(window, "_closed_journal_table", None)
+        rows = list(getattr(window, "_closed_journal_rows", []) or [])
+        if table is None:
+            return None
+        row = table.currentRow()
+        if row < 0 or row >= len(rows):
+            return None
+        return rows[row]
+
+    def _trade_timestamp_ms(self, value):
+        if value in (None, ""):
+            return None
+        if isinstance(value, QDateTime):
+            return int(value.toMSecsSinceEpoch())
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            if numeric > 1_000_000_000_000:
+                return int(numeric)
+            if numeric > 1_000_000_000:
+                return int(numeric * 1000)
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            if text.isdigit():
+                numeric = float(text)
+                if numeric > 1_000_000_000_000:
+                    return int(numeric)
+                if numeric > 1_000_000_000:
+                    return int(numeric * 1000)
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp() * 1000)
+        except Exception:
+            return None
+
+    def _trade_review_snapshot(self, trade, candles, trade_index):
+        if not candles:
+            return {"trade_index": 0, "post5": None, "post20": None}
+
+        entry_price = self._safe_float(trade.get("price"))
+        if entry_price is None:
+            try:
+                entry_price = float(candles[min(max(trade_index, 0), len(candles) - 1)].get("close"))
+            except Exception:
+                entry_price = None
+
+        def _move_after(offset):
+            target_index = trade_index + offset
+            if entry_price in (None, 0) or target_index >= len(candles):
+                return None
+            try:
+                target_close = float(candles[target_index].get("close"))
+            except Exception:
+                return None
+            side = str(trade.get("side") or "").strip().lower()
+            raw_move = (target_close - entry_price) / entry_price
+            return raw_move if side == "buy" else -raw_move if side == "sell" else raw_move
+
+        return {
+            "trade_index": trade_index,
+            "post5": _move_after(5),
+            "post20": _move_after(20),
+        }
+
+    def _trade_review_html(self, trade, candles, trade_index):
+        strategy = html.escape(str(trade.get("strategy_name") or "Not tagged"))
+        reason = html.escape(str(trade.get("reason") or "No reason recorded"))
+        source = html.escape(self._format_trade_source_label(trade.get("source") or "-") or "-")
+        side = html.escape(str(trade.get("side") or "-").upper())
+        status = html.escape(str(trade.get("status") or "-").upper())
+        symbol = html.escape(str(trade.get("symbol") or "-"))
+        review = self._trade_review_snapshot(trade, candles, trade_index)
+
+        lines = [
+            f"<h3 style='margin-bottom:6px;'>{symbol} | {side} | {status}</h3>",
+            f"<p><b>Source:</b> {source} | <b>Strategy:</b> {strategy}</p>",
+            f"<p><b>Why it was taken:</b> {reason}</p>",
+            f"<p><b>Entry:</b> {html.escape(self._format_trade_log_value(trade.get('price')))} | "
+            f"<b>Expected:</b> {html.escape(self._format_trade_log_value(trade.get('expected_price')))} | "
+            f"<b>Size:</b> {html.escape(self._format_trade_log_value(trade.get('size')))}</p>",
+        ]
+
+        details = []
+        confidence = self._safe_float(trade.get("confidence"))
+        if confidence is not None:
+            details.append(f"<b>Confidence:</b> {confidence * 100.0:.1f}%")
+        spread_bps = self._safe_float(trade.get("spread_bps"))
+        if spread_bps is not None:
+            details.append(f"<b>Spread:</b> {spread_bps:.2f} bps")
+        slippage_bps = self._safe_float(trade.get("slippage_bps"))
+        if slippage_bps is not None:
+            details.append(f"<b>Slippage:</b> {slippage_bps:.2f} bps")
+        fee = self._safe_float(trade.get("fee"))
+        if fee is not None:
+            details.append(f"<b>Fee:</b> {self._format_currency(fee)}")
+        pnl = self._safe_float(trade.get("pnl"))
+        if pnl is not None:
+            details.append(f"<b>Realized PnL:</b> {self._format_currency(pnl)}")
+        if details:
+            lines.append("<p>" + " | ".join(details) + "</p>")
+
+        review_bits = []
+        if review.get("post5") is not None:
+            review_bits.append(f"<b>5-candle move:</b> {self._format_percent_text(review.get('post5'))}")
+        if review.get("post20") is not None:
+            review_bits.append(f"<b>20-candle move:</b> {self._format_percent_text(review.get('post20'))}")
+        if review_bits:
+            lines.append("<p>" + " | ".join(review_bits) + "</p>")
+
+        journal_bits = []
+        stop_loss = self._safe_float(trade.get("stop_loss"))
+        take_profit = self._safe_float(trade.get("take_profit"))
+        if stop_loss is not None:
+            journal_bits.append(f"<b>Stop Loss:</b> {html.escape(self._format_trade_log_value(stop_loss))}")
+        if take_profit is not None:
+            journal_bits.append(f"<b>Take Profit:</b> {html.escape(self._format_trade_log_value(take_profit))}")
+        if trade.get("outcome"):
+            journal_bits.append(f"<b>Outcome:</b> {html.escape(str(trade.get('outcome')))}")
+        if journal_bits:
+            lines.append("<p>" + " | ".join(journal_bits) + "</p>")
+
+        if trade.get("setup"):
+            lines.append(f"<p><b>Setup:</b> {html.escape(str(trade.get('setup')))}</p>")
+        if trade.get("lessons"):
+            lines.append(f"<p><b>Lessons:</b> {html.escape(str(trade.get('lessons')))}</p>")
+
+        if not candles:
+            lines.append("<p>No candle context was available for replay.</p>")
+
+        return "".join(lines)
+
+    def _derived_trade_outcome(self, trade):
+        if not isinstance(trade, dict):
+            return ""
+        explicit = str(trade.get("outcome") or "").strip()
+        if explicit:
+            return explicit
+        pnl = self._safe_float(trade.get("pnl"))
+        status = str(trade.get("status") or "").strip().lower()
+        if pnl is not None:
+            if pnl > 0:
+                return "Win"
+            if pnl < 0:
+                return "Loss"
+            if status in {"filled", "closed"}:
+                return "Flat"
+        if status in {"rejected", "failed"}:
+            return "Rejected"
+        if status in {"canceled", "cancelled", "expired"}:
+            return "Canceled"
+        return status.title() if status else ""
+
+    def _set_text_edit_value(self, widget, value):
+        if widget is None:
+            return
+        widget.blockSignals(True)
+        widget.setPlainText(str(value or ""))
+        widget.blockSignals(False)
+
+    def _trade_review_journal_text(self, widget):
+        if widget is None:
+            return ""
+        try:
+            return str(widget.toPlainText() or "").strip()
+        except Exception:
+            return ""
+
+    def _populate_trade_review_journal_fields(self, window):
+        state = getattr(window, "_trade_review_state", {}) or {}
+        trade = state.get("trade") or {}
+        reason_edit = getattr(window, "_trade_review_reason_edit", None)
+        setup_edit = getattr(window, "_trade_review_setup_edit", None)
+        outcome_edit = getattr(window, "_trade_review_outcome_edit", None)
+        lessons_edit = getattr(window, "_trade_review_lessons_edit", None)
+        stop_loss_input = getattr(window, "_trade_review_stop_loss_input", None)
+        take_profit_input = getattr(window, "_trade_review_take_profit_input", None)
+
+        self._set_text_edit_value(reason_edit, trade.get("reason"))
+        self._set_text_edit_value(setup_edit, trade.get("setup"))
+        self._set_text_edit_value(outcome_edit, trade.get("outcome") or self._derived_trade_outcome(trade))
+        self._set_text_edit_value(lessons_edit, trade.get("lessons"))
+        if stop_loss_input is not None:
+            stop_loss_input.blockSignals(True)
+            stop_loss_input.setText("" if trade.get("stop_loss") in (None, "") else str(trade.get("stop_loss")))
+            stop_loss_input.blockSignals(False)
+        if take_profit_input is not None:
+            take_profit_input.blockSignals(True)
+            take_profit_input.setText("" if trade.get("take_profit") in (None, "") else str(trade.get("take_profit")))
+            take_profit_input.blockSignals(False)
+
+    def _merge_trade_journal_update(self, target, updated):
+        if not isinstance(target, dict):
+            return
+        for key in (
+            "trade_db_id",
+            "reason",
+            "stop_loss",
+            "take_profit",
+            "setup",
+            "outcome",
+            "lessons",
+        ):
+            if key in updated:
+                target[key] = updated.get(key)
+
+    def _sync_trade_journal_windows(self, updated_trade):
+        if not isinstance(updated_trade, dict):
+            return
+
+        trade_id = str(updated_trade.get("trade_db_id") or "").strip()
+        order_id = str(updated_trade.get("order_id") or "").strip()
+
+        closed_window = self.detached_tool_windows.get("closed_trade_journal")
+        if closed_window is not None:
+            rows = list(getattr(closed_window, "_closed_journal_rows", []) or [])
+            for row in rows:
+                row_trade_id = str(row.get("trade_db_id") or "").strip()
+                row_order_id = str(row.get("order_id") or "").strip()
+                if (trade_id and row_trade_id == trade_id) or (order_id and row_order_id == order_id):
+                    self._merge_trade_journal_update(row, updated_trade)
+            self._populate_closed_journal_table(getattr(closed_window, "_closed_journal_table", None), rows)
+
+        review_window = self.detached_tool_windows.get("trade_review")
+        if review_window is not None:
+            state = getattr(review_window, "_trade_review_state", {}) or {}
+            trade = state.get("trade") or {}
+            row_trade_id = str(trade.get("trade_db_id") or "").strip()
+            row_order_id = str(trade.get("order_id") or "").strip()
+            if (trade_id and row_trade_id == trade_id) or (order_id and row_order_id == order_id):
+                self._merge_trade_journal_update(trade, updated_trade)
+                state["trade"] = trade
+                review_window._trade_review_state = state
+                self._populate_trade_review_journal_fields(review_window)
+                self._render_trade_review_window(review_window)
+
+        journal_review_window = self.detached_tool_windows.get("trade_journal_review")
+        if journal_review_window is not None:
+            self._schedule_trade_journal_review_refresh(journal_review_window)
+
+    async def _save_trade_review_journal_async(self, window):
+        state = getattr(window, "_trade_review_state", {}) or {}
+        trade = dict(state.get("trade") or {})
+        status_label = getattr(window, "_trade_review_journal_status", None)
+        repository = getattr(self.controller, "trade_repository", None)
+        if repository is None:
+            if status_label is not None:
+                status_label.setText("Trade repository not available.")
+            return
+
+        update_payload = {
+            "trade_db_id": trade.get("trade_db_id"),
+            "order_id": trade.get("order_id"),
+            "exchange": getattr(getattr(self.controller, "broker", None), "exchange_name", None),
+            "reason": self._trade_review_journal_text(getattr(window, "_trade_review_reason_edit", None)),
+            "setup": self._trade_review_journal_text(getattr(window, "_trade_review_setup_edit", None)),
+            "outcome": self._trade_review_journal_text(getattr(window, "_trade_review_outcome_edit", None)),
+            "lessons": self._trade_review_journal_text(getattr(window, "_trade_review_lessons_edit", None)),
+            "stop_loss": str(getattr(window, "_trade_review_stop_loss_input", None).text() or "").strip()
+            if getattr(window, "_trade_review_stop_loss_input", None) is not None else "",
+            "take_profit": str(getattr(window, "_trade_review_take_profit_input", None).text() or "").strip()
+            if getattr(window, "_trade_review_take_profit_input", None) is not None else "",
+        }
+
+        if not update_payload["trade_db_id"] and not update_payload["order_id"]:
+            if status_label is not None:
+                status_label.setText("This trade cannot be journaled yet because no persistent trade id was found.")
+            return
+
+        if status_label is not None:
+            status_label.setText("Saving journal notes...")
+
+        try:
+            saved = await asyncio.to_thread(
+                repository.update_trade_journal,
+                trade_id=update_payload["trade_db_id"],
+                order_id=update_payload["order_id"],
+                exchange=update_payload["exchange"],
+                reason=update_payload["reason"],
+                stop_loss=update_payload["stop_loss"],
+                take_profit=update_payload["take_profit"],
+                setup=update_payload["setup"],
+                outcome=update_payload["outcome"],
+                lessons=update_payload["lessons"],
+            )
+        except Exception as exc:
+            self.logger.debug("Trade journal save failed: %s", exc)
+            if status_label is not None:
+                status_label.setText(f"Unable to save journal: {exc}")
+            return
+
+        if saved is None:
+            if status_label is not None:
+                status_label.setText("No matching stored trade was found to update.")
+            return
+
+        updated_trade = dict(trade)
+        updated_trade.update(
+            {
+                "trade_db_id": getattr(saved, "id", trade.get("trade_db_id")),
+                "reason": getattr(saved, "reason", None) or "",
+                "stop_loss": getattr(saved, "stop_loss", None),
+                "take_profit": getattr(saved, "take_profit", None),
+                "setup": getattr(saved, "setup", None) or "",
+                "outcome": getattr(saved, "outcome", None) or "",
+                "lessons": getattr(saved, "lessons", None) or "",
+            }
+        )
+        state["trade"] = updated_trade
+        window._trade_review_state = state
+        self._sync_trade_journal_windows(updated_trade)
+        if status_label is not None:
+            status_label.setText("Journal saved.")
+
+    def _save_trade_review_journal(self, window):
+        try:
+            asyncio.get_event_loop().create_task(self._save_trade_review_journal_async(window))
+        except Exception as exc:
+            self.logger.debug("Unable to schedule trade journal save: %s", exc)
+            status_label = getattr(window, "_trade_review_journal_status", None)
+            if status_label is not None:
+                status_label.setText("Unable to schedule journal save.")
+
+    def _render_trade_review_window(self, window):
+        state = getattr(window, "_trade_review_state", {}) or {}
+        trade = state.get("trade") or {}
+        candles = list(state.get("candles") or [])
+        summary = getattr(window, "_trade_review_summary", None)
+        details = getattr(window, "_trade_review_details", None)
+        slider = getattr(window, "_trade_review_slider", None)
+        curve = getattr(window, "_trade_review_curve", None)
+        marker = getattr(window, "_trade_review_marker", None)
+        vline = getattr(window, "_trade_review_vline", None)
+        hline = getattr(window, "_trade_review_hline", None)
+
+        if summary is not None:
+            summary.setText(
+                f"{trade.get('symbol', '-')} | {str(trade.get('side', '-')).upper()} | "
+                f"{str(trade.get('status', '-')).upper()} | Strategy: {trade.get('strategy_name') or 'Not tagged'}"
+            )
+
+        if details is not None:
+            details.setHtml(self._trade_review_html(trade, candles, int(state.get("trade_index", 0) or 0)))
+
+        if not candles or curve is None or slider is None:
+            if curve is not None:
+                curve.setData([], [])
+            if marker is not None:
+                marker.setData([], [])
+            return
+
+        trade_index = min(max(int(state.get("trade_index", 0) or 0), 0), len(candles) - 1)
+        slider.blockSignals(True)
+        slider.setMinimum(0)
+        slider.setMaximum(max(len(candles) - 1, 0))
+        slider.setValue(min(max(int(slider.value()), trade_index), len(candles) - 1))
+        slider.blockSignals(False)
+
+        visible_end = max(int(slider.value()), trade_index)
+        visible = candles[:visible_end + 1]
+        x_values = list(range(len(visible)))
+        close_values = [float(item.get("close", 0) or 0) for item in visible]
+        curve.setData(x_values, close_values)
+
+        marker_price = self._safe_float(trade.get("price"))
+        if marker_price is None and 0 <= trade_index < len(candles):
+            marker_price = self._safe_float(candles[trade_index].get("close"))
+        if marker is not None:
+            if trade_index <= visible_end and marker_price is not None:
+                marker.setData([trade_index], [marker_price])
+            else:
+                marker.setData([], [])
+        if vline is not None:
+            vline.setValue(trade_index)
+        if hline is not None and marker_price is not None:
+            hline.setValue(marker_price)
+
+    async def _load_trade_review_async(self, window, trade):
+        candles = []
+        trade_index = 0
+        try:
+            raw = await self.controller._safe_fetch_ohlcv(
+                trade.get("symbol"),
+                timeframe=self.current_timeframe,
+                limit=220,
+            )
+        except Exception as exc:
+            raw = []
+            self.logger.debug("Trade review candle load failed: %s", exc)
+
+        for row in raw or []:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            candles.append(
+                {
+                    "timestamp": row[0],
+                    "open": row[1],
+                    "high": row[2],
+                    "low": row[3],
+                    "close": row[4],
+                    "volume": row[5] if len(row) > 5 else 0,
+                }
+            )
+
+        if candles:
+            target_ts = self._trade_timestamp_ms(trade.get("timestamp"))
+            if target_ts is not None:
+                indexed = []
+                for idx, candle in enumerate(candles):
+                    candle_ts = self._trade_timestamp_ms(candle.get("timestamp"))
+                    if candle_ts is None:
+                        continue
+                    indexed.append((abs(candle_ts - target_ts), idx))
+                if indexed:
+                    trade_index = min(indexed)[1]
+            trade_index = min(max(int(trade_index), 0), len(candles) - 1)
+
+        window._trade_review_state = {
+            "trade": dict(trade or {}),
+            "candles": candles,
+            "trade_index": trade_index,
+        }
+        self._populate_trade_review_journal_fields(window)
+        slider = getattr(window, "_trade_review_slider", None)
+        if slider is not None and candles:
+            slider.blockSignals(True)
+            slider.setMaximum(max(len(candles) - 1, 0))
+            slider.setValue(min(len(candles) - 1, max(trade_index + 20, trade_index)))
+            slider.blockSignals(False)
+        self._render_trade_review_window(window)
+
+    def _toggle_trade_review_playback(self, window):
+        timer = getattr(window, "_trade_review_timer", None)
+        button = getattr(window, "_trade_review_play_btn", None)
+        slider = getattr(window, "_trade_review_slider", None)
+        if timer is None or button is None or slider is None:
+            return
+        if timer.isActive():
+            timer.stop()
+            button.setText("Play Replay")
+            return
+        timer.start(220)
+        button.setText("Pause Replay")
+
+    def _advance_trade_review_playback(self, window):
+        slider = getattr(window, "_trade_review_slider", None)
+        timer = getattr(window, "_trade_review_timer", None)
+        button = getattr(window, "_trade_review_play_btn", None)
+        if slider is None or timer is None:
+            return
+        if slider.value() >= slider.maximum():
+            timer.stop()
+            if button is not None:
+                button.setText("Play Replay")
+            return
+        slider.setValue(slider.value() + 1)
+
+    def _open_trade_review_window(self, trade):
+        window = self._get_or_create_tool_window(
+            "trade_review",
+            "Trade Review",
+            width=1120,
+            height=760,
+        )
+
+        if getattr(window, "_trade_review_curve", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(10)
+
+            summary = QLabel("Loading trade review context.")
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; "
+                "border-radius: 12px; padding: 12px; font-size: 13px; font-weight: 600;"
+            )
+            layout.addWidget(summary)
+
+            controls = QHBoxLayout()
+            play_btn = QPushButton("Play Replay")
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setMinimum(0)
+            slider.setMaximum(0)
+            controls.addWidget(play_btn)
+            controls.addWidget(slider, 1)
+            layout.addLayout(controls)
+
+            plot = pg.PlotWidget()
+            self._style_performance_plot(plot, left_label="Price")
+            plot.setMinimumHeight(340)
+            curve = plot.plot(pen=pg.mkPen("#4ea1ff", width=2.2))
+            marker = pg.ScatterPlotItem(size=11, brush=pg.mkBrush("#ffb84d"), pen=pg.mkPen("#ffd37a", width=1.5))
+            plot.addItem(marker)
+            vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#ffb84d", width=1.2, style=Qt.PenStyle.DashLine))
+            hline = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen("#49d17d", width=1.0, style=Qt.PenStyle.DotLine))
+            plot.addItem(vline)
+            plot.addItem(hline)
+            layout.addWidget(plot)
+
+            details = QTextBrowser()
+            details.setStyleSheet(
+                "QTextBrowser { background-color: #101a2d; color: #d8e6ff; border: 1px solid #20324d; border-radius: 12px; padding: 12px; }"
+            )
+            layout.addWidget(details, 1)
+
+            journal_card = QFrame()
+            journal_card.setStyleSheet(
+                "QFrame { background-color: #101a2d; border: 1px solid #20324d; border-radius: 12px; }"
+                "QLabel { color: #d8e6ff; }"
+                "QLineEdit, QTextEdit { background-color: #09111f; color: #d8e6ff; border: 1px solid #20324d; border-radius: 8px; padding: 6px; }"
+            )
+            journal_layout = QVBoxLayout(journal_card)
+            journal_layout.setContentsMargins(12, 12, 12, 12)
+            journal_layout.setSpacing(8)
+
+            journal_title = QLabel("Trade Journal")
+            journal_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #f4f8ff;")
+            journal_layout.addWidget(journal_title)
+
+            journal_form = QFormLayout()
+            reason_edit = QTextEdit()
+            reason_edit.setFixedHeight(60)
+            setup_edit = QTextEdit()
+            setup_edit.setFixedHeight(60)
+            outcome_edit = QTextEdit()
+            outcome_edit.setFixedHeight(50)
+            lessons_edit = QTextEdit()
+            lessons_edit.setFixedHeight(72)
+            stop_loss_input = QLineEdit()
+            take_profit_input = QLineEdit()
+            journal_form.addRow("Entry Reason", reason_edit)
+            journal_form.addRow("Setup", setup_edit)
+            journal_form.addRow("Stop Loss", stop_loss_input)
+            journal_form.addRow("Take Profit", take_profit_input)
+            journal_form.addRow("Outcome", outcome_edit)
+            journal_form.addRow("Lessons", lessons_edit)
+            journal_layout.addLayout(journal_form)
+
+            journal_controls = QHBoxLayout()
+            journal_status = QLabel("Add the setup, TP/SL, outcome, and lessons for this trade.")
+            journal_status.setWordWrap(True)
+            journal_status.setStyleSheet("color: #9eb4d2;")
+            save_journal_btn = QPushButton("Save Journal")
+            save_journal_btn.clicked.connect(lambda: self._save_trade_review_journal(window))
+            open_review_btn = QPushButton("Open Weekly/Monthly Review")
+            open_review_btn.clicked.connect(self._open_trade_journal_review_window)
+            journal_controls.addWidget(journal_status, 1)
+            journal_controls.addWidget(save_journal_btn)
+            journal_controls.addWidget(open_review_btn)
+            journal_layout.addLayout(journal_controls)
+
+            layout.addWidget(journal_card)
+
+            window.setCentralWidget(container)
+            window._trade_review_summary = summary
+            window._trade_review_slider = slider
+            window._trade_review_play_btn = play_btn
+            window._trade_review_curve = curve
+            window._trade_review_marker = marker
+            window._trade_review_vline = vline
+            window._trade_review_hline = hline
+            window._trade_review_details = details
+            window._trade_review_reason_edit = reason_edit
+            window._trade_review_setup_edit = setup_edit
+            window._trade_review_outcome_edit = outcome_edit
+            window._trade_review_lessons_edit = lessons_edit
+            window._trade_review_stop_loss_input = stop_loss_input
+            window._trade_review_take_profit_input = take_profit_input
+            window._trade_review_journal_status = journal_status
+            window._trade_review_save_btn = save_journal_btn
+            window._trade_review_state = {}
+
+            timer = QTimer(window)
+            timer.timeout.connect(lambda: self._advance_trade_review_playback(window))
+            window._trade_review_timer = timer
+            play_btn.clicked.connect(lambda: self._toggle_trade_review_playback(window))
+            slider.valueChanged.connect(lambda *_: self._render_trade_review_window(window))
+
+        timer = getattr(window, "_trade_review_timer", None)
+        button = getattr(window, "_trade_review_play_btn", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        if button is not None:
+            button.setText("Play Replay")
+
+        try:
+            window._trade_review_task = asyncio.get_event_loop().create_task(
+                self._load_trade_review_async(window, trade)
+            )
+        except Exception as exc:
+            self.logger.debug("Unable to schedule trade review load: %s", exc)
+            window._trade_review_state = {"trade": dict(trade or {}), "candles": [], "trade_index": 0}
+            self._populate_trade_review_journal_fields(window)
+            self._render_trade_review_window(window)
+
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _open_trade_review_from_journal(self, window):
+        trade = self._trade_review_selected_row(window)
+        if not isinstance(trade, dict):
+            QMessageBox.information(self, "Trade Review", "Select a closed trade first.")
+            return
+        self._open_trade_review_window(trade)
+
+    def _trade_datetime_utc(self, value):
+        timestamp_ms = self._trade_timestamp_ms(value)
+        if timestamp_ms is None:
+            return None
+        try:
+            return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+        except Exception :
+            return None
+
+    def _journal_review_bounds(self, mode):
+        now = datetime.now(timezone.utc)
+        label = str(mode or "Weekly").strip().title()
+        if label == "Monthly":
+            current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            previous_anchor = current_start - timedelta(days=1)
+            previous_start = previous_anchor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            label = "Weekly"
+            current_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            previous_start = current_start - timedelta(days=7)
+        return label, previous_start, current_start, now
+
+    def _rows_for_journal_period(self, rows, start_dt, end_dt):
+        selected = []
+        for row in rows or []:
+            trade_dt = self._trade_datetime_utc(row.get("timestamp"))
+            if trade_dt is None:
+                continue
+            if start_dt <= trade_dt < end_dt:
+                selected.append(row)
+        return selected
+
+    def _journal_review_analysis_rows(self, rows):
+        analysis_rows = []
+        for row in rows or []:
+            status = str(row.get("status") or "").strip().lower()
+            pnl = self._safe_float(row.get("pnl"))
+            if status in {"filled", "closed"} or pnl is not None:
+                analysis_rows.append(row)
+        return analysis_rows
+
+    def _summarize_journal_rows(self, rows):
+        trades = list(rows or [])
+        pnl_values = [self._safe_float(row.get("pnl")) for row in trades]
+        pnl_values = [value for value in pnl_values if value is not None]
+        fee_values = [self._safe_float(row.get("fee")) for row in trades]
+        fee_values = [value for value in fee_values if value is not None]
+        slippage_values = [self._safe_float(row.get("slippage_bps")) for row in trades]
+        slippage_values = [value for value in slippage_values if value is not None]
+        confidence_values = [self._safe_float(row.get("confidence")) for row in trades]
+        confidence_values = [value for value in confidence_values if value is not None]
+
+        wins = [value for value in pnl_values if value > 0]
+        losses = [value for value in pnl_values if value < 0]
+        complete_entries = 0
+        strategy_map = {}
+        symbol_loss_counts = {}
+
+        for row in trades:
+            if all(str(row.get(field) or "").strip() for field in ("reason", "setup", "outcome", "lessons")):
+                complete_entries += 1
+            strategy_name = str(row.get("strategy_name") or "Unlabeled").strip() or "Unlabeled"
+            bucket = strategy_map.setdefault(strategy_name, {"rows": [], "pnl": [], "wins": 0, "fees": 0.0})
+            bucket["rows"].append(row)
+            pnl = self._safe_float(row.get("pnl"))
+            if pnl is not None:
+                bucket["pnl"].append(pnl)
+                if pnl > 0:
+                    bucket["wins"] += 1
+                if pnl < 0:
+                    symbol = str(row.get("symbol") or "").strip() or "Unknown"
+                    symbol_loss_counts[symbol] = symbol_loss_counts.get(symbol, 0) + 1
+            fee = self._safe_float(row.get("fee"), 0.0)
+            bucket["fees"] += fee or 0.0
+
+        gross_profit = sum(wins)
+        gross_loss = abs(sum(losses))
+        strategy_rows = []
+        for strategy_name, bucket in strategy_map.items():
+            pnl_list = bucket["pnl"]
+            strategy_rows.append(
+                {
+                    "strategy": strategy_name,
+                    "trades": len(bucket["rows"]),
+                    "win_rate": (bucket["wins"] / len(pnl_list)) if pnl_list else None,
+                    "net_pnl": sum(pnl_list) if pnl_list else 0.0,
+                    "avg_pnl": (sum(pnl_list) / len(pnl_list)) if pnl_list else None,
+                    "journal_coverage": (
+                        sum(
+                            1 for item in bucket["rows"]
+                            if all(str(item.get(field) or "").strip() for field in ("reason", "setup", "outcome", "lessons"))
+                        ) / len(bucket["rows"])
+                    ) if bucket["rows"] else None,
+                    "fees": bucket["fees"],
+                }
+            )
+        strategy_rows.sort(key=lambda item: (item.get("net_pnl") is None, -(item.get("net_pnl") or 0.0), item["strategy"]))
+
+        return {
+            "trade_count": len(trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "net_pnl": sum(pnl_values) if pnl_values else 0.0,
+            "avg_pnl": (sum(pnl_values) / len(pnl_values)) if pnl_values else None,
+            "win_rate": (len(wins) / len(pnl_values)) if pnl_values else None,
+            "profit_factor": (gross_profit / gross_loss) if gross_loss > 0 else None,
+            "fees": sum(fee_values) if fee_values else 0.0,
+            "avg_slippage": (sum(slippage_values) / len(slippage_values)) if slippage_values else None,
+            "avg_confidence": (sum(confidence_values) / len(confidence_values)) if confidence_values else None,
+            "journal_coverage": (complete_entries / len(trades)) if trades else None,
+            "strategy_rows": strategy_rows,
+            "symbol_loss_counts": symbol_loss_counts,
+        }
+
+    def _journal_review_mistakes(self, rows, stats):
+        issues = []
+        missing_setup = sum(1 for row in rows if not str(row.get("setup") or "").strip())
+        missing_lessons = sum(
+            1 for row in rows
+            if self._safe_float(row.get("pnl")) is not None and self._safe_float(row.get("pnl")) < 0
+            and not str(row.get("lessons") or "").strip()
+        )
+        missing_risk = sum(
+            1 for row in rows
+            if str(row.get("status") or "").strip().lower() in {"filled", "closed"}
+            and (self._safe_float(row.get("stop_loss")) is None or self._safe_float(row.get("take_profit")) is None)
+        )
+        if missing_setup:
+            issues.append(f"{missing_setup} trade(s) are missing setup notes, which weakens pattern review.")
+        if missing_lessons:
+            issues.append(f"{missing_lessons} losing trade(s) have no lessons recorded yet.")
+        if missing_risk:
+            issues.append(f"{missing_risk} filled trade(s) are missing either stop loss or take profit documentation.")
+        avg_slippage = stats.get("avg_slippage")
+        if avg_slippage is not None and avg_slippage > 8:
+            issues.append(f"Average slippage is elevated at {avg_slippage:.2f} bps. Execution quality may be hurting edge.")
+        recurring_symbols = [symbol for symbol, count in (stats.get("symbol_loss_counts") or {}).items() if count >= 3]
+        if recurring_symbols:
+            issues.append(f"Repeated losses clustered on {', '.join(sorted(recurring_symbols)[:4])}. Review symbol selection and session quality.")
+        if not issues:
+            issues.append("No obvious discipline issue stands out in this period. Keep journaling every trade to preserve that visibility.")
+        return issues
+
+    def _journal_review_edge_decay(self, current_stats, previous_stats):
+        notes = []
+        current_trades = int(current_stats.get("trade_count") or 0)
+        previous_trades = int(previous_stats.get("trade_count") or 0)
+        if previous_trades <= 0:
+            return ["No prior period data was available, so edge decay cannot be measured yet."]
+
+        current_win = current_stats.get("win_rate")
+        previous_win = previous_stats.get("win_rate")
+        if current_win is not None and previous_win is not None and current_win < previous_win - 0.10:
+            notes.append(
+                f"Win rate cooled from {previous_win * 100.0:.1f}% to {current_win * 100.0:.1f}%."
+            )
+        current_avg = current_stats.get("avg_pnl")
+        previous_avg = previous_stats.get("avg_pnl")
+        if current_avg is not None and previous_avg not in (None, 0):
+            if current_avg < previous_avg * 0.7:
+                notes.append(
+                    f"Average trade expectancy slipped from {self._format_currency(previous_avg)} to {self._format_currency(current_avg)}."
+                )
+        current_pf = current_stats.get("profit_factor")
+        previous_pf = previous_stats.get("profit_factor")
+        if current_pf is not None and previous_pf not in (None, 0):
+            if current_pf < previous_pf * 0.75:
+                notes.append(f"Profit factor softened from {previous_pf:.2f} to {current_pf:.2f}.")
+        if current_trades > previous_trades * 1.5 and (current_stats.get("net_pnl") or 0.0) < (previous_stats.get("net_pnl") or 0.0):
+            notes.append("Trade count increased materially while returns weakened. That is a classic overtrading signal.")
+
+        previous_by_strategy = {
+            row["strategy"]: row for row in previous_stats.get("strategy_rows", [])
+        }
+        for row in current_stats.get("strategy_rows", []):
+            previous_row = previous_by_strategy.get(row["strategy"])
+            if not previous_row:
+                continue
+            if int(row.get("trades") or 0) < 3 or int(previous_row.get("trades") or 0) < 3:
+                continue
+            current_win_rate = row.get("win_rate")
+            previous_win_rate = previous_row.get("win_rate")
+            if current_win_rate is not None and previous_win_rate is not None and current_win_rate < previous_win_rate - 0.15:
+                notes.append(
+                    f"{row['strategy']} cooled from {previous_win_rate * 100.0:.1f}% to {current_win_rate * 100.0:.1f}% win rate."
+                )
+        if not notes:
+            notes.append("No strong edge decay signal stands out versus the prior period.")
+        return notes
+
+    def _journal_review_overview_html(self, mode, start_dt, end_dt, current_stats, previous_stats, mistakes, edge_decay):
+        period_label = f"{mode} review from {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}"
+        overview_lines = [
+            f"<h3>{html.escape(period_label)}</h3>",
+            "<p><b>Focus:</b> combine performance metrics with journaling quality so the review shows what happened and why.</p>",
+            "<p>"
+            f"<b>Current net PnL:</b> {html.escape(self._format_currency(current_stats.get('net_pnl')))} | "
+            f"<b>Win rate:</b> {html.escape(self._format_percent_text(current_stats.get('win_rate')))} | "
+            f"<b>Journal coverage:</b> {html.escape(self._format_percent_text(current_stats.get('journal_coverage')))}"
+            "</p>",
+            "<h4>Mistakes To Review</h4><ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in mistakes) + "</ul>",
+            "<h4>Edge Decay Check</h4><ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in edge_decay) + "</ul>",
+        ]
+        if int(previous_stats.get("trade_count") or 0) > 0:
+            overview_lines.append(
+                "<p>"
+                f"<b>Previous period net PnL:</b> {html.escape(self._format_currency(previous_stats.get('net_pnl')))} | "
+                f"<b>Previous win rate:</b> {html.escape(self._format_percent_text(previous_stats.get('win_rate')))}"
+                "</p>"
+            )
+        return "".join(overview_lines)
+
+    def _populate_journal_review_strategy_table(self, table, rows):
+        if table is None:
+            return
+        table.setRowCount(len(rows or []))
+        for row_index, row in enumerate(rows or []):
+            values = [
+                row.get("strategy", ""),
+                row.get("trades", ""),
+                self._format_percent_text(row.get("win_rate")),
+                self._format_currency(row.get("net_pnl")),
+                self._format_currency(row.get("avg_pnl")),
+                self._format_percent_text(row.get("journal_coverage")),
+                self._format_currency(row.get("fees")),
+            ]
+            for column, value in enumerate(values):
+                table.setItem(row_index, column, QTableWidgetItem(str(value)))
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+
+    def _schedule_trade_journal_review_refresh(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
+        task = getattr(window, "_journal_review_task", None)
+        if task is not None and not task.done():
+            return
+        try:
+            window._journal_review_task = asyncio.get_event_loop().create_task(
+                self._refresh_trade_journal_review_async(window)
+            )
+        except Exception as exc:
+            self.logger.debug("Unable to schedule journal review refresh: %s", exc)
+
+    async def _refresh_trade_journal_review_async(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
+        controller = self.controller
+        period_picker = getattr(window, "_journal_review_period_picker", None)
+        summary = getattr(window, "_journal_review_summary", None)
+        metrics = getattr(window, "_journal_review_metrics", {}) or {}
+        overview = getattr(window, "_journal_review_overview", None)
+        strategy_table = getattr(window, "_journal_review_strategy_table", None)
+        if (
+            period_picker is None
+            or summary is None
+            or overview is None
+            or strategy_table is None
+            or not self._is_qt_object_alive(period_picker)
+            or not self._is_qt_object_alive(summary)
+            or not self._is_qt_object_alive(overview)
+            or not self._is_qt_object_alive(strategy_table)
+        ):
+            return
+
+        try:
+            rows = await controller.fetch_trade_history(limit=700)
+        except Exception as exc:
+            rows = []
+            self.logger.debug("Journal review refresh failed: %s", exc)
+        if (
+            window is None
+            or not self._is_qt_object_alive(window)
+            or not self._is_qt_object_alive(period_picker)
+            or not self._is_qt_object_alive(summary)
+            or not self._is_qt_object_alive(overview)
+            or not self._is_qt_object_alive(strategy_table)
+        ):
+            return
+
+        mode, previous_start, current_start, now = self._journal_review_bounds(period_picker.currentText())
+        current_rows = self._journal_review_analysis_rows(self._rows_for_journal_period(rows, current_start, now))
+        previous_rows = self._journal_review_analysis_rows(self._rows_for_journal_period(rows, previous_start, current_start))
+        current_stats = self._summarize_journal_rows(current_rows)
+        previous_stats = self._summarize_journal_rows(previous_rows)
+        mistakes = self._journal_review_mistakes(current_rows, current_stats)
+        edge_decay = self._journal_review_edge_decay(current_stats, previous_stats)
+
+        summary.setText(
+            f"{mode} review loaded with {current_stats.get('trade_count', 0)} closed trade(s). "
+            "Use this to spot discipline issues, execution drag, and strategy fatigue."
+        )
+
+        metric_values = {
+            "Trades": str(current_stats.get("trade_count", 0)),
+            "Net PnL": self._format_currency(current_stats.get("net_pnl")),
+            "Win Rate": self._format_percent_text(current_stats.get("win_rate")),
+            "Avg Trade": self._format_currency(current_stats.get("avg_pnl")),
+            "Profit Factor": "-" if current_stats.get("profit_factor") is None else f"{float(current_stats.get('profit_factor')):.2f}",
+            "Fees": self._format_currency(current_stats.get("fees")),
+            "Avg Slippage": "-" if current_stats.get("avg_slippage") is None else f"{float(current_stats.get('avg_slippage')):.2f} bps",
+            "Journal Coverage": self._format_percent_text(current_stats.get("journal_coverage")),
+        }
+        for key, label in metrics.items():
+            if label is not None:
+                label.setText(metric_values.get(key, "-"))
+
+        overview.setHtml(
+            self._journal_review_overview_html(
+                mode,
+                current_start,
+                now,
+                current_stats,
+                previous_stats,
+                mistakes,
+                edge_decay,
+            )
+        )
+        self._populate_journal_review_strategy_table(strategy_table, current_stats.get("strategy_rows"))
+
+    def _open_trade_journal_review_window(self):
+        window = self._get_or_create_tool_window(
+            "trade_journal_review",
+            "Journal Review",
+            width=1180,
+            height=760,
+        )
+
+        if getattr(window, "_journal_review_summary", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(10)
+
+            summary = QLabel("Loading weekly/monthly journal review.")
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; "
+                "border-radius: 12px; padding: 12px; font-size: 13px; font-weight: 600;"
+            )
+            layout.addWidget(summary)
+
+            controls = QHBoxLayout()
+            period_picker = QComboBox()
+            period_picker.addItems(["Weekly", "Monthly"])
+            refresh_btn = QPushButton("Refresh Review")
+            refresh_btn.clicked.connect(lambda: self._schedule_trade_journal_review_refresh(window))
+            controls.addWidget(QLabel("Review Period"))
+            controls.addWidget(period_picker)
+            controls.addWidget(refresh_btn)
+            controls.addStretch()
+            layout.addLayout(controls)
+
+            metrics_widget = QWidget()
+            metrics_layout = QGridLayout(metrics_widget)
+            metrics_layout.setContentsMargins(0, 0, 0, 0)
+            metrics_layout.setHorizontalSpacing(10)
+            metrics_layout.setVerticalSpacing(10)
+            metric_labels = {}
+            metric_keys = ["Trades", "Net PnL", "Win Rate", "Avg Trade", "Profit Factor", "Fees", "Avg Slippage", "Journal Coverage"]
+            for index, key in enumerate(metric_keys):
+                card = QFrame()
+                card.setStyleSheet(
+                    "QFrame { background-color: #101a2d; border: 1px solid #20324d; border-radius: 12px; }"
+                )
+                card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(12, 12, 12, 12)
+                title = QLabel(key)
+                title.setStyleSheet("color: #8ca8cc; font-size: 12px;")
+                value = QLabel("-")
+                value.setStyleSheet("color: #f4f8ff; font-size: 17px; font-weight: 700;")
+                card_layout.addWidget(title)
+                card_layout.addWidget(value)
+                metrics_layout.addWidget(card, index // 4, index % 4)
+                metric_labels[key] = value
+            layout.addWidget(metrics_widget)
+
+            overview = QTextBrowser()
+            overview.setStyleSheet(
+                "QTextBrowser { background-color: #101a2d; color: #d8e6ff; border: 1px solid #20324d; border-radius: 12px; padding: 12px; }"
+            )
+            layout.addWidget(overview)
+
+            strategy_table = QTableWidget()
+            strategy_table.setColumnCount(7)
+            strategy_table.setHorizontalHeaderLabels(
+                ["Strategy", "Trades", "Win Rate", "Net PnL", "Avg Trade", "Journal Coverage", "Fees"]
+            )
+            strategy_table.setStyleSheet(
+                "QTableWidget { background-color: #101a2d; color: #d8e6ff; border: 1px solid #20324d; "
+                "border-radius: 12px; gridline-color: #20324d; }"
+            )
+            layout.addWidget(strategy_table)
+
+            window.setCentralWidget(container)
+            window._journal_review_summary = summary
+            window._journal_review_period_picker = period_picker
+            window._journal_review_metrics = metric_labels
+            window._journal_review_overview = overview
+            window._journal_review_strategy_table = strategy_table
+
+            period_picker.currentTextChanged.connect(lambda *_: self._schedule_trade_journal_review_refresh(window))
+
+            sync_timer = QTimer(window)
+            sync_timer.timeout.connect(lambda: self._schedule_trade_journal_review_refresh(window))
+            sync_timer.start(7000)
+            window._journal_review_timer = sync_timer
+
+        self._schedule_trade_journal_review_refresh(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _refresh_health_window(self, window):
+        controller = self.controller
+        summary = getattr(window, "_health_summary", None)
+        checks_table = getattr(window, "_health_checks_table", None)
+        capabilities_browser = getattr(window, "_capabilities_browser", None)
+        if summary is None or checks_table is None or capabilities_browser is None:
+            return
+
+        report = controller.get_health_check_report() if hasattr(controller, "get_health_check_report") else []
+        summary.setText(
+            f"Startup health: {getattr(controller, 'get_health_check_summary', lambda: 'Not run')()} | "
+            f"Mode: {'LIVE' if getattr(controller, 'is_live_mode', lambda: False)() else 'PAPER'} | "
+            f"Account: {getattr(controller, 'current_account_label', lambda: 'Not set')()}"
+        )
+
+        checks_table.setRowCount(len(report))
+        for row_index, item in enumerate(report):
+            checks_table.setItem(row_index, 0, QTableWidgetItem(str(item.get("name", ""))))
+            checks_table.setItem(row_index, 1, QTableWidgetItem(str(item.get("status", "")).upper()))
+            checks_table.setItem(row_index, 2, QTableWidgetItem(str(item.get("detail", ""))))
+        checks_table.resizeColumnsToContents()
+        checks_table.horizontalHeader().setStretchLastSection(True)
+
+        capabilities = controller.get_broker_capabilities() if hasattr(controller, "get_broker_capabilities") else {}
+        capability_lines = [
+            f"<li><b>{html.escape(str(key).replace('_', ' ').title())}:</b> {'Yes' if value else 'No'}</li>"
+            for key, value in capabilities.items()
+        ]
+        capabilities_browser.setHtml("<h3>Broker Capabilities</h3><ul>" + "".join(capability_lines) + "</ul>")
+
+    def _open_system_health_window(self):
+        window = self._get_or_create_tool_window(
+            "system_health",
+            "System Health",
+            width=980,
+            height=620,
+        )
+
+        if getattr(window, "_health_checks_table", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(10)
+
+            summary = QLabel("Running startup health checks.")
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; "
+                "border-radius: 12px; padding: 12px; font-size: 13px; font-weight: 600;"
+            )
+            layout.addWidget(summary)
+
+            checks = QTableWidget()
+            checks.setColumnCount(3)
+            checks.setHorizontalHeaderLabels(["Check", "Status", "Detail"])
+            layout.addWidget(checks)
+
+            capabilities_browser = QTextBrowser()
+            capabilities_browser.setStyleSheet(
+                "QTextBrowser { background-color: #101a2d; color: #d8e6ff; border: 1px solid #20324d; border-radius: 12px; padding: 12px; }"
+            )
+            layout.addWidget(capabilities_browser)
+
+            window.setCentralWidget(container)
+            window._health_summary = summary
+            window._health_checks_table = checks
+            window._capabilities_browser = capabilities_browser
+
+            sync_timer = QTimer(window)
+            sync_timer.timeout.connect(lambda: self._refresh_health_window(window))
+            sync_timer.start(3000)
+            window._health_timer = sync_timer
+
+        if hasattr(self.controller, "run_startup_health_check") and hasattr(self.controller, "_create_task"):
+            self.controller._create_task(self.controller.run_startup_health_check(), "manual_health_check")
+        self._refresh_health_window(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
     def _performance_series(self):
         perf = getattr(self.controller, "performance_engine", None)
         if perf is None:
@@ -4691,13 +7961,26 @@ class Terminal(QMainWindow):
 
         return []
 
+    def _performance_time_series(self):
+        perf = getattr(self.controller, "performance_engine", None)
+        if perf is None:
+            return []
+
+        for attr in ("equity_time_history", "equity_timestamps"):
+            series = getattr(perf, attr, None)
+            if isinstance(series, list):
+                return series
+
+        return []
+
     def _format_performance_value(self, value, percent=False):
         if value is None:
             return "-"
 
         try:
             numeric = float(value)
-        except Exception:
+        except Exception as ex:
+            self.logger.debug(f"Performance value formatting error for {value}: {ex}")
             return str(value)
 
         if percent:
@@ -4874,22 +8157,19 @@ class Terminal(QMainWindow):
 
             balance = getattr(controller, "balances", {})
             balance_equity = None
-            if isinstance(balance, dict):
-                balance_equity = balance.get("equity")
-                if balance_equity is None:
-                    total_balance = balance.get("total")
-                    if isinstance(total_balance, dict) and len(total_balance) == 1:
-                        try:
-                            balance_equity = float(next(iter(total_balance.values())))
-                        except Exception:
-                            balance_equity = None
+            resolve_equity = getattr(controller, "_extract_balance_equity_value", None)
+            if callable(resolve_equity):
+                try:
+                    balance_equity = resolve_equity(balance)
+                except Exception:
+                    balance_equity = None
 
             if balance_equity is None:
                 equity = getattr(controller.portfolio, "get_equity", lambda: 0)()
             else:
                 equity = float(balance_equity)
             spread = getattr(controller, "spread_pct", 0)
-            positions = getattr(controller.portfolio, "positions", {})
+            positions = list(self._active_positions_snapshot() or [])
             symbols = getattr(controller, "symbols", [])
             exchange_display, exchange_tooltip = self._system_status_exchange_display()
 
@@ -4905,6 +8185,31 @@ class Terminal(QMainWindow):
             )
 
             self._set_status_value("Exchange", exchange_display, exchange_tooltip)
+            self._set_status_value("Mode", "LIVE" if getattr(controller, "is_live_mode", lambda: False)() else "PAPER")
+            self._set_status_value("Account", getattr(controller, "current_account_label", lambda: "Not set")())
+            license_status = {}
+            if hasattr(controller, "get_license_status"):
+                try:
+                    license_status = controller.get_license_status()
+                except Exception:
+                    license_status = {}
+            self._set_status_value("License", license_status.get("summary", "Status unavailable"))
+            self._set_status_value("Risk Profile", getattr(controller, "risk_profile_name", "Balanced"))
+            trade_venue = str(
+                getattr(getattr(controller, "broker", None), "resolved_market_preference", "")
+                or getattr(controller, "market_trade_preference", "auto")
+                or "auto"
+            ).upper()
+            news_mode_parts = []
+            if getattr(controller, "news_enabled", False):
+                news_mode_parts.append("feed")
+            if getattr(controller, "news_draw_on_chart", False):
+                news_mode_parts.append("chart")
+            if getattr(controller, "news_autotrade_enabled", False):
+                news_mode_parts.append("auto")
+            news_mode = " / ".join(news_mode_parts) if news_mode_parts else "OFF"
+            self._set_status_value("Trade Venue", trade_venue)
+            self._set_status_value("News Mode", news_mode)
 
             self._set_status_value("Symbols Loaded", len(symbols))
 
@@ -4925,17 +8230,30 @@ class Terminal(QMainWindow):
             if hasattr(controller, "get_market_stream_status"):
                 market_stream_status = controller.get_market_stream_status()
 
+            broker_status = dict(getattr(self, "_latest_broker_status_snapshot", {}) or {})
+            self._set_status_value("Broker API", broker_status.get("summary", "Unknown"), str(broker_status.get("detail", "")) or None)
             self._set_status_value("Websocket", market_stream_status)
 
             self._set_status_value("AITrading", "ON" if self.autotrading_enabled else "OFF")
             self._set_status_value("AI Scope", self._autotrade_scope_label())
             self._set_status_value("Watchlist", len(self.autotrade_watchlist))
+            behavior_status = {}
+            if hasattr(controller, "get_behavior_guard_status"):
+                behavior_status = controller.get_behavior_guard_status() or {}
+            self._set_status_value("Behavior Guard", behavior_status.get("summary", "Not active"))
+            self._set_status_value("Guard Reason", behavior_status.get("reason", "No active behavior restrictions"))
+            self._set_status_value("Health Check", getattr(controller, "get_health_check_summary", lambda: "Not run")())
+            self._set_status_value("Pipeline", getattr(controller, "get_pipeline_status_summary", lambda: "Idle")())
 
             self._set_status_value("Timeframe", self.current_timeframe)
+            self._update_session_badge()
+            self._update_license_badge()
+            self._update_kill_switch_button()
 
             self._update_risk_heatmap()
             self._populate_positions_table(getattr(self, "_latest_positions_snapshot", []))
             self._populate_open_orders_table(getattr(self, "_latest_open_orders_snapshot", []))
+            self._schedule_broker_status_refresh()
             self._schedule_positions_refresh()
             self._schedule_open_orders_refresh()
             self._refresh_strategy_comparison_panel()
@@ -4961,79 +8279,65 @@ class Terminal(QMainWindow):
         self._reorder_market_watch_rows()
 
     def _create_system_status_panel(self):
-
-        dock = QDockWidget("System Status", self)
-        dock.setMinimumWidth(250)
-        dock.setMaximumWidth(320)
-        self.system_status_dock = dock
-
-        container = QWidget()
-        layout = QGridLayout()
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(8)
-
-        self.status_labels = {}
-
-        fields = [
-            "Exchange",
-
-            "Symbols Loaded",
-            "Equity",
-            "Balance",
-            "Free Margin",
-            "Used Margin",
-            "Spread %",
-            "Open Positions",
-            "Open Orders",
-            "Websocket",
-            "AITrading",
-            "AI Scope",
-            "Watchlist",
-            "Timeframe"
-        ]
-
-        for row, field in enumerate(fields):
-            title = QLabel(field)
-            title.setStyleSheet("color: #8fa3bf; font-weight: 700;")
-            value = QLabel("-")
-            value.setWordWrap(True)
-            value.setStyleSheet("color: #e6edf7; font-weight: 600;")
-            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-
-            layout.addWidget(title, row, 0)
-            layout.addWidget(value, row, 1)
-
-            self.status_labels[field] = value
-
-        container.setLayout(layout)
-
-        dock.setWidget(container)
-
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
-        dock.hide()
+        create_system_status_panel(self)
 
     def _create_ai_signal_panel(self):
+        create_ai_signal_panel(self)
 
-        dock = QDockWidget("AI Signal Monitor", self)
+    def _ai_monitor_rows(self):
+        def _sort_key(item):
+            timestamp_text = item.get("timestamp", "")
+            try:
+                normalized = timestamp_text.replace("Z", "+00:00")
+                return datetime.fromisoformat(normalized)
+            except Exception:
+                return datetime.min.replace(tzinfo=timezone.utc)
 
-        self.ai_table = QTableWidget()
-        self.ai_table.setColumnCount(6)
+        return sorted(self._ai_signal_records.values(), key=_sort_key, reverse=True)[: self.MAX_LOG_ROWS]
 
-        self.ai_table.setHorizontalHeaderLabels([
-            "Symbol",
-            "Signal",
-            "Confidence",
-            "Regime",
-            "Volatility",
-            "Time"
-        ])
+    def _refresh_ai_monitor_table(self, table, force=False):
+        if table is None or not self._is_qt_object_alive(table):
+            return
+        if (not force) and self._monitor_table_is_busy(table):
+            return
 
-        dock.setWidget(self.ai_table)
+        rows = self._ai_monitor_rows()
+        blocked = table.blockSignals(True)
+        table.setUpdatesEnabled(False)
+        try:
+            if table.columnCount() != len(AI_MONITOR_HEADERS):
+                table.setColumnCount(len(AI_MONITOR_HEADERS))
+            if table.horizontalHeaderItem(0) is None:
+                table.setHorizontalHeaderLabels(AI_MONITOR_HEADERS)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+            table.setRowCount(len(rows))
+            for row, item in enumerate(rows):
+                values = [
+                    item["symbol"],
+                    item["signal"],
+                    f"{item['confidence']:.2f}",
+                    item["regime"],
+                    str(item["volatility"]),
+                    item["timestamp"],
+                ]
+                for col, value in enumerate(values):
+                    cell = table.item(row, col)
+                    if cell is None:
+                        cell = QTableWidgetItem("")
+                        table.setItem(row, col, cell)
+                    cell.setText(str(value))
+
+            table.resizeColumnsToContents()
+            header = table.horizontalHeader()
+            if header is not None:
+                header.setStretchLastSection(True)
+        finally:
+            table.setUpdatesEnabled(True)
+            table.blockSignals(blocked)
 
     def _update_ai_signal(self, data):
+        if self._ui_shutting_down:
+            return
         if not isinstance(data, dict):
             return
 
@@ -5047,35 +8351,1080 @@ class Terminal(QMainWindow):
             "confidence": float(data.get("confidence", 0.0) or 0.0),
             "regime": str(data.get("regime", "") or ""),
             "volatility": data.get("volatility", ""),
+            "reason": str(data.get("reason", "") or ""),
             "timestamp": str(data.get("timestamp", "") or ""),
         }
         self._ai_signal_records[symbol] = record
+        self._record_recommendation(
+            symbol=symbol,
+            signal=record["signal"],
+            confidence=record["confidence"],
+            regime=record["regime"],
+            volatility=record["volatility"],
+            reason=record["reason"],
+            strategy="AI Monitor",
+            timestamp=record["timestamp"],
+        )
 
-        def _sort_key(item):
-            timestamp_text = item.get("timestamp", "")
-            try:
-                normalized = timestamp_text.replace("Z", "+00:00")
-                return datetime.fromisoformat(normalized)
-            except Exception:
-                return datetime.min.replace(tzinfo=timezone.utc)
+        now = time.monotonic()
+        if (now - float(getattr(self, "_last_ai_table_refresh_at", 0.0) or 0.0)) < float(self.AI_TABLE_REFRESH_MIN_SECONDS or 0.5):
+            return
+        self._last_ai_table_refresh_at = now
 
-        rows = sorted(self._ai_signal_records.values(), key=_sort_key, reverse=True)[: self.MAX_LOG_ROWS]
-        self.ai_table.setRowCount(len(rows))
+        dock = getattr(self, "ai_signal_dock", None)
+        if self._is_qt_object_alive(getattr(self, "ai_table", None)) and (
+            dock is None or (self._is_qt_object_alive(dock) and dock.isVisible())
+        ):
+            self._refresh_ai_monitor_table(self.ai_table)
 
+        monitor_window = (getattr(self, "detached_tool_windows", {}) or {}).get("ml_monitor")
+        if self._is_qt_object_alive(monitor_window) and bool(monitor_window.isVisible()):
+            self._refresh_ai_monitor_table(getattr(monitor_window, "_monitor_table", None))
+
+    def _recommendation_sort_key(self, item):
+        timestamp_text = str(item.get("timestamp", "") or "")
+        try:
+            normalized = timestamp_text.replace("Z", "+00:00")
+            timestamp = datetime.fromisoformat(normalized)
+        except Exception:
+            timestamp = datetime.min.replace(tzinfo=timezone.utc)
+        confidence = float(item.get("confidence", 0.0) or 0.0)
+        return (confidence, timestamp)
+
+    def _record_recommendation(
+        self,
+        symbol,
+        signal="",
+        confidence=0.0,
+        regime="",
+        volatility="",
+        reason="",
+        strategy="",
+        timestamp="",
+    ):
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol:
+            return
+
+        existing = dict(self._recommendation_records.get(normalized_symbol, {}))
+        record = {
+            "symbol": normalized_symbol,
+            "signal": str(signal or existing.get("signal", "")).upper(),
+            "confidence": float(confidence if confidence not in (None, "") else existing.get("confidence", 0.0) or 0.0),
+            "regime": str(regime or existing.get("regime", "") or ""),
+            "volatility": volatility if volatility not in (None, "") else existing.get("volatility", ""),
+            "reason": str(reason or existing.get("reason", "") or ""),
+            "strategy": str(strategy or existing.get("strategy", "") or ""),
+            "timestamp": str(timestamp or existing.get("timestamp", "") or datetime.now(timezone.utc).isoformat()),
+        }
+        self._recommendation_records[normalized_symbol] = record
+        self._refresh_recommendations_window()
+
+    def _recommendation_rows(self):
+        return sorted(
+            self._recommendation_records.values(),
+            key=self._recommendation_sort_key,
+            reverse=True,
+        )[: self.MAX_LOG_ROWS]
+
+    def _recommendation_summary_text(self, rows):
+        if not rows:
+            return "No recommendations yet. Start market monitoring or AI trading to collect explainable trade ideas."
+
+        buy_count = sum(1 for item in rows if str(item.get("signal", "")).upper() == "BUY")
+        sell_count = sum(1 for item in rows if str(item.get("signal", "")).upper() == "SELL")
+        avg_conf = sum(float(item.get("confidence", 0.0) or 0.0) for item in rows) / max(len(rows), 1)
+        top_symbol = rows[0].get("symbol", "-")
+        top_reason = rows[0].get("reason", "") or "Reason not supplied by strategy."
+        return (
+            f"{len(rows)} symbols tracked | BUY {buy_count} | SELL {sell_count} | "
+            f"avg confidence {avg_conf:.2f} | strongest idea: {top_symbol} - {top_reason}"
+        )
+
+    def _recommendation_details_html(self, record):
+        if not isinstance(record, dict):
+            return (
+                "<h3>Why this symbol is recommended</h3>"
+                "<p>No recommendation selected yet.</p>"
+            )
+
+        symbol = html.escape(str(record.get("symbol", "-") or "-"))
+        signal = html.escape(str(record.get("signal", "WATCH") or "WATCH"))
+        strategy = html.escape(str(record.get("strategy", "Recommendation Engine") or "Recommendation Engine"))
+        reason = html.escape(str(record.get("reason", "") or "Reason not found in runtime data."))
+        regime = html.escape(str(record.get("regime", "") or "Not available"))
+        timestamp = html.escape(str(record.get("timestamp", "") or "Not available"))
+        try:
+            confidence = float(record.get("confidence", 0.0) or 0.0)
+        except Exception:
+            confidence = 0.0
+        volatility = html.escape(str(record.get("volatility", "") or "Not available"))
+        return (
+            f"<h3>{symbol}: {signal}</h3>"
+            f"<p><b>Why it is recommended:</b> {reason}</p>"
+            f"<p><b>Confidence:</b> {confidence:.2f}<br>"
+            f"<b>Source:</b> {strategy}<br>"
+            f"<b>Market regime:</b> {regime}<br>"
+            f"<b>Volatility:</b> {volatility}<br>"
+            f"<b>Last update:</b> {timestamp}</p>"
+            "<p>This window reflects live strategy and AI runtime output. If a field is empty, that detail was not provided by the active engine yet.</p>"
+        )
+
+    def _market_chat_quick_prompts(self):
+        return [
+            "Show commands.",
+            "Give me a short account and balance summary.",
+            "Show trade history analysis.",
+            "Summarize the latest news affecting my active symbols.",
+            "Show app status.",
+            "How is my equity and profitability looking right now?",
+            "Take a screenshot of the app.",
+            "Show my broker position analysis with equity, NAV, and P/L.",
+            "Start AI trading.",
+            "Preview this trade command without executing it: trade buy EUR/USD amount 1000",
+            "Preview this cancel command without executing it: cancel order id 123456",
+            "Preview this close command without executing it: close position EUR/USD",
+            "Summarize current recommendations and why they are recommended.",
+            "Explain my behavior guard status and any risk concerns.",
+            "Show Telegram status and send a Telegram test message.",
+            "What stands out in this market and app state right now?",
+        ]
+
+    def _market_chat_confirmation_preview(self, content):
+        text = str(content or "").strip()
+        lowered = text.lower()
+        if "detected but not executed" not in lowered or "confirm" not in lowered:
+            return None
+
+        if lowered.startswith("trade command detected"):
+            title = "Trade Confirmation Required"
+            accent = "#f0a35e"
+        elif lowered.startswith("cancel-order command detected"):
+            title = "Cancel Confirmation Required"
+            accent = "#ffb86c"
+        elif lowered.startswith("close-position command detected"):
+            title = "Close Confirmation Required"
+            accent = "#ff9a76"
+        else:
+            title = "Confirmation Required"
+            accent = "#f0a35e"
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        summary = lines[0] if lines else "Action requires confirmation."
+        confirm_hint = ""
+        details = []
+        for line in lines[1:]:
+            if "add the word confirm" in line.lower():
+                confirm_hint = line
+            else:
+                details.append(line)
+
+        return {
+            "title": title,
+            "summary": summary,
+            "confirm_hint": confirm_hint or "Add the word CONFIRM to execute it.",
+            "details": details,
+            "accent": accent,
+        }
+
+    def _market_chat_pending_confirmation(self, window):
+        history = list(getattr(window, "_market_chat_history", []) or [])
+        if not history:
+            return None
+        latest = history[-1]
+        if str(latest.get("role") or "").strip().lower() != "assistant":
+            return None
+        preview = latest.get("confirmation_preview")
+        if not isinstance(preview, dict):
+            return None
+        command = str(latest.get("pending_command") or "").strip()
+        if not command:
+            return None
+        return {"preview": preview, "command": command}
+
+    def _confirm_market_chat_action(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window) or getattr(window, "_market_chat_busy", False):
+            return
+        pending = self._market_chat_pending_confirmation(window)
+        if not pending:
+            self._refresh_market_chat_window(window, status_message="No pending action to confirm.")
+            return
+        command = str(pending.get("command") or "").strip()
+        if not command:
+            self._refresh_market_chat_window(window, status_message="Pending action is missing its command text.")
+            return
+        if "confirm" not in command.lower().split():
+            command = f"{command} confirm"
+        self._submit_market_chat_prompt(prompt=command, window=window)
+
+    def _cancel_market_chat_action(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window) or getattr(window, "_market_chat_busy", False):
+            return
+        pending = self._market_chat_pending_confirmation(window)
+        if not pending:
+            self._refresh_market_chat_window(window, status_message="No pending action to cancel.")
+            return
+        history = list(getattr(window, "_market_chat_history", []) or [])
+        if history and history[-1].get("confirmation_preview"):
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": "Pending action canceled. Nothing was executed.",
+                }
+            )
+            window._market_chat_history = history
+        window._market_chat_status_message = "Pending action canceled."
+        self._refresh_market_chat_window(window)
+
+    def _render_market_chat_html(self, history):
+        rows = []
+        for entry in list(history or []):
+            role = str(entry.get("role") or "assistant").strip().lower()
+            content = html.escape(str(entry.get("content") or "").strip()).replace("\n", "<br>")
+            if not content:
+                continue
+            if role == "user":
+                rows.append(
+                    "<div style='margin: 8px 0; text-align: right;'>"
+                    "<div style='display: inline-block; max-width: 82%; background:#17304d; color:#f4f8ff; "
+                    "border:1px solid #2a4d73; border-radius:14px; padding:10px 12px;'><b>You</b><br>"
+                    f"{content}</div></div>"
+                )
+            else:
+                preview = entry.get("confirmation_preview") or self._market_chat_confirmation_preview(entry.get("content"))
+                if isinstance(preview, dict):
+                    title = html.escape(str(preview.get("title") or "Confirmation Required"))
+                    summary = html.escape(str(preview.get("summary") or "Action requires confirmation."))
+                    confirm_hint = html.escape(str(preview.get("confirm_hint") or "Add the word CONFIRM to execute it."))
+                    accent = html.escape(str(preview.get("accent") or "#f0a35e"))
+                    details_html = ""
+                    for detail in list(preview.get("details") or []):
+                        details_html += (
+                            "<div style='margin-top:6px; color:#d8e6ff;'>"
+                            f"{html.escape(str(detail))}"
+                            "</div>"
+                        )
+                    rows.append(
+                        "<div style='margin: 10px 0; text-align: left;'>"
+                        "<div style='display: inline-block; max-width: 88%; background:#16141b; color:#f8efe7; "
+                        f"border:1px solid {accent}; border-left:5px solid {accent}; border-radius:14px; padding:12px 14px;'>"
+                        "<div style='font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:#ffcf9a; margin-bottom:6px;'>"
+                        "Sopotek Pilot"
+                        "</div>"
+                        f"<div style='font-weight:700; color:#fff3e2; margin-bottom:4px;'>{title}</div>"
+                        f"<div>{summary}</div>"
+                        f"{details_html}"
+                        "<div style='margin-top:10px; padding:8px 10px; background:#241d16; border-radius:10px; color:#ffd7a8;'>"
+                        f"{confirm_hint}"
+                        "</div>"
+                        "</div></div>"
+                    )
+                else:
+                    rows.append(
+                        "<div style='margin: 8px 0; text-align: left;'>"
+                        "<div style='display: inline-block; max-width: 82%; background:#0f1727; color:#d9e6f7; "
+                        "border:1px solid #24344f; border-radius:14px; padding:10px 12px;'><b>Sopotek Pilot</b><br>"
+                        f"{content}</div></div>"
+                    )
+        if not rows:
+            return (
+                "<div style='color:#9fb0c7; padding:14px;'>"
+                "Ask about the app, the market, your balances, positions, equity, profitability, performance, recommendations, or behavior guard. Type 'show commands' for the control list."
+                "</div>"
+            )
+        return "".join(rows)
+
+    def _refresh_market_chat_window(self, window=None, status_message=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+
+        transcript = getattr(window, "_market_chat_transcript", None)
+        status = getattr(window, "_market_chat_status", None)
+        send_btn = getattr(window, "_market_chat_send_btn", None)
+        input_box = getattr(window, "_market_chat_input", None)
+        clear_btn = getattr(window, "_market_chat_clear_btn", None)
+        listen_btn = getattr(window, "_market_chat_listen_btn", None)
+        speak_btn = getattr(window, "_market_chat_speak_btn", None)
+        auto_speak_btn = getattr(window, "_market_chat_auto_speak_btn", None)
+        provider_picker = getattr(window, "_market_chat_provider_picker", None)
+        output_picker = getattr(window, "_market_chat_output_picker", None)
+        voice_picker = getattr(window, "_market_chat_voice_picker", None)
+        refresh_voices_btn = getattr(window, "_market_chat_refresh_voices_btn", None)
+        voice_meta = getattr(window, "_market_chat_voice_meta", None)
+        confirm_panel = getattr(window, "_market_chat_confirm_panel", None)
+        confirm_label = getattr(window, "_market_chat_confirm_label", None)
+        confirm_btn = getattr(window, "_market_chat_confirm_btn", None)
+        cancel_btn = getattr(window, "_market_chat_cancel_btn", None)
+        if transcript is None or status is None:
+            return
+
+        history = list(getattr(window, "_market_chat_history", []) or [])
+        transcript.setHtml(self._render_market_chat_html(history))
+        transcript.moveCursor(QTextCursor.MoveOperation.End)
+
+        busy = bool(getattr(window, "_market_chat_busy", False))
+        voice_busy = bool(getattr(window, "_market_chat_voice_busy", False))
+        if status_message is not None:
+            window._market_chat_status_message = status_message
+        status.setText(
+            getattr(window, "_market_chat_status_message", None)
+            or (
+                "Listening to your voice prompt..." if voice_busy else
+                ("Sopotek Pilot is thinking..." if busy else "Ready. Ask about the app, market, balances, equity, or strategy behavior.")
+            )
+        )
+        if send_btn is not None:
+            has_text = bool(input_box.toPlainText().strip()) if input_box is not None else True
+            send_btn.setEnabled((not busy) and (not voice_busy) and has_text)
+            send_btn.setText("Thinking..." if busy else "Send")
+        if input_box is not None:
+            input_box.setReadOnly(busy or voice_busy)
+        if clear_btn is not None:
+            clear_btn.setEnabled((not busy) and (not voice_busy) and bool(history))
+        voice_snapshot = getattr(self.controller, "market_chat_voice_state", lambda: {})() or {}
+        voice_available = bool(voice_snapshot.get("voice_available"))
+        listen_available = bool(voice_snapshot.get("listen_available"))
+        speak_available = bool(voice_snapshot.get("speak_available"))
+        if listen_btn is not None:
+            listen_btn.setVisible(listen_available)
+            listen_btn.setEnabled(listen_available and (not busy) and (not voice_busy))
+            listen_btn.setText("Listening..." if voice_busy and getattr(window, "_market_chat_voice_mode", "") == "listen" else "Listen")
+        if speak_btn is not None:
+            speak_btn.setVisible(speak_available)
+            speak_btn.setEnabled(speak_available and (not busy) and (not voice_busy) and bool(self._latest_market_chat_reply(window)))
+            speak_btn.setText("Speaking..." if voice_busy and getattr(window, "_market_chat_voice_mode", "") == "speak" else "Speak Reply")
+        if auto_speak_btn is not None:
+            auto_speak_btn.setVisible(speak_available)
+            auto_speak_btn.setEnabled(speak_available and (not voice_busy))
+        voice_controls_enabled = voice_available and (not busy) and (not voice_busy)
+        if provider_picker is not None:
+            provider_picker.setVisible(True)
+            provider_picker.setEnabled((not busy) and (not voice_busy))
+        if output_picker is not None:
+            output_picker.setVisible(True)
+            output_picker.setEnabled((not busy) and (not voice_busy))
+        if voice_picker is not None:
+            voice_picker.setVisible(True)
+            voice_picker.setEnabled(voice_controls_enabled and not getattr(window, "_market_chat_loading_voices", False))
+        if refresh_voices_btn is not None:
+            refresh_voices_btn.setVisible(True)
+            refresh_voices_btn.setEnabled(voice_controls_enabled and not getattr(window, "_market_chat_loading_voices", False))
+            refresh_voices_btn.setText("Refreshing..." if getattr(window, "_market_chat_loading_voices", False) else "Refresh Voices")
+        if voice_meta is not None:
+            voice_meta.setVisible(True)
+            voice_meta.setText(self._market_chat_voice_state_text(window))
+        pending = self._market_chat_pending_confirmation(window)
+        if confirm_panel is not None and confirm_label is not None and confirm_btn is not None and cancel_btn is not None:
+            if pending is not None:
+                preview = pending.get("preview") or {}
+                confirm_panel.setVisible(True)
+                confirm_label.setText(
+                    f"{preview.get('title', 'Confirmation Required')}: {preview.get('confirm_hint', 'Add CONFIRM to execute.')}"
+                )
+                confirm_btn.setEnabled((not busy) and (not voice_busy))
+                cancel_btn.setEnabled((not busy) and (not voice_busy))
+            else:
+                confirm_panel.setVisible(False)
+                confirm_label.setText("")
+                confirm_btn.setEnabled(False)
+                cancel_btn.setEnabled(False)
+
+    async def _run_market_chat_request(self, window, question, conversation):
+        try:
+            answer = await self.controller.ask_openai_about_app(question, conversation=conversation)
+        except Exception as exc:
+            answer = f"Sopotek Pilot request failed: {exc}"
+
+        preview = self._market_chat_confirmation_preview(answer)
+        history = list(getattr(window, "_market_chat_history", []) or [])
+        entry = {"role": "assistant", "content": str(answer or "No response returned.")}
+        if preview is not None:
+            entry["confirmation_preview"] = preview
+            entry["pending_command"] = str(question or "").strip()
+        history.append(entry)
+        window._market_chat_history = history
+        window._market_chat_busy = False
+        window._market_chat_status_message = "Confirmation required." if preview is not None else "Response ready."
+        self._refresh_market_chat_window(window)
+        auto_speak_btn = getattr(window, "_market_chat_auto_speak_btn", None)
+        if auto_speak_btn is not None and auto_speak_btn.isChecked():
+            self._speak_market_chat_reply(window, latest_text=entry["content"], automatic=True)
+
+    def _submit_market_chat_prompt(self, prompt=None, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_busy", False):
+            return
+
+        input_box = getattr(window, "_market_chat_input", None)
+        if input_box is None:
+            return
+
+        question = str(prompt or input_box.toPlainText()).strip()
+        if not question:
+            self._refresh_market_chat_window(window, status_message="Type a question first.")
+            return
+
+        history = list(getattr(window, "_market_chat_history", []) or [])
+        conversation = history[-8:]
+        history.append({"role": "user", "content": question})
+        window._market_chat_history = history
+        window._market_chat_busy = True
+        window._market_chat_status_message = "Sending question to Sopotek Pilot..."
+        input_box.clear()
+        self._refresh_market_chat_window(window)
+
+        task_factory = getattr(self.controller, "_create_task", None)
+        runner = self._run_market_chat_request(window, question, conversation)
+        if callable(task_factory):
+            window._market_chat_task = task_factory(runner, "market_chat_request")
+        else:
+            window._market_chat_task = asyncio.create_task(runner)
+
+    def _clear_market_chat(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_busy", False) or getattr(window, "_market_chat_voice_busy", False):
+            return
+        window._market_chat_history = []
+        window._market_chat_status_message = "Conversation cleared."
+        self._refresh_market_chat_window(window)
+
+    def _latest_market_chat_reply(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return ""
+        history = list(getattr(window, "_market_chat_history", []) or [])
+        for entry in reversed(history):
+            if str(entry.get("role") or "").strip().lower() == "assistant":
+                return str(entry.get("content") or "").strip()
+        return ""
+
+    def _market_chat_voice_state_text(self, window=None):
+        _ = window
+        snapshot = getattr(self.controller, "market_chat_voice_state", lambda: {})() or {}
+        provider = str(snapshot.get("recognition_provider") or snapshot.get("provider") or "windows").strip().lower()
+        provider_label = "Google" if provider == "google" else "Windows"
+        output_provider = str(snapshot.get("output_provider") or "windows").strip().lower()
+        effective_output_provider = str(
+            snapshot.get("effective_output_provider") or output_provider or "windows"
+        ).strip().lower() or "windows"
+        output_label = "OpenAI" if output_provider == "openai" else "Windows"
+        effective_output_label = "OpenAI" if effective_output_provider == "openai" else "Windows"
+        voice_name = str(snapshot.get("voice_name") or "").strip() or "System Default"
+        if provider == "google" and not snapshot.get("google_available"):
+            return (
+                f"Recognition: {provider_label} needs SpeechRecognition + sounddevice installed. "
+                f"Speech: {effective_output_label} ({voice_name})."
+            )
+        if snapshot.get("output_fallback") and output_provider == "openai" and effective_output_provider == "windows":
+            return (
+                f"Recognition: {provider_label}. "
+                f"Speech: OpenAI is unavailable, so Sopotek Pilot will use Windows speech ({voice_name})."
+            )
+        if output_provider == "openai" and not snapshot.get("openai_available"):
+            return (
+                f"Recognition: {provider_label}. "
+                f"Speech: {output_label} needs an OpenAI API key in Settings -> Integrations."
+            )
+        return f"Recognition: {provider_label}. Speech: {effective_output_label}. Voice: {voice_name}."
+
+    def _set_market_chat_auto_speak(self, checked, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        enabled = bool(checked)
+        self.settings.setValue("market_chat/auto_speak", enabled)
+        self._refresh_market_chat_window(
+            window,
+            status_message=(
+                "Auto Speak enabled. Sopotek Pilot replies will be spoken automatically."
+                if enabled
+                else "Auto Speak disabled."
+            ),
+        )
+
+    def _populate_market_chat_voice_controls(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+
+        provider_picker = getattr(window, "_market_chat_provider_picker", None)
+        output_picker = getattr(window, "_market_chat_output_picker", None)
+        voice_picker = getattr(window, "_market_chat_voice_picker", None)
+        voice_meta = getattr(window, "_market_chat_voice_meta", None)
+        if provider_picker is None or output_picker is None or voice_picker is None:
+            return
+
+        controller = self.controller
+        snapshot = getattr(controller, "market_chat_voice_state", lambda: {})() or {}
+        provider = str(snapshot.get("recognition_provider") or snapshot.get("provider") or "windows").strip().lower() or "windows"
+        output_provider = str(snapshot.get("output_provider") or "windows").strip().lower() or "windows"
+        voice_name = str(snapshot.get("voice_name") or "").strip()
+        voices = list(getattr(window, "_market_chat_voice_choices", []) or [])
+
+        window._market_chat_voice_controls_updating = True
+        try:
+            provider_picker.blockSignals(True)
+            provider_picker.clear()
+            for key, label in getattr(controller, "market_chat_voice_provider_choices", lambda: [])():
+                provider_picker.addItem(str(label), str(key))
+            provider_index = provider_picker.findData(provider)
+            provider_picker.setCurrentIndex(provider_index if provider_index >= 0 else 0)
+            provider_picker.blockSignals(False)
+
+            output_picker.blockSignals(True)
+            output_picker.clear()
+            for key, label in getattr(controller, "market_chat_voice_output_provider_choices", lambda: [])():
+                output_picker.addItem(str(label), str(key))
+            output_index = output_picker.findData(output_provider)
+            output_picker.setCurrentIndex(output_index if output_index >= 0 else 0)
+            output_picker.blockSignals(False)
+
+            voice_picker.blockSignals(True)
+            voice_picker.clear()
+            if output_provider == "windows":
+                voice_picker.addItem("System Default", "")
+            for voice in voices:
+                voice_picker.addItem(str(voice), str(voice))
+            if voice_name and voice_picker.findData(voice_name) < 0:
+                voice_picker.addItem(f"{voice_name} (saved)", voice_name)
+            voice_index = voice_picker.findData(voice_name)
+            voice_picker.setCurrentIndex(voice_index if voice_index >= 0 else 0)
+            voice_picker.blockSignals(False)
+        finally:
+            window._market_chat_voice_controls_updating = False
+
+        if voice_meta is not None:
+            voice_meta.setText(self._market_chat_voice_state_text(window))
+
+    async def _refresh_market_chat_voice_choices_async(self, window, announce=False):
+        if not self._is_qt_object_alive(window):
+            return
+
+        snapshot = getattr(self.controller, "market_chat_voice_state", lambda: {})() or {}
+        output_provider = str(snapshot.get("output_provider") or "windows").strip().lower() or "windows"
+        try:
+            voices = await getattr(self.controller, "market_chat_list_voices", lambda *_args, **_kwargs: [])(output_provider)
+            provider_label = "OpenAI" if output_provider == "openai" else "Windows"
+            message = (
+                f"Loaded {len(voices)} {provider_label} voice{'s' if len(voices) != 1 else ''}."
+                if announce
+                else None
+            )
+        except Exception as exc:
+            voices = []
+            message = f"Voice list refresh failed: {exc}"
+
+        if not self._is_qt_object_alive(window):
+            return
+
+        window._market_chat_loading_voices = False
+        window._market_chat_voice_choices = list(voices or [])
+        self._populate_market_chat_voice_controls(window)
+        self._refresh_market_chat_window(window, status_message=message)
+
+    def _refresh_market_chat_voice_choices(self, window=None, announce=False):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_loading_voices", False):
+            return
+
+        window._market_chat_loading_voices = True
+        snapshot = getattr(self.controller, "market_chat_voice_state", lambda: {})() or {}
+        output_provider = str(snapshot.get("output_provider") or "windows").strip().lower() or "windows"
+        provider_label = "OpenAI" if output_provider == "openai" else "installed"
+        self._refresh_market_chat_window(window, status_message=f"Loading {provider_label} voices...")
+        runner = self._refresh_market_chat_voice_choices_async(window, announce=announce)
+        task_factory = getattr(self.controller, "_create_task", None)
+        if callable(task_factory):
+            window._market_chat_voice_choices_task = task_factory(runner, "market_chat_voice_choices")
+        else:
+            window._market_chat_voice_choices_task = asyncio.create_task(runner)
+
+    def _set_market_chat_voice_provider(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_voice_controls_updating", False):
+            return
+
+        provider_picker = getattr(window, "_market_chat_provider_picker", None)
+        if provider_picker is None:
+            return
+        provider = str(provider_picker.currentData() or provider_picker.currentText() or "windows").strip().lower() or "windows"
+        resolved = getattr(self.controller, "set_market_chat_voice_provider", lambda value: value)(provider)
+        self._populate_market_chat_voice_controls(window)
+        self._refresh_market_chat_window(
+            window,
+            status_message=(
+                "Google voice recognition selected."
+                if resolved == "google"
+                else "Windows voice recognition selected."
+            ),
+        )
+
+    def _set_market_chat_voice_output_provider(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_voice_controls_updating", False):
+            return
+
+        output_picker = getattr(window, "_market_chat_output_picker", None)
+        if output_picker is None:
+            return
+        provider = str(output_picker.currentData() or output_picker.currentText() or "windows").strip().lower() or "windows"
+        resolved = getattr(self.controller, "set_market_chat_voice_output_provider", lambda value: value)(provider)
+        window._market_chat_voice_choices = []
+        self._populate_market_chat_voice_controls(window)
+        self._refresh_market_chat_voice_choices(window, announce=False)
+        snapshot = getattr(self.controller, "market_chat_voice_state", lambda: {})() or {}
+        effective_output = str(snapshot.get("effective_output_provider") or resolved or "windows").strip().lower() or "windows"
+        if provider == "openai" and effective_output == "windows":
+            status_message = "OpenAI speech selected. Windows speech will be used until an OpenAI API key is configured."
+        else:
+            status_message = (
+                "OpenAI speech selected."
+                if resolved == "openai"
+                else "Windows speech selected."
+            )
+        self._refresh_market_chat_window(
+            window,
+            status_message=status_message,
+        )
+
+    def _set_market_chat_voice(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_voice_controls_updating", False):
+            return
+
+        voice_picker = getattr(window, "_market_chat_voice_picker", None)
+        if voice_picker is None:
+            return
+        voice_name = str(voice_picker.currentData() or "").strip()
+        snapshot = getattr(self.controller, "market_chat_voice_state", lambda: {})() or {}
+        output_provider = str(snapshot.get("output_provider") or "windows").strip().lower() or "windows"
+        getattr(self.controller, "set_market_chat_voice", lambda value, _provider=None: value)(voice_name, output_provider)
+        self._populate_market_chat_voice_controls(window)
+        self._refresh_market_chat_window(
+            window,
+            status_message=f"Voice changed to {voice_name or 'System Default'}.",
+        )
+
+    async def _listen_market_chat_async(self, window):
+        controller = self.controller
+        if not getattr(controller, "market_chat_voice_input_available", lambda: False)():
+            self._refresh_market_chat_window(window, status_message="Voice input is not available on this system.")
+            return
+
+        window._market_chat_voice_busy = True
+        window._market_chat_voice_mode = "listen"
+        window._market_chat_status_message = "Listening for your question..."
+        self._refresh_market_chat_window(window)
+        try:
+            result = await controller.market_chat_listen(timeout_seconds=8)
+        except Exception as exc:
+            result = {"ok": False, "message": f"Voice listening failed: {exc}", "text": ""}
+
+        window._market_chat_voice_busy = False
+        window._market_chat_voice_mode = ""
+        text = str(result.get("text", "") or "").strip()
+        if not result.get("ok") or not text:
+            self._refresh_market_chat_window(window, status_message=result.get("message") or "No speech was detected.")
+            return
+
+        input_box = getattr(window, "_market_chat_input", None)
+        if input_box is not None:
+            input_box.setPlainText(text)
+        self._refresh_market_chat_window(window, status_message=f"Voice captured: {text}")
+        self._submit_market_chat_prompt(text, window)
+
+    def _listen_market_chat(self, window=None):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_busy", False) or getattr(window, "_market_chat_voice_busy", False):
+            return
+        runner = self._listen_market_chat_async(window)
+        task_factory = getattr(self.controller, "_create_task", None)
+        if callable(task_factory):
+            window._market_chat_voice_task = task_factory(runner, "market_chat_listen")
+        else:
+            window._market_chat_voice_task = asyncio.create_task(runner)
+
+    async def _speak_market_chat_reply_async(self, window, text):
+        controller = self.controller
+        if not getattr(controller, "market_chat_voice_output_available", lambda: False)():
+            self._refresh_market_chat_window(window, status_message="Voice playback is not available on this system.")
+            return
+
+        message = str(text or "").strip()
+        if not message:
+            self._refresh_market_chat_window(window, status_message="No assistant reply is available to speak yet.")
+            return
+
+        window._market_chat_voice_busy = True
+        window._market_chat_voice_mode = "speak"
+        window._market_chat_status_message = "Speaking Sopotek Pilot reply..."
+        self._refresh_market_chat_window(window)
+        try:
+            result = await controller.market_chat_speak(message)
+        except Exception as exc:
+            result = {"ok": False, "message": f"Voice playback failed: {exc}"}
+
+        window._market_chat_voice_busy = False
+        window._market_chat_voice_mode = ""
+        self._refresh_market_chat_window(window, status_message=result.get("message") or "Voice playback finished.")
+
+    def _speak_market_chat_reply(self, window=None, latest_text=None, automatic=False):
+        window = window or self.detached_tool_windows.get("market_chatgpt")
+        if not self._is_qt_object_alive(window):
+            return
+        if getattr(window, "_market_chat_busy", False) or getattr(window, "_market_chat_voice_busy", False):
+            return
+        message = str(latest_text or self._latest_market_chat_reply(window) or "").strip()
+        if not message:
+            if not automatic:
+                self._refresh_market_chat_window(window, status_message="No assistant reply is available to speak yet.")
+            return
+        runner = self._speak_market_chat_reply_async(window, message)
+        task_factory = getattr(self.controller, "_create_task", None)
+        if callable(task_factory):
+            window._market_chat_voice_task = task_factory(runner, "market_chat_speak")
+        else:
+            window._market_chat_voice_task = asyncio.create_task(runner)
+
+    def _open_market_chat_window(self):
+        window = self._get_or_create_tool_window(
+            "market_chatgpt",
+            "Sopotek Pilot",
+            width=980,
+            height=720,
+        )
+        window.setMinimumSize(760, 620)
+
+        if getattr(window, "_market_chat_transcript", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(12)
+
+            intro = QLabel(
+                "Use Sopotek Pilot to ask about the app, market context, balances, equity, profitability, performance, recommendations, behavior guard, news, Telegram management, screenshots, broker position analysis, and explicit trade commands. Type 'show commands' at any time for the control list."
+            )
+            intro.setWordWrap(True)
+            intro.setStyleSheet("color: #c9d5e8; font-weight: 600; padding: 4px 0 10px 0;")
+            layout.addWidget(intro)
+
+            status = QLabel("Ready. Ask about the app, market, balances, broker positions, screenshots, or type 'show commands' for app controls.")
+            status.setWordWrap(True)
+            status.setStyleSheet(
+                "background-color: #101a2d; color: #d8e6ff; border: 1px solid #20324d; "
+                "border-radius: 10px; padding: 10px 12px; font-weight: 600;"
+            )
+            layout.addWidget(status)
+
+            prompt_scroll = QScrollArea()
+            prompt_scroll.setWidgetResizable(True)
+            prompt_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            prompt_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            prompt_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            prompt_scroll.setMaximumHeight(72)
+            prompt_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+            prompt_container = QWidget()
+            prompt_row = QHBoxLayout(prompt_container)
+            prompt_row.setContentsMargins(0, 0, 0, 0)
+            prompt_row.setSpacing(8)
+            for prompt in self._market_chat_quick_prompts():
+                btn = QPushButton(prompt)
+                btn.setStyleSheet(
+                    "QPushButton { background-color:#0f1727; color:#d7dfeb; border:1px solid #24344f; border-radius:10px; padding:8px 10px; }"
+                    "QPushButton:hover { background-color:#17304d; }"
+                )
+                btn.clicked.connect(lambda checked=False, text=prompt: self._submit_market_chat_prompt(text, window))
+                prompt_row.addWidget(btn)
+            prompt_row.addStretch(1)
+            prompt_scroll.setWidget(prompt_container)
+            layout.addWidget(prompt_scroll)
+
+            transcript = QTextBrowser()
+            transcript.setOpenExternalLinks(False)
+            transcript.setMinimumHeight(280)
+            transcript.setStyleSheet(
+                "QTextBrowser { background-color: #0b1220; color: #e6edf7; border: 1px solid #20324d; "
+                "border-radius: 10px; padding: 12px; }"
+            )
+            layout.addWidget(transcript, 1)
+
+            input_box = QTextEdit()
+            input_box.setPlaceholderText(
+                "Ask anything about the app, the market, balances, broker positions, equity, profitability, recommendations, Telegram, screenshots, or type 'show commands'. Trade example: trade buy EUR/USD amount 1000 confirm"
+            )
+            input_box.setMinimumHeight(96)
+            input_box.setMaximumHeight(110)
+            input_box.setStyleSheet(
+                "QTextEdit { background-color: #0f1727; color: #f4f8ff; border: 1px solid #24344f; border-radius: 10px; padding: 10px; }"
+            )
+            layout.addWidget(input_box)
+
+            controls = QGridLayout()
+            controls.setHorizontalSpacing(8)
+            controls.setVerticalSpacing(8)
+            listen_btn = QPushButton("Listen")
+            speak_btn = QPushButton("Speak Reply")
+            auto_speak_btn = QPushButton("Auto Speak")
+            auto_speak_btn.setCheckable(True)
+            auto_speak_enabled = str(
+                self.settings.value("market_chat/auto_speak", "false") or "false"
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            auto_speak_btn.setChecked(auto_speak_enabled)
+            provider_picker = QComboBox()
+            provider_picker.setMinimumWidth(130)
+            output_picker = QComboBox()
+            output_picker.setMinimumWidth(130)
+            voice_picker = QComboBox()
+            voice_picker.setMinimumWidth(230)
+            refresh_voices_btn = QPushButton("Refresh Voices")
+            send_btn = QPushButton("Send")
+            clear_btn = QPushButton("Clear Chat")
+            listen_btn.clicked.connect(lambda: self._listen_market_chat(window))
+            speak_btn.clicked.connect(lambda: self._speak_market_chat_reply(window))
+            auto_speak_btn.toggled.connect(lambda checked: self._set_market_chat_auto_speak(checked, window))
+            provider_picker.currentIndexChanged.connect(lambda _index: self._set_market_chat_voice_provider(window))
+            output_picker.currentIndexChanged.connect(lambda _index: self._set_market_chat_voice_output_provider(window))
+            voice_picker.currentIndexChanged.connect(lambda _index: self._set_market_chat_voice(window))
+            refresh_voices_btn.clicked.connect(lambda: self._refresh_market_chat_voice_choices(window, announce=True))
+            send_btn.clicked.connect(lambda: self._submit_market_chat_prompt(window=window))
+            clear_btn.clicked.connect(lambda: self._clear_market_chat(window))
+            controls.addWidget(listen_btn, 0, 0)
+            controls.addWidget(speak_btn, 0, 1)
+            controls.addWidget(auto_speak_btn, 0, 2)
+            controls.addWidget(clear_btn, 0, 3)
+            controls.addWidget(send_btn, 0, 4)
+            controls.addWidget(QLabel("Recognition"), 1, 0)
+            controls.addWidget(provider_picker, 1, 1)
+            controls.addWidget(QLabel("Speech"), 1, 2)
+            controls.addWidget(output_picker, 1, 3)
+            controls.addWidget(refresh_voices_btn, 1, 4)
+            controls.addWidget(QLabel("Voice"), 2, 0)
+            controls.addWidget(voice_picker, 2, 1, 1, 4)
+            controls.setColumnStretch(1, 1)
+            controls.setColumnStretch(3, 1)
+            controls.setColumnStretch(4, 1)
+            layout.addLayout(controls)
+
+            voice_meta = QLabel("")
+            voice_meta.setWordWrap(True)
+            voice_meta.setStyleSheet("color: #8fa7c6; padding: 2px 0 8px 0;")
+            layout.addWidget(voice_meta)
+
+            confirm_panel = QFrame()
+            confirm_panel.setVisible(False)
+            confirm_panel.setStyleSheet(
+                "QFrame { background-color: #1f1712; border: 1px solid #8b5a2b; border-radius: 12px; }"
+                "QLabel { color: #ffe2bb; font-weight: 600; }"
+            )
+            confirm_layout = QHBoxLayout(confirm_panel)
+            confirm_layout.setContentsMargins(12, 10, 12, 10)
+            confirm_layout.setSpacing(10)
+            confirm_label = QLabel("")
+            confirm_label.setWordWrap(True)
+            confirm_btn = QPushButton("Confirm Action")
+            cancel_btn = QPushButton("Cancel Action")
+            confirm_btn.setStyleSheet(
+                "QPushButton { background-color:#2f6f44; color:#eafff0; border:1px solid #4ba66e; border-radius:10px; padding:8px 12px; font-weight:700; }"
+                "QPushButton:hover { background-color:#3d8957; }"
+            )
+            cancel_btn.setStyleSheet(
+                "QPushButton { background-color:#4a1c22; color:#ffe2e5; border:1px solid #b05f6b; border-radius:10px; padding:8px 12px; font-weight:700; }"
+                "QPushButton:hover { background-color:#61252d; }"
+            )
+            confirm_btn.clicked.connect(lambda: self._confirm_market_chat_action(window))
+            cancel_btn.clicked.connect(lambda: self._cancel_market_chat_action(window))
+            confirm_layout.addWidget(confirm_label, 1)
+            confirm_layout.addWidget(confirm_btn)
+            confirm_layout.addWidget(cancel_btn)
+            layout.addWidget(confirm_panel)
+
+            input_box.textChanged.connect(lambda: self._refresh_market_chat_window(window))
+
+            window.setCentralWidget(container)
+            window._market_chat_transcript = transcript
+            window._market_chat_status = status
+            window._market_chat_input = input_box
+            window._market_chat_send_btn = send_btn
+            window._market_chat_clear_btn = clear_btn
+            window._market_chat_listen_btn = listen_btn
+            window._market_chat_speak_btn = speak_btn
+            window._market_chat_auto_speak_btn = auto_speak_btn
+            window._market_chat_provider_picker = provider_picker
+            window._market_chat_output_picker = output_picker
+            window._market_chat_voice_picker = voice_picker
+            window._market_chat_refresh_voices_btn = refresh_voices_btn
+            window._market_chat_voice_meta = voice_meta
+            window._market_chat_confirm_panel = confirm_panel
+            window._market_chat_confirm_label = confirm_label
+            window._market_chat_confirm_btn = confirm_btn
+            window._market_chat_cancel_btn = cancel_btn
+            window._market_chat_history = []
+            window._market_chat_busy = False
+            window._market_chat_voice_busy = False
+            window._market_chat_voice_mode = ""
+            window._market_chat_voice_controls_updating = False
+            window._market_chat_loading_voices = False
+            window._market_chat_voice_choices = []
+            window._market_chat_status_message = (
+                "Ready. Speak or type a question about the app, market, balances, broker positions, screenshots, or type 'show commands' for app controls."
+                if getattr(self.controller, "market_chat_voice_available", lambda: False)()
+                else status.text()
+            )
+            self._populate_market_chat_voice_controls(window)
+            self._refresh_market_chat_voice_choices(window)
+
+        self._refresh_market_chat_window(window)
+        window.show()
+        window.adjustSize()
+        if window.width() < 900 or window.height() < 680:
+            window.resize(max(window.width(), 900), max(window.height(), 680))
+        window.raise_()
+        window.activateWindow()
+
+    def _refresh_recommendations_window(self):
+        window = self.detached_tool_windows.get("trade_recommendations")
+        if window is None:
+            return
+        if not self._is_qt_object_alive(window):
+            self.detached_tool_windows.pop("trade_recommendations", None)
+            return
+        self._populate_recommendations_window(window)
+
+    def _populate_recommendations_window(self, window):
+        table = getattr(window, "_recommendations_table", None)
+        summary = getattr(window, "_recommendations_summary", None)
+        details = getattr(window, "_recommendations_details", None)
+        if table is None or summary is None or details is None:
+            return
+
+        rows = self._recommendation_rows()
+        selected_symbol = str(getattr(window, "_selected_symbol", "") or "").upper()
+
+        table.setRowCount(len(rows))
+        selected_row = -1
         for row, item in enumerate(rows):
+            reason_text = str(item.get("reason", "") or "Reason not found in runtime data.")
+            compact_reason = reason_text if len(reason_text) <= 72 else f"{reason_text[:69]}..."
             values = [
-                item["symbol"],
-                item["signal"],
-                f"{item['confidence']:.2f}",
-                item["regime"],
-                str(item["volatility"]),
-                item["timestamp"],
+                item.get("symbol", ""),
+                str(item.get("signal", "") or ""),
+                f"{float(item.get('confidence', 0.0) or 0.0):.2f}",
+                str(item.get("strategy", "") or ""),
+                str(item.get("regime", "") or ""),
+                compact_reason,
+                str(item.get("timestamp", "") or ""),
             ]
             for col, value in enumerate(values):
-                self.ai_table.setItem(row, col, QTableWidgetItem(str(value)))
+                table.setItem(row, col, QTableWidgetItem(value))
+            if str(item.get("symbol", "")).upper() == selected_symbol:
+                selected_row = row
 
-        self.ai_table.resizeColumnsToContents()
-        self.ai_table.horizontalHeader().setStretchLastSection(True)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+        summary.setText(self._recommendation_summary_text(rows))
+
+        if rows:
+            if selected_row < 0:
+                selected_row = 0
+                window._selected_symbol = str(rows[0].get("symbol", "") or "")
+            table.selectRow(selected_row)
+            details.setHtml(self._recommendation_details_html(rows[selected_row]))
+        else:
+            window._selected_symbol = ""
+            details.setHtml(self._recommendation_details_html(None))
+
+    def _update_recommendation_details(self, window):
+        if window is None or not self._is_qt_object_alive(window):
+            return
+        table = getattr(window, "_recommendations_table", None)
+        details = getattr(window, "_recommendations_details", None)
+        if table is None or details is None:
+            return
+        row = table.currentRow()
+        if row < 0:
+            details.setHtml(self._recommendation_details_html(None))
+            return
+        symbol_item = table.item(row, 0)
+        symbol = str(symbol_item.text() if symbol_item is not None else "").upper()
+        window._selected_symbol = symbol
+        details.setHtml(self._recommendation_details_html(self._recommendation_records.get(symbol)))
+
+    def _open_recommendations_window(self):
+        window = self._get_or_create_tool_window(
+            "trade_recommendations",
+            "Trade Recommendations",
+            width=1080,
+            height=640,
+        )
+
+        if getattr(window, "_recommendations_table", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+
+            intro = QLabel(
+                "Review the symbols currently recommended by the strategy engine and AI monitor, with the reason behind each trade idea."
+            )
+            intro.setWordWrap(True)
+            intro.setStyleSheet("color: #c9d5e8; font-weight: 600; padding: 4px 0 10px 0;")
+            layout.addWidget(intro)
+
+            summary = QLabel()
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "background-color: #101a2d; color: #d8e6ff; border: 1px solid #20324d; "
+                "border-radius: 10px; padding: 10px 12px; font-weight: 600;"
+            )
+            layout.addWidget(summary)
+
+            table = QTableWidget()
+            table.setAlternatingRowColors(True)
+            table.setColumnCount(7)
+            table.setHorizontalHeaderLabels(
+                ["Symbol", "Action", "Confidence", "Source", "Regime", "Why", "Time"]
+            )
+            layout.addWidget(table)
+
+            details = QTextBrowser()
+            details.setStyleSheet(
+                "QTextBrowser { background-color: #0b1220; color: #e6edf7; border: 1px solid #20324d; "
+                "border-radius: 10px; padding: 14px; }"
+            )
+            layout.addWidget(details)
+
+            window.setCentralWidget(container)
+            window._recommendations_summary = summary
+            window._recommendations_table = table
+            window._recommendations_details = details
+            window._selected_symbol = ""
+
+            table.itemSelectionChanged.connect(lambda: self._update_recommendation_details(window))
+
+            sync_timer = QTimer(window)
+            sync_timer.timeout.connect(lambda: self._populate_recommendations_window(window))
+            sync_timer.start(1200)
+            window._sync_timer = sync_timer
+
+        self._populate_recommendations_window(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _create_regime_panel(self):
 
@@ -5093,7 +9442,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(container)
 
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
     def _update_regime(self, regime):
 
@@ -5127,7 +9476,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(self.exposure_chart)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
     def _create_model_confidence(self):
 
@@ -5143,7 +9492,7 @@ class Terminal(QMainWindow):
 
         dock.setWidget(self.confidence_plot)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
     def _update_confidence(self, confidence):
 
@@ -5155,19 +9504,16 @@ class Terminal(QMainWindow):
         self.confidence_curve.setData(self.confidence_data)
 
     def _update_portfolio_exposure(self):
-
-        positions = self.controller.portfolio.positions
-
+        positions = self._active_positions_snapshot()
         if not positions:
             return
 
         symbols = []
         values = []
 
-        for pos in positions.values():
-
-            symbols.append(pos["symbol"])
-            values.append(pos["value"])
+        for pos in positions:
+            symbols.append(pos.get("symbol", "-"))
+            values.append(float(pos.get("value", 0) or 0))
 
         x = list(range(len(symbols)))
 
@@ -5177,103 +9523,16 @@ class Terminal(QMainWindow):
         )
 
     def _set_risk_heatmap_status(self, message, tone="muted"):
-        label = getattr(self, "risk_heatmap_status_label", None)
-        if label is None:
-            return
-        color_map = {
-            "muted": "#8fa7c6",
-            "warning": "#ffb84d",
-            "positive": "#32d296",
-            "negative": "#ff6b6b",
-        }
-        color = color_map.get(tone, "#8fa7c6")
-        label.setStyleSheet(f"color: {color}; font-weight: 600; padding: 6px 2px 0 2px;")
-        label.setText(str(message or ""))
+        set_risk_heatmap_status(self, message, tone=tone)
 
     def _create_risk_heatmap(self):
+        create_risk_heatmap_panel(self)
 
-        dock = QDockWidget("Risk Heatmap", self)
-
-        self.risk_map = pg.ImageItem()
-
-        plot = pg.PlotWidget()
-        plot.setBackground("#0b1220")
-        plot.showGrid(x=False, y=False, alpha=0.0)
-        plot.hideAxis("bottom")
-        plot.hideAxis("left")
-        plot.addItem(self.risk_map)
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
-        layout.addWidget(plot)
-
-        self.risk_heatmap_status_label = QLabel("Risk heatmap is waiting for portfolio data.")
-        self.risk_heatmap_status_label.setWordWrap(True)
-        layout.addWidget(self.risk_heatmap_status_label)
-        self._set_risk_heatmap_status("Risk heatmap is waiting for portfolio data.", "muted")
-
-        dock.setWidget(container)
-
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+    def _risk_heatmap_positions_snapshot(self):
+        return risk_heatmap_positions_snapshot(self)
 
     def _update_risk_heatmap(self):
-
-        if self.risk_map is None:
-            return
-
-        portfolio = getattr(self.controller, "portfolio", None)
-        positions = getattr(portfolio, "positions", {}) if portfolio is not None else {}
-
-        if portfolio is None:
-            self.risk_map.setImage(np.zeros((1, 1), dtype=float), autoLevels=False, levels=(0.0, 1.0))
-            self._set_risk_heatmap_status("Portfolio data is not available yet.", "muted")
-            return
-
-        if not positions:
-            self.risk_map.setImage(np.zeros((1, 1), dtype=float), autoLevels=False, levels=(0.0, 1.0))
-            self._set_risk_heatmap_status("No open positions, so there is no live portfolio risk to map.", "muted")
-            return
-
-        risks = []
-
-        for pos in positions.values():
-            if not isinstance(pos, dict):
-                continue
-
-            risk = pos.get("risk")
-            if risk is None:
-                size = float(pos.get("size", pos.get("amount", 0)) or 0)
-                entry = float(pos.get("entry_price", pos.get("price", 0)) or 0)
-                risk = abs(size * entry)
-
-            try:
-                risk_value = abs(float(risk))
-            except Exception:
-                continue
-
-            if risk_value > 0:
-                risks.append(risk_value)
-
-        if not risks:
-            self.risk_map.setImage(np.zeros((1, 1), dtype=float), autoLevels=False, levels=(0.0, 1.0))
-            self._set_risk_heatmap_status("Positions exist, but no usable risk values were found for them.", "warning")
-            return
-
-        data = np.array(risks, dtype=float).reshape(1, len(risks))
-        max_value = float(np.max(data))
-
-        if max_value <= 0:
-            normalized = np.zeros_like(data)
-        else:
-            normalized = data / max_value
-
-        self.risk_map.setImage(normalized, autoLevels=False, levels=(0.0, 1.0))
-        self._set_risk_heatmap_status(
-            f"Live risk snapshot across {len(risks)} position(s). Highest relative exposure: {max_value:,.2f}.",
-            "positive",
-        )
+        update_risk_heatmap(self)
 
 
 
@@ -5351,15 +9610,536 @@ def candles_to_df(df):
 
 
 async def _hotfix_prepare_backtest_context(self):
+    return await _hotfix_prepare_backtest_context_with_selection(self)
+
+
+def _hotfix_backtest_symbol_candidates(self):
+    candidates = []
+
+    chart = None
+    try:
+        chart = self._current_chart_widget()
+    except Exception:
+        chart = None
+
+    for value in [
+        getattr(chart, "symbol", None),
+        getattr(self, "symbol", None),
+        getattr(getattr(self, "symbol_picker", None), "currentText", lambda: "")(),
+    ]:
+        text = str(value or "").strip()
+        if text and text not in candidates:
+            candidates.append(text)
+
+    for symbol in list(getattr(self.controller, "symbols", []) or []):
+        text = str(symbol or "").strip()
+        if text and text not in candidates:
+            candidates.append(text)
+
+    return candidates
+
+
+def _hotfix_backtest_timeframe_candidates(self):
+    candidates = []
+    for timeframe in list(getattr(self, "timeframe_buttons", {}).keys()):
+        text = str(timeframe or "").strip()
+        if text and text not in candidates:
+            candidates.append(text)
+    for timeframe in ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mn"]:
+        if timeframe not in candidates:
+            candidates.append(timeframe)
+    return candidates
+
+
+def _hotfix_qdate_from_value(value):
+    if isinstance(value, QDate) and value.isValid():
+        return value
+    if isinstance(value, datetime):
+        return QDate(value.year, value.month, value.day)
+    if isinstance(value, str):
+        parsed = QDate.fromString(value, "yyyy-MM-dd")
+        if parsed.isValid():
+            return parsed
+    return None
+
+
+def _hotfix_qdate_to_text(value):
+    qdate = _hotfix_qdate_from_value(value)
+    return qdate.toString("yyyy-MM-dd") if qdate is not None else ""
+
+
+def _hotfix_qdate_to_utc_boundary_text(value, *, end_of_day=False):
+    qdate = _hotfix_qdate_from_value(value)
+    if qdate is None or not qdate.isValid():
+        return None
+    suffix = "23:59:59.999999+00:00" if end_of_day else "00:00:00+00:00"
+    return f"{qdate.toString('yyyy-MM-dd')}T{suffix}"
+
+
+def _hotfix_clamp_qdate(value, minimum, maximum):
+    if value is None or not value.isValid():
+        return minimum
+    if minimum is not None and value < minimum:
+        return minimum
+    if maximum is not None and value > maximum:
+        return maximum
+    return value
+
+
+def _hotfix_backtest_requested_range_text(window=None, context=None):
+    context = context or {}
+    start_widget = getattr(window, "_backtest_start_date", None) if window is not None else None
+    end_widget = getattr(window, "_backtest_end_date", None) if window is not None else None
+    start_value = start_widget.date() if start_widget is not None else _hotfix_qdate_from_value(context.get("start_date"))
+    end_value = end_widget.date() if end_widget is not None else _hotfix_qdate_from_value(context.get("end_date"))
+    if start_value is None or end_value is None or not start_value.isValid() or not end_value.isValid():
+        return "-"
+    return f"{start_value.toString('yyyy-MM-dd')} -> {end_value.toString('yyyy-MM-dd')}"
+
+
+def _hotfix_backtest_requested_limit(window=None, context=None, fallback=None):
+    context = context or {}
+    widget = getattr(window, "_backtest_history_limit", None) if window is not None else None
+    if widget is not None:
+        try:
+            return max(1, min(int(widget.value()), 50000))
+        except Exception:
+            pass
+    value = context.get("history_limit", fallback if fallback is not None else 50000)
+    try:
+        return max(1, min(int(value), 50000))
+    except Exception:
+        fallback_value = fallback if fallback is not None else 50000
+        return max(1, min(int(fallback_value), 50000))
+
+
+def _hotfix_backtest_apply_history_limit(frame, requested_limit):
+    frame = candles_to_df(frame)
+    if frame is None or getattr(frame, "empty", True):
+        return frame
+    try:
+        limit = max(1, int(requested_limit or len(frame)))
+    except Exception:
+        limit = len(frame)
+    if len(frame) <= limit:
+        return frame
+    limited = frame.tail(limit).copy()
+    limited.reset_index(drop=True, inplace=True)
+    return limited
+
+
+def _hotfix_timeframe_seconds(timeframe):
+    normalized = str(timeframe or "").strip().lower()
+    mapping = {
+        "1m": 60,
+        "3m": 180,
+        "5m": 300,
+        "15m": 900,
+        "30m": 1800,
+        "45m": 2700,
+        "1h": 3600,
+        "2h": 7200,
+        "4h": 14400,
+        "6h": 21600,
+        "8h": 28800,
+        "12h": 43200,
+        "1d": 86400,
+        "3d": 259200,
+        "1w": 604800,
+        "1mn": 2592000,
+    }
+    return mapping.get(normalized)
+
+
+def _hotfix_backtest_required_history_limit(self, timeframe, start_date=None, end_date=None, requested_limit=None):
+    default_limit = int(requested_limit or getattr(self.controller, "limit", 1000) or 1000)
+    step_seconds = _hotfix_timeframe_seconds(timeframe)
+    start_qdate = _hotfix_qdate_from_value(start_date)
+    end_qdate = _hotfix_qdate_from_value(end_date)
+
+    required_limit = default_limit
+    if step_seconds and start_qdate is not None and end_qdate is not None and start_qdate.isValid() and end_qdate.isValid():
+        if end_qdate < start_qdate:
+            end_qdate = start_qdate
+        start_ts = pd.Timestamp(f"{start_qdate.toString('yyyy-MM-dd')} 00:00:00", tz="UTC")
+        end_ts = pd.Timestamp(f"{end_qdate.toString('yyyy-MM-dd')} 23:59:59", tz="UTC")
+        total_seconds = max((end_ts - start_ts).total_seconds(), float(step_seconds))
+        required_bars = int(np.ceil(total_seconds / float(step_seconds))) + 64
+        required_limit = max(default_limit, required_bars)
+
+    resolver = getattr(self.controller, "_resolve_history_limit", None)
+    if callable(resolver):
+        try:
+            return int(resolver(required_limit))
+        except Exception:
+            pass
+    return max(100, min(int(required_limit), 50000))
+
+
+def _hotfix_backtest_frame_for_symbol(self, symbol, timeframe):
+    buffers = getattr(self.controller, "candle_buffers", {})
+    frame = None
+    if hasattr(buffers, "get"):
+        frame = (buffers.get(symbol) or {}).get(timeframe)
+    return candles_to_df(frame)
+
+
+def _hotfix_backtest_frame_covers_range(frame, start_date, end_date):
+    frame = candles_to_df(frame)
+    if frame is None or getattr(frame, "empty", True):
+        return False
+
+    start_qdate = _hotfix_qdate_from_value(start_date)
+    end_qdate = _hotfix_qdate_from_value(end_date)
+    if start_qdate is None or end_qdate is None or not start_qdate.isValid() or not end_qdate.isValid():
+        return True
+
+    try:
+        min_ts = pd.Timestamp(frame.iloc[0]["timestamp"])
+        max_ts = pd.Timestamp(frame.iloc[-1]["timestamp"])
+    except Exception:
+        return False
+
+    if pd.isna(min_ts) or pd.isna(max_ts):
+        return False
+
+    try:
+        min_day = min_ts.tz_convert("UTC").date() if min_ts.tzinfo is not None else min_ts.date()
+        max_day = max_ts.tz_convert("UTC").date() if max_ts.tzinfo is not None else max_ts.date()
+    except Exception:
+        min_day = min_ts.date()
+        max_day = max_ts.date()
+
+    start_day = pd.Timestamp(f"{start_qdate.toString('yyyy-MM-dd')}").date()
+    end_day = pd.Timestamp(f"{end_qdate.toString('yyyy-MM-dd')}").date()
+    return bool(min_day <= start_day and max_day >= end_day)
+
+
+def _hotfix_backtest_date_bounds(frame):
+    frame = candles_to_df(frame)
+    if frame is None or getattr(frame, "empty", True):
+        return None, None
+    try:
+        start_ts = pd.Timestamp(frame.iloc[0]["timestamp"])
+        end_ts = pd.Timestamp(frame.iloc[-1]["timestamp"])
+    except Exception:
+        return None, None
+    if pd.isna(start_ts) or pd.isna(end_ts):
+        return None, None
+    return QDate(start_ts.year, start_ts.month, start_ts.day), QDate(end_ts.year, end_ts.month, end_ts.day)
+
+
+def _hotfix_filter_backtest_frame_by_date(frame, start_date, end_date):
+    frame = candles_to_df(frame)
+    if frame is None or getattr(frame, "empty", True):
+        return frame
+
+    start_qdate = _hotfix_qdate_from_value(start_date)
+    end_qdate = _hotfix_qdate_from_value(end_date)
+    if start_qdate is None or end_qdate is None:
+        return frame
+    if end_qdate < start_qdate:
+        end_qdate = start_qdate
+
+    start_ts = pd.Timestamp(f"{start_qdate.toString('yyyy-MM-dd')} 00:00:00", tz="UTC")
+    end_ts = pd.Timestamp(f"{end_qdate.toString('yyyy-MM-dd')} 00:00:00", tz="UTC") + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    filtered = frame[(frame["timestamp"] >= start_ts) & (frame["timestamp"] <= end_ts)].copy()
+    filtered.reset_index(drop=True, inplace=True)
+    return filtered
+
+
+def _hotfix_start_backtest_graph_animation(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+    if window is None:
+        return
+    timer = getattr(window, "_backtest_graph_timer", None)
+    if timer is not None and not timer.isActive():
+        window._backtest_graph_phase = 0.0
+        timer.start()
+
+
+def _hotfix_stop_backtest_graph_animation(window, clear=False):
+    if window is None:
+        return
+    timer = getattr(window, "_backtest_graph_timer", None)
+    if timer is not None and timer.isActive():
+        timer.stop()
+    if clear:
+        graph_curve = getattr(window, "_backtest_graph_curve", None)
+        animation_curve = getattr(window, "_backtest_graph_animation_curve", None)
+        if graph_curve is not None:
+            graph_curve.setData([])
+        if animation_curve is not None:
+            animation_curve.setData([])
+
+
+def _hotfix_tick_backtest_graph_animation(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+    if window is None:
+        return
+
+    graph_curve = getattr(window, "_backtest_graph_curve", None)
+    animation_curve = getattr(window, "_backtest_graph_animation_curve", None)
+    if graph_curve is None or animation_curve is None:
+        return
+
+    equity_curve = list(getattr(getattr(self, "backtest_engine", None), "equity_curve", []) or [])
+    if len(equity_curve) >= 2:
+        graph_curve.setData(list(range(len(equity_curve))), equity_curve)
+        animation_curve.setData([])
+        return
+
+    baseline = float(getattr(self.controller, "initial_capital", 10000) or 10000)
+    amplitude = max(baseline * 0.003, 5.0)
+    phase = float(getattr(window, "_backtest_graph_phase", 0.0) or 0.0)
+    x_values = np.arange(60, dtype=float)
+    y_values = baseline + np.linspace(0.0, amplitude * 2.5, num=60) + np.sin((x_values / 4.0) + phase) * amplitude
+    window._backtest_graph_phase = phase + 0.35
+    graph_curve.setData([])
+    animation_curve.setData(x_values, y_values)
+
+
+def _hotfix_refresh_backtest_selectors(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+    if window is None:
+        return
+
+    symbol_picker = getattr(window, "_backtest_symbol_picker", None)
+    strategy_picker = getattr(window, "_backtest_strategy_picker", None)
+    timeframe_picker = getattr(window, "_backtest_timeframe_picker", None)
+    start_date_edit = getattr(window, "_backtest_start_date", None)
+    end_date_edit = getattr(window, "_backtest_end_date", None)
+    if symbol_picker is None or strategy_picker is None or timeframe_picker is None:
+        return
+
+    current_symbol = str(symbol_picker.currentText()).strip()
+    current_strategy = str(strategy_picker.currentText()).strip()
+    current_timeframe = str(timeframe_picker.currentText()).strip()
+    context = getattr(self, "_backtest_context", {}) or {}
+
+    symbol_candidates = _hotfix_backtest_symbol_candidates(self)
+    target_symbol = context.get("symbol") or current_symbol or (symbol_candidates[0] if symbol_candidates else "")
+    target_strategy = Strategy.normalize_strategy_name(
+        context.get("strategy_name")
+        or current_strategy
+        or getattr(self.controller, "strategy_name", None)
+        or getattr(getattr(self.controller, "config", None), "strategy", "Trend Following")
+    )
+    timeframe_candidates = _hotfix_backtest_timeframe_candidates(self)
+    target_timeframe = str(
+        context.get("timeframe")
+        or current_timeframe
+        or getattr(self, "current_timeframe", getattr(self.controller, "time_frame", "1h"))
+    ).strip()
+
+    symbol_picker.blockSignals(True)
+    symbol_picker.clear()
+    for symbol in symbol_candidates:
+        symbol_picker.addItem(symbol)
+    if target_symbol and symbol_picker.findText(target_symbol) < 0:
+        symbol_picker.addItem(target_symbol)
+    if target_symbol:
+        symbol_picker.setCurrentText(target_symbol)
+    symbol_picker.blockSignals(False)
+
+    self._populate_strategy_picker(strategy_picker, selected_strategy=target_strategy)
+
+    timeframe_picker.blockSignals(True)
+    timeframe_picker.clear()
+    for name in timeframe_candidates:
+        timeframe_picker.addItem(name)
+    if target_timeframe and timeframe_picker.findText(target_timeframe) < 0:
+        timeframe_picker.addItem(target_timeframe)
+    timeframe_picker.setCurrentText(target_timeframe)
+    timeframe_picker.blockSignals(False)
+
+
+async def _hotfix_load_backtest_history(self, window=None, force=False):
+    window = window or getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+    if window is None:
+        raise RuntimeError("Backtest workspace is not open.")
+    if not getattr(self.controller, "broker", None):
+        raise RuntimeError("Connect a broker before loading exchange history for backtesting.")
+    if not hasattr(self.controller, "request_candle_data"):
+        raise RuntimeError("This controller cannot fetch historical candles.")
+
+    symbol_picker = getattr(window, "_backtest_symbol_picker", None)
+    timeframe_picker = getattr(window, "_backtest_timeframe_picker", None)
+    strategy_picker = getattr(window, "_backtest_strategy_picker", None)
+    start_date_edit = getattr(window, "_backtest_start_date", 0)
+    end_date_edit = getattr(window, "_backtest_end_date", datetime.now())
+    history_limit_widget = getattr(window, "_backtest_history_limit", None)
+
+    symbol = str(symbol_picker.currentText()).strip() if symbol_picker is not None else ""
+    timeframe = str(timeframe_picker.currentText()).strip() if timeframe_picker is not None else getattr(self, "current_timeframe", "1h")
+    strategy_name = str(strategy_picker.currentText()).strip() if strategy_picker is not None else ""
+    start_date = start_date_edit.date() if start_date_edit is not None else None
+    end_date = end_date_edit.date() if end_date_edit is not None else None
+    requested_limit = _hotfix_backtest_requested_limit(
+        window=window,
+        context=getattr(self, "_backtest_context", {}) or {},
+        fallback=getattr(self.controller, "limit", 50000),
+    )
+
+    limit = _hotfix_backtest_required_history_limit(
+        self,
+        timeframe,
+        start_date=start_date,
+        end_date=end_date,
+        requested_limit=requested_limit,
+    )
+    requested_range = _hotfix_backtest_requested_range_text(window=window) or "-"
+    self._append_backtest_journal(
+        f"Loading exchange candles for {symbol} {timeframe} covering {requested_range} (fetch limit {limit}, target bars {requested_limit}).",
+        "INFO",
+    )
+    await self.controller.request_candle_data(
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+        start_time=_hotfix_qdate_to_utc_boundary_text(start_date, end_of_day=False),
+        end_time=_hotfix_qdate_to_utc_boundary_text(end_date, end_of_day=True),
+    )
+
+    context = await _hotfix_prepare_backtest_context_with_selection(
+        self,
+        symbol=symbol,
+        timeframe=timeframe,
+        strategy_name=strategy_name,
+        force_history_refresh=force,
+    )
+    self._backtest_context = context
+    self.results = None
+    self.backtest_report = None
+    loaded_bars = len(context.get("data") or [])
+    self._append_backtest_journal(
+        f"Loaded {loaded_bars} exchange candle bars for {symbol} {timeframe}.",
+        "INFO",
+    )
+    _hotfix_refresh_backtest_selectors(self, window)
+    self._refresh_backtest_window(window, message=f"Loaded {loaded_bars} exchange bars for {symbol} {timeframe}.")
+    return context
+
+
+async def _hotfix_load_backtest_history_runner(self, window=None, force=True):
+    try:
+        await _hotfix_load_backtest_history(self, window=window, force=force)
+    except Exception as exc:
+        self.system_console.log(f"Backtest history load failed: {exc}", "ERROR")
+        self._append_backtest_journal(f"Exchange history load failed: {exc}", "ERROR")
+        self._refresh_backtest_window(window, message=f"Backtest history load failed: {exc}")
+
+
+def _hotfix_load_backtest_history_clicked(self):
+    load_backtest_history_clicked(self)
+
+
+def _hotfix_backtest_selection_changed(self):
+    if getattr(self, "_backtest_running", False):
+        return
+
+    window = getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+    if window is None:
+        return
+
+    symbol_picker = getattr(window, "_backtest_symbol_picker", None)
+    strategy_picker = getattr(window, "_backtest_strategy_picker", None)
+    timeframe_picker = getattr(window, "_backtest_timeframe_picker", None)
+    start_date_edit = getattr(window, "_backtest_start_date", None)
+    end_date_edit = getattr(window, "_backtest_end_date", None)
+    history_limit_widget = getattr(window, "_backtest_history_limit", None)
+    if symbol_picker is None or strategy_picker is None or timeframe_picker is None:
+        return
+
+    selected_symbol = str(symbol_picker.currentText()).strip()
+    selected_strategy = Strategy.normalize_strategy_name(strategy_picker.currentText())
+    selected_timeframe = str(timeframe_picker.currentText()).strip() or getattr(self, "current_timeframe", getattr(self.controller, "time_frame", "1h"))
+    previous = getattr(self, "_backtest_context", {}) or {}
+    timeframe = selected_timeframe
+    selected_start_date = start_date_edit.date() if start_date_edit is not None else _hotfix_qdate_from_value(previous.get("start_date"))
+    selected_end_date = end_date_edit.date() if end_date_edit is not None else _hotfix_qdate_from_value(previous.get("end_date"))
+    selected_history_limit = _hotfix_backtest_requested_limit(
+        window=window,
+        context=previous,
+        fallback=getattr(self.controller, "limit", 50000),
+    )
+    if selected_start_date is not None and selected_end_date is not None and selected_end_date < selected_start_date:
+        selected_end_date = selected_start_date
+        if end_date_edit is not None:
+            end_date_edit.blockSignals(True)
+            end_date_edit.setDate(selected_end_date)
+            end_date_edit.blockSignals(False)
+
+    dataset = _hotfix_backtest_frame_for_symbol(self, selected_symbol, timeframe)
+    filtered_dataset = _hotfix_filter_backtest_frame_by_date(dataset, selected_start_date, selected_end_date)
+    filtered_dataset = _hotfix_backtest_apply_history_limit(filtered_dataset, selected_history_limit)
+    covers_range = _hotfix_backtest_frame_covers_range(dataset, selected_start_date, selected_end_date)
+
+    selection_changed = (
+        selected_symbol != str(previous.get("symbol") or "").strip()
+        or selected_strategy != Strategy.normalize_strategy_name(previous.get("strategy_name"))
+        or selected_timeframe != str(previous.get("timeframe") or "").strip()
+        or _hotfix_qdate_to_text(selected_start_date) != str(previous.get("start_date") or "").strip()
+        or _hotfix_qdate_to_text(selected_end_date) != str(previous.get("end_date") or "").strip()
+        or int(selected_history_limit) != int(previous.get("history_limit") or getattr(self.controller, "limit", 50000))
+    )
+
+    self._backtest_context = {
+        "symbol": selected_symbol,
+        "timeframe": timeframe,
+        "data": filtered_dataset.copy() if hasattr(filtered_dataset, "copy") else filtered_dataset,
+        "strategy": previous.get("strategy"),
+        "strategy_name": selected_strategy,
+        "start_date": _hotfix_qdate_to_text(selected_start_date),
+        "end_date": _hotfix_qdate_to_text(selected_end_date),
+        "history_limit": int(selected_history_limit),
+    }
+
+    if selection_changed:
+        self.results = None
+        self.backtest_report = None
+
+    info = "Selection updated. Start backtest when ready."
+    if dataset is None or getattr(dataset, "empty", False):
+        info = "Selection updated. Use Load Exchange Data or Start Backtest to fetch candles from the connected exchange."
+    elif not covers_range:
+        info = "Selection updated. Cached candles do not fully cover the selected date range. Load Exchange Data to refresh from the exchange."
+    elif filtered_dataset is None or getattr(filtered_dataset, "empty", False):
+        info = "Selection updated. No candles fall inside the selected date range."
+    self._refresh_backtest_window(message=info)
+
+
+async def _hotfix_prepare_backtest_context_with_selection(self, symbol=None, timeframe=None, strategy_name=None, force_history_refresh=False):
     chart = self._current_chart_widget()
     if chart is None and hasattr(self, "_iter_chart_widgets"):
         charts = self._iter_chart_widgets()
         chart = charts[0] if charts else None
 
-    symbol = getattr(chart, "symbol", None) or getattr(self, "symbol", None)
-    timeframe = getattr(chart, "timeframe", None) or getattr(self, "current_timeframe", "1h")
+    window = getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+    symbol_picker = getattr(window, "_backtest_symbol_picker", None) if window is not None else None
+    strategy_picker = getattr(window, "_backtest_strategy_picker", None) if window is not None else None
+    start_date_edit = getattr(window, "_backtest_start_date", None) if window is not None else None
+    end_date_edit = getattr(window, "_backtest_end_date", None) if window is not None else None
+
+    selected_symbol = str(symbol or "").strip() or (str(symbol_picker.currentText()).strip() if symbol_picker is not None else "")
+    selected_strategy = str(strategy_name or "").strip() or (str(strategy_picker.currentText()).strip() if strategy_picker is not None else "")
+    context = getattr(self, "_backtest_context", {}) or {}
+    selected_start_date = start_date_edit.date() if start_date_edit is not None else _hotfix_qdate_from_value(context.get("start_date"))
+    selected_end_date = end_date_edit.date() if end_date_edit is not None else _hotfix_qdate_from_value(context.get("end_date"))
+    selected_history_limit = _hotfix_backtest_requested_limit(
+        window=window,
+        context=context,
+        fallback=getattr(self.controller, "limit", 50000),
+    )
+
+    symbol = selected_symbol or getattr(chart, "symbol", None) or getattr(self, "symbol", None)
     if not symbol:
-        raise RuntimeError("Select a chart before starting a backtest")
+        candidates = _hotfix_backtest_symbol_candidates(self)
+        symbol = candidates[0] if candidates else None
+
+    timeframe = str(timeframe or "").strip() or getattr(chart, "timeframe", None) or getattr(self, "current_timeframe", "1h")
+    if not symbol:
+        raise RuntimeError("No symbol is available for backtesting")
 
     strategy_source = None
     trading_system = getattr(self.controller, "trading_system", None)
@@ -5373,27 +10153,77 @@ async def _hotfix_prepare_backtest_context(self):
     frame = None
     if hasattr(buffers, "get"):
         frame = (buffers.get(symbol) or {}).get(timeframe)
-    if frame is None and hasattr(self.controller, "request_candle_data"):
+    needs_history_refresh = (
+        force_history_refresh
+        or frame is None
+        or not _hotfix_backtest_frame_covers_range(frame, selected_start_date, selected_end_date)
+    )
+    if needs_history_refresh and hasattr(self.controller, "request_candle_data"):
+        fetch_limit = _hotfix_backtest_required_history_limit(
+            self,
+            timeframe,
+            start_date=selected_start_date,
+            end_date=selected_end_date,
+            requested_limit=selected_history_limit,
+        )
         await self.controller.request_candle_data(
             symbol=symbol,
             timeframe=timeframe,
-            limit=max(500, int(getattr(self.controller, "limit", 1000) or 1000)),
+            limit=fetch_limit,
+            start_time=_hotfix_qdate_to_utc_boundary_text(selected_start_date, end_of_day=False),
+            end_time=_hotfix_qdate_to_utc_boundary_text(selected_end_date, end_of_day=True),
         )
         frame = (getattr(self.controller, "candle_buffers", {}).get(symbol) or {}).get(timeframe)
+    frame = candles_to_df(frame)
     if frame is None or getattr(frame, "empty", False):
         raise RuntimeError(f"No candle history available for {symbol} {timeframe}")
+    minimum_date, maximum_date = _hotfix_backtest_date_bounds(frame)
+    if selected_start_date is None:
+        selected_start_date = minimum_date
+    if selected_end_date is None:
+        selected_end_date = maximum_date
+    selected_start_date = _hotfix_clamp_qdate(selected_start_date, minimum_date, maximum_date)
+    selected_end_date = _hotfix_clamp_qdate(selected_end_date, minimum_date, maximum_date)
+    if selected_end_date is not None and selected_start_date is not None and selected_end_date < selected_start_date:
+        selected_end_date = selected_start_date
+    filtered_frame = _hotfix_filter_backtest_frame_by_date(frame, selected_start_date, selected_end_date)
+    if filtered_frame is None or getattr(filtered_frame, "empty", False):
+        requested_range = _hotfix_backtest_requested_range_text(
+            context={"start_date": _hotfix_qdate_to_text(selected_start_date), "end_date": _hotfix_qdate_to_text(selected_end_date)}
+        )
+        raise RuntimeError(f"No candle history available for {symbol} {timeframe} inside {requested_range}")
+    if start_date_edit is not None and end_date_edit is not None and minimum_date is not None and maximum_date is not None:
+        start_date_edit.blockSignals(True)
+        end_date_edit.blockSignals(True)
+        start_date_edit.setMinimumDate(minimum_date)
+        start_date_edit.setMaximumDate(maximum_date)
+        end_date_edit.setMinimumDate(minimum_date)
+        end_date_edit.setMaximumDate(maximum_date)
+        start_date_edit.setDate(selected_start_date)
+        end_date_edit.setDate(selected_end_date)
+        start_date_edit.blockSignals(False)
+        end_date_edit.blockSignals(False)
 
-    strategy_name = getattr(self.controller, "strategy_name", None) or getattr(getattr(self.controller, "config", None), "strategy", None)
+    strategy_name = Strategy.normalize_strategy_name(
+        selected_strategy
+        or getattr(self.controller, "strategy_name", None)
+        or getattr(getattr(self.controller, "config", None), "strategy", None)
+    )
+    filtered_frame = _hotfix_backtest_apply_history_limit(filtered_frame, selected_history_limit)
     return {
         "symbol": symbol,
         "timeframe": timeframe,
-        "data": frame.copy() if hasattr(frame, "copy") else frame,
+        "data": filtered_frame.copy() if hasattr(filtered_frame, "copy") else filtered_frame,
         "strategy": strategy_source,
         "strategy_name": strategy_name,
+        "start_date": _hotfix_qdate_to_text(selected_start_date),
+        "end_date": _hotfix_qdate_to_text(selected_end_date),
+        "history_limit": int(selected_history_limit),
     }
 
 
 async def _hotfix_run_backtest_clicked(self):
+    self._show_backtest_window()
     try:
         context = await _hotfix_prepare_backtest_context(self)
 
@@ -5414,13 +10244,13 @@ async def _hotfix_run_backtest_clicked(self):
         self._append_backtest_journal(
             f"Initialized strategy tester for {context['symbol']} {context['timeframe']} using {context.get('strategy_name') or 'Default'}."
         )
-        self._show_backtest_window()
+        _hotfix_refresh_backtest_selectors(self)
         self._refresh_backtest_window(message="Backtest engine initialized.")
 
     except Exception as e:
         self.system_console.log(f"Backtest initialization error: {e}")
         self._append_backtest_journal(f"Initialization failed: {e}", "ERROR")
-        self._show_backtest_window()
+        _hotfix_refresh_backtest_selectors(self)
         self._refresh_backtest_window(message=f"Backtest initialization error: {e}")
 
 
@@ -5462,149 +10292,958 @@ async def _hotfix_run_backtest_async(self, data, symbol, strategy_name, timefram
         self._append_backtest_journal(f"Backtest failed: {e}", "ERROR")
         self._refresh_backtest_window(message=f"Backtest failed: {e}")
     finally:
+        _hotfix_stop_backtest_graph_animation(
+            getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+        )
         self._backtest_running = False
         self._backtest_stop_event = None
         self._backtest_task = None
         self._refresh_backtest_window()
 
 
-def _hotfix_start_backtest(self):
-    if getattr(self, "_backtest_running", False):
-        self.stop_backtest()
-        return
-
+async def _hotfix_prepare_and_run_backtest(self):
     try:
-        if not hasattr(self, "backtest_engine"):
-            self.system_console.log("Backtest engine not initialized.")
-            self._append_backtest_journal("Backtest engine not initialized.", "ERROR")
-            self._refresh_backtest_window(message="Backtest engine not initialized.")
-            return
-
-        backtest_context = getattr(self, "_backtest_context", {}) or {}
-        symbol = backtest_context.get("symbol", "BACKTEST")
-        strategy_name = backtest_context.get("strategy_name")
-        timeframe = backtest_context.get("timeframe", "-")
-        data = candles_to_df(backtest_context.get("data"))
-        if data is None or not hasattr(data, "__len__") or len(data) == 0:
-            self.system_console.log("No historical data available for backtesting.")
-            self._append_backtest_journal("No historical data available for backtesting.", "ERROR")
-            self._refresh_backtest_window(message="No historical data available for backtesting.")
-            return
-
+        context = await _hotfix_prepare_backtest_context(self)
+        self.backtest_engine = BacktestEngine(
+            strategy=context["strategy"],
+            simulator=Simulator(
+                initial_balance=getattr(self.controller, "initial_capital", 10000)
+            ),
+        )
+        self._backtest_context = context
         self.results = None
         self.backtest_report = None
         self._backtest_running = True
         self._backtest_stop_requested = False
         self._backtest_stop_event = threading.Event()
+        _hotfix_refresh_backtest_selectors(self)
+        self._append_backtest_journal(
+            f"Prepared {context['symbol']} {context['timeframe']} using {context.get('strategy_name') or 'Default'}."
+        )
+        _hotfix_start_backtest_graph_animation(self)
         self._refresh_backtest_window(message="Backtest running...")
-        runner = _hotfix_run_backtest_async(self, data, symbol, strategy_name, timeframe)
-        create_task = getattr(self.controller, "_create_task", None)
-        if callable(create_task):
-            self._backtest_task = create_task(runner, "backtest_run")
-        else:
-            self._backtest_task = asyncio.create_task(runner)
+        data = candles_to_df(context.get("data"))
+        if data is None or not hasattr(data, "__len__") or len(data) == 0:
+            raise RuntimeError("No historical data available for backtesting.")
+        await _hotfix_run_backtest_async(
+            self,
+            data,
+            context.get("symbol", "BACKTEST"),
+            context.get("strategy_name"),
+            context.get("timeframe", "-"),
+        )
     except Exception as e:
         self._backtest_running = False
         self._backtest_stop_event = None
+        self._backtest_task = None
         self.system_console.log(f"Backtest failed to start: {e}", "ERROR")
         self._append_backtest_journal(f"Backtest failed to start: {e}", "ERROR")
         self._refresh_backtest_window(message=f"Backtest failed to start: {e}")
 
 
-def _hotfix_stop_backtest(self):
-    if not getattr(self, "_backtest_running", False):
-        self._refresh_backtest_window(message="No backtest is currently running.")
-        return
+def _hotfix_start_backtest(self):
+    start_backtest(self)
 
-    self._backtest_stop_requested = True
-    stop_event = getattr(self, "_backtest_stop_event", None)
-    if stop_event is not None:
-        stop_event.set()
-    self.system_console.log("Backtest stop requested.", "INFO")
-    self._append_backtest_journal("Backtest stop requested.", "WARN")
-    self._refresh_backtest_window(message="Backtest stop requested...")
+
+def _hotfix_stop_backtest(self):
+    stop_backtest(self)
 
 
 def _hotfix_generate_report(self):
-    try:
-        trades = getattr(self, "results", None)
-        if trades is None:
-            raise RuntimeError("Run a backtest before generating a report")
-
-        generator = ReportGenerator(
-            trades=trades,
-            equity_history=getattr(self.backtest_engine, "equity_curve", []),
-        )
-        pdf_path = generator.export_pdf()
-        excel_path = generator.export_excel()
-        self.backtest_report = generator.generate()
-        self.system_console.log(f"Backtest report generated: {pdf_path} | {excel_path}", "INFO")
-        self._append_backtest_journal(
-            f"Report exported to {pdf_path} and {excel_path}.",
-            "INFO",
-        )
-        self._refresh_backtest_window(message="Backtest report generated.")
-    except Exception as e:
-        self.system_console.log(f"Report generation failed: {e}")
-        self._append_backtest_journal(f"Report generation failed: {e}", "ERROR")
+    generate_report(self)
 
 
 def _hotfix_show_optimization_window(self):
-    window = self._get_or_create_tool_window(
-        "strategy_optimization",
-        "Strategy Optimization",
-        width=980,
-        height=640,
+    return show_optimization_window(self)
+
+
+def _hotfix_stellar_expert_asset_url(_self, code, issuer=None):
+    base_url = "https://stellar.expert/explorer/public/asset"
+    normalized_code = str(code or "").upper().strip()
+    normalized_issuer = str(issuer or "").strip()
+    if not normalized_code:
+        return base_url
+    if normalized_code == "XLM":
+        return f"{base_url}/XLM"
+    if not normalized_issuer:
+        return base_url
+    return f"{base_url}/{normalized_code}-{normalized_issuer}"
+
+
+def _hotfix_stellar_asset_identifier(_self, code, issuer=None):
+    normalized_code = str(code or "").upper().strip()
+    normalized_issuer = str(issuer or "").strip()
+    if not normalized_code:
+        return ""
+    if normalized_code == "XLM" or not normalized_issuer:
+        return normalized_code
+    return f"{normalized_code}:{normalized_issuer}"
+
+
+def _hotfix_parse_stellar_asset_entry(self, raw):
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    normalized = text.upper().strip()
+    if normalized == "XLM":
+        return {
+            "id": "XLM",
+            "code": "XLM",
+            "issuer": "",
+            "source": "Native",
+            "url": self._stellar_expert_asset_url("XLM"),
+            "trusted": True,
+            "needs_trustline": False,
+            "screened": True,
+            "risk_label": "Native",
+        }
+    if ":" not in text:
+        return None
+    code, issuer = text.split(":", 1)
+    identifier = self._stellar_asset_identifier(code, issuer)
+    return {
+        "id": identifier,
+        "code": str(code or "").upper().strip(),
+        "issuer": str(issuer or "").strip(),
+        "source": "Manual",
+        "url": self._stellar_expert_asset_url(code, issuer),
+        "trusted": False,
+        "needs_trustline": True,
+        "screened": False,
+        "risk_label": "Manual",
+    }
+
+
+def _hotfix_selected_stellar_asset_row(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return None
+    asset_picker = getattr(window, "_stellar_asset_picker", None)
+    asset_table = getattr(window, "_stellar_asset_table", None)
+    rows = list(getattr(window, "_stellar_asset_rows", []) or [])
+    if asset_picker is None and asset_table is None:
+        return None
+    selected_identifier = ""
+    if asset_table is not None and asset_table.currentRow() >= 0:
+        item = asset_table.item(asset_table.currentRow(), 0)
+        if item is not None:
+            selected_identifier = str(item.data(Qt.UserRole) or item.text() or "").strip()
+    if not selected_identifier and asset_picker is not None:
+        selected_identifier = str(asset_picker.currentData() or "").strip()
+        if not selected_identifier and asset_picker.currentText():
+            selected_identifier = str(asset_picker.currentText() or "").strip()
+    for row in rows:
+        if str(row.get("id") or "") == selected_identifier:
+            return row
+    return rows[0] if rows else None
+
+
+def _hotfix_is_stellar_asset_blocked(self, row):
+    if not isinstance(row, dict):
+        return False
+    if bool(row.get("blocked")):
+        return True
+
+    risk_fragments = [
+        str(row.get("risk_label") or ""),
+        str(row.get("warning") or ""),
+        str(row.get("status") or ""),
+        str(row.get("tag") or ""),
+        str(row.get("tags") or ""),
+        str(row.get("labels") or ""),
+    ]
+    combined_risk_text = " ".join(fragment.strip().lower() for fragment in risk_fragments if str(fragment or "").strip())
+    if any(marker in combined_risk_text for marker in ("scam", "spam", "fraud", "phishing", "banned", "blacklist", "blacklisted", "blocked")):
+        return True
+
+    broker = getattr(self.controller, "broker", None)
+    blocked_checker = getattr(broker, "is_asset_blocked", None)
+    if not callable(blocked_checker):
+        return False
+
+    code = str(row.get("code") or "").upper().strip()
+    issuer = str(row.get("issuer") or "").strip() or None
+    try:
+        return bool(blocked_checker(code, issuer))
+    except TypeError:
+        identifier = self._stellar_asset_identifier(code, issuer)
+        return bool(blocked_checker(identifier))
+
+
+def _hotfix_stellar_asset_explorer_rows(self):
+    broker = getattr(self.controller, "broker", None)
+    asset_registry = getattr(broker, "asset_registry", {}) or {}
+    account_codes = {
+        str(code or "").upper().strip()
+        for code in (getattr(broker, "_account_asset_codes", []) or [])
+        if str(code or "").strip()
+    }
+    network_codes = {
+        str(code or "").upper().strip()
+        for code in (getattr(broker, "_network_asset_codes", []) or [])
+        if str(code or "").strip()
+    }
+
+    rows = {}
+
+    def upsert(code, issuer=None, source=None):
+        normalized_code = str(code or "").upper().strip()
+        normalized_issuer = str(issuer or "").strip()
+        if not normalized_code:
+            return
+        key = normalized_code if normalized_code == "XLM" or not normalized_issuer else f"{normalized_code}:{normalized_issuer}"
+        row = rows.setdefault(
+            key,
+            {
+                "code": normalized_code,
+                "issuer": normalized_issuer,
+                "sources": set(),
+            },
+        )
+        if normalized_issuer and not row.get("issuer"):
+            row["issuer"] = normalized_issuer
+        if source:
+            row["sources"].add(str(source))
+
+    for code, descriptor in asset_registry.items():
+        upsert(
+            getattr(descriptor, "code", code),
+            getattr(descriptor, "issuer", None),
+        )
+
+    for code in account_codes:
+        descriptor = asset_registry.get(code)
+        upsert(code, getattr(descriptor, "issuer", None), "Account")
+
+    for code in network_codes:
+        descriptor = asset_registry.get(code)
+        upsert(code, getattr(descriptor, "issuer", None), "Network")
+
+    exchange_name = str(getattr(self.controller, "exchange", "") or "").strip().lower()
+    if not rows and exchange_name == "stellar":
+        upsert("XLM", None, "Network")
+
+    is_blocked = getattr(self, "_is_stellar_asset_blocked", None)
+    if not callable(is_blocked):
+        is_blocked = lambda row: _hotfix_is_stellar_asset_blocked(self, row)
+
+    ordered_rows = []
+    for row in rows.values():
+        sources = sorted(set(row.get("sources") or []))
+        code = str(row.get("code") or "")
+        issuer = str(row.get("issuer") or "")
+        screened = code == "XLM" or code in network_codes
+        trusted = code == "XLM" or code in account_codes
+        row_payload = {
+            "id": self._stellar_asset_identifier(code, issuer),
+            "code": code,
+            "issuer": issuer,
+            "source": ", ".join(sources) if sources else "Known",
+            "url": self._stellar_expert_asset_url(code, issuer),
+            "screened": screened,
+            "trusted": trusted,
+            "needs_trustline": bool(code and code != "XLM" and not trusted),
+            "risk_label": "Screened" if screened else "Unscreened",
+        }
+        if is_blocked(row_payload):
+            continue
+        ordered_rows.append(row_payload)
+
+    ordered_rows.sort(
+        key=lambda item: (
+            0 if bool(item.get("screened")) else 1,
+            0 if "Account" in str(item.get("source") or "") else 1,
+            0 if str(item.get("code") or "") == "XLM" else 1,
+            str(item.get("code") or ""),
+            str(item.get("issuer") or ""),
+        )
     )
+    return ordered_rows
 
-    if getattr(window, "_optimization_container", None) is None:
-        container = QWidget()
-        layout = QVBoxLayout(container)
 
-        status = QLabel("Optimization workspace ready.")
-        status.setStyleSheet("color: #e6edf7; font-weight: 700;")
-        layout.addWidget(status)
+def _hotfix_merge_stellar_asset_rows(self, base_rows, extra_rows=None):
+    is_blocked = getattr(self, "_is_stellar_asset_blocked", None)
+    if not callable(is_blocked):
+        is_blocked = lambda row: _hotfix_is_stellar_asset_blocked(self, row)
+    merged_rows = {}
+    for raw_row in list(base_rows or []) + list(extra_rows or []):
+        if not isinstance(raw_row, dict):
+            continue
+        if is_blocked(raw_row):
+            continue
+        identifier = str(raw_row.get("id") or "").strip()
+        if not identifier:
+            continue
+        existing = dict(merged_rows.get(identifier) or {})
+        row = dict(raw_row)
+        source_parts = [
+            str(existing.get("source") or "").strip(),
+            str(row.get("source") or "").strip(),
+        ]
+        merged = dict(existing)
+        merged.update(row)
+        merged["source"] = ", ".join(part for part in dict.fromkeys(part for part in source_parts if part) if part)
+        merged["screened"] = bool(existing.get("screened")) or bool(row.get("screened"))
+        merged["trusted"] = bool(existing.get("trusted")) or bool(row.get("trusted"))
+        merged["needs_trustline"] = bool(
+            str(merged.get("code") or "").upper() != "XLM" and not bool(merged.get("trusted"))
+        )
+        score_value = row.get("score", existing.get("score"))
+        merged["score"] = float(score_value) if score_value not in (None, "") else None
+        roi_value = row.get("roi_pct", existing.get("roi_pct"))
+        merged["roi_pct"] = float(roi_value) if roi_value not in (None, "") else None
+        merged["roi_symbol"] = str(row.get("roi_symbol") or existing.get("roi_symbol") or "").strip()
+        merged_rows[identifier] = merged
 
-        controls = QHBoxLayout()
-        run_btn = QPushButton("Run Optimization")
-        apply_btn = QPushButton("Apply Best Params")
-        run_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_strategy_optimization()))
-        apply_btn.clicked.connect(self._apply_best_optimization_params)
-        controls.addWidget(run_btn)
-        controls.addWidget(apply_btn)
-        controls.addStretch()
-        layout.addLayout(controls)
+    ordered_rows = list(merged_rows.values())
+    ordered_rows.sort(
+        key=lambda item: (
+            0 if bool(item.get("screened")) else 1,
+            0 if bool(item.get("trusted")) else 1,
+            0 if "Directory" in str(item.get("source") or "") else 1,
+            -(float(item.get("roi_pct")) if item.get("roi_pct") not in (None, "") else -999999.0),
+            -(float(item.get("score")) if item.get("score") not in (None, "") else 0.0),
+            str(item.get("code") or ""),
+            str(item.get("issuer") or ""),
+        )
+    )
+    return ordered_rows
 
-        summary = QLabel("-")
-        summary.setWordWrap(True)
-        summary.setStyleSheet("color: #9fb0c7;")
-        layout.addWidget(summary)
 
-        table = QTableWidget()
-        table.setColumnCount(8)
-        table.setHorizontalHeaderLabels(
+async def _hotfix_load_stellar_asset_directory_page_async(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return
+
+    status = getattr(window, "_stellar_asset_status", None)
+    cursor_input = getattr(window, "_stellar_asset_directory_cursor", None)
+    broker = getattr(self.controller, "broker", None)
+    exchange_name = str(getattr(self.controller, "exchange", "") or "").strip().lower()
+    if broker is None or exchange_name != "stellar":
+        raise RuntimeError("Connect a Stellar broker before loading the asset directory.")
+    if not hasattr(broker, "fetch_asset_directory_page"):
+        raise RuntimeError("The connected broker does not support Stellar asset directory pages.")
+
+    cursor = str(cursor_input.text() or "").strip() if cursor_input is not None else ""
+    if status is not None:
+        status.setText(
+            "Loading Stellar asset directory page..."
+            + (f" cursor {cursor}." if cursor else "")
+        )
+
+    payload = await broker.fetch_asset_directory_page(cursor=cursor or None, limit=60)
+    page_rows = [dict(item) for item in list(payload.get("rows") or []) if isinstance(item, dict)]
+    existing_rows = {
+        str(row.get("id") or "").strip(): dict(row)
+        for row in list(getattr(window, "_stellar_asset_directory_rows", []) or [])
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    for row in page_rows:
+        existing_rows[str(row.get("id") or "").strip()] = dict(row)
+    window._stellar_asset_directory_rows = list(existing_rows.values())
+    window._stellar_asset_next_cursor = str(payload.get("next_cursor") or "").strip()
+
+    next_cursor = str(payload.get("next_cursor") or "").strip()
+    status_message = (
+        f"Loaded {len(page_rows)} Stellar directory assets."
+        + (f" Next cursor: {next_cursor}" if next_cursor else " Reached the end of the directory page chain.")
+    )
+    self._refresh_stellar_asset_explorer_window(window, message=status_message)
+
+
+def _hotfix_load_stellar_asset_directory_page(self, window=None):
+    async def runner():
+        try:
+            await self._load_stellar_asset_directory_page_async(window)
+        except Exception as exc:
+            if hasattr(self, "logger"):
+                self.logger.exception("Stellar asset directory load failed")
+            if hasattr(self, "system_console"):
+                self.system_console.log(f"Stellar asset directory load failed: {exc}", "ERROR")
+            self._refresh_stellar_asset_explorer_window(window, message=str(exc))
+            self._show_async_message("Stellar Asset Directory Failed", str(exc), QMessageBox.Icon.Critical)
+
+    asyncio.get_event_loop().create_task(runner())
+
+
+async def _hotfix_auto_trust_stellar_asset_by_roi_async(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return
+
+    status = getattr(window, "_stellar_asset_status", None)
+    broker = getattr(self.controller, "broker", None)
+    exchange_name = str(getattr(self.controller, "exchange", "") or "").strip().lower()
+    if broker is None or exchange_name != "stellar":
+        raise RuntimeError("Connect a Stellar broker before auto-trusting a Stellar asset.")
+    if not hasattr(broker, "create_trustline") or not hasattr(broker, "estimate_asset_roi"):
+        raise RuntimeError("The connected broker does not support ROI-based trustline selection.")
+
+    visible_rows = [dict(row) for row in list(getattr(window, "_stellar_asset_rows", []) or []) if isinstance(row, dict)]
+    is_blocked = getattr(self, "_is_stellar_asset_blocked", None)
+    if not callable(is_blocked):
+        is_blocked = lambda row: _hotfix_is_stellar_asset_blocked(self, row)
+    candidates = [
+        row
+        for row in visible_rows
+        if str(row.get("code") or "").upper() != "XLM"
+        and bool(row.get("needs_trustline"))
+        and bool(row.get("screened"))
+        and not is_blocked(row)
+    ]
+    if not candidates:
+        raise ValueError("No visible screened Stellar assets need trustlines right now.")
+
+    ranked_candidates = sorted(
+        candidates,
+        key=lambda row: (
+            -(float(row.get("score")) if row.get("score") not in (None, "") else 0.0),
+            str(row.get("code") or ""),
+        ),
+    )[:12]
+
+    if status is not None:
+        status.setText(f"Scoring {len(ranked_candidates)} Stellar assets by recent ROI...")
+
+    best_row = None
+    best_snapshot = None
+    for row in ranked_candidates:
+        identifier = self._stellar_asset_identifier(row.get("code"), row.get("issuer"))
+        snapshot = await broker.estimate_asset_roi(identifier, timeframe="1h", limit=48)
+        if not isinstance(snapshot, dict) or snapshot.get("roi_pct") is None:
+            continue
+        roi_value = float(snapshot.get("roi_pct") or 0.0)
+        row["roi_pct"] = roi_value
+        row["roi_symbol"] = str(snapshot.get("symbol") or "").strip()
+        if best_snapshot is None or roi_value > float(best_snapshot.get("roi_pct") or 0.0):
+            best_row = row
+            best_snapshot = snapshot
+
+    if best_row is None or best_snapshot is None:
+        raise RuntimeError("Unable to compute ROI for the visible Stellar assets. Load a different page or adjust the filters.")
+
+    best_roi = float(best_snapshot.get("roi_pct") or 0.0)
+    if best_roi <= 0.0:
+        raise RuntimeError("No positive-ROI Stellar asset was found among the visible screened candidates.")
+
+    identifier = self._stellar_asset_identifier(best_row.get("code"), best_row.get("issuer"))
+    if status is not None:
+        status.setText(f"Submitting trustline for best ROI asset {identifier} ({best_roi:.2f}% )...")
+
+    result = await broker.create_trustline(identifier)
+    for row in list(getattr(window, "_stellar_asset_directory_rows", []) or []):
+        if str(row.get("id") or "").strip() == identifier:
+            row["trusted"] = True
+            row["needs_trustline"] = False
+            row["roi_pct"] = best_roi
+            row["roi_symbol"] = str(best_snapshot.get("symbol") or "").strip()
+    if hasattr(self, "_refresh_markets"):
+        self._refresh_markets()
+    message = (
+        str(result.get("message") or f"Trustline submitted for {identifier}.")
+        + f" Auto-selected from ROI {best_roi:.2f}% via {str(best_snapshot.get('symbol') or identifier)}."
+    )
+    self._refresh_stellar_asset_explorer_window(window, message=message)
+    if hasattr(self, "system_console"):
+        self.system_console.log(message, "INFO")
+
+
+def _hotfix_auto_trust_stellar_asset_by_roi(self, window=None):
+    async def runner():
+        try:
+            await self._auto_trust_stellar_asset_by_roi_async(window)
+        except Exception as exc:
+            if hasattr(self, "logger"):
+                self.logger.exception("Stellar ROI trustline selection failed")
+            if hasattr(self, "system_console"):
+                self.system_console.log(f"Stellar ROI trustline selection failed: {exc}", "ERROR")
+            self._refresh_stellar_asset_explorer_window(window, message=str(exc))
+            self._show_async_message("Stellar ROI Trustline Failed", str(exc), QMessageBox.Icon.Critical)
+
+    asyncio.get_event_loop().create_task(runner())
+
+
+def _hotfix_refresh_stellar_asset_explorer_window(self, window=None, message=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return
+
+    status = getattr(window, "_stellar_asset_status", None)
+    asset_picker = getattr(window, "_stellar_asset_picker", None)
+    asset_table = getattr(window, "_stellar_asset_table", None)
+    manual_input = getattr(window, "_stellar_asset_input", None)
+    directory_cursor_input = getattr(window, "_stellar_asset_directory_cursor", None)
+    details = getattr(window, "_stellar_asset_details", None)
+    safe_filter = getattr(window, "_stellar_asset_filter_safe", None)
+    trustline_filter = getattr(window, "_stellar_asset_filter_untrusted", None)
+    trustline_btn = getattr(window, "_stellar_asset_trustline_btn", None)
+    load_directory_btn = getattr(window, "_stellar_asset_load_directory_btn", None)
+    auto_trust_btn = getattr(window, "_stellar_asset_auto_trust_btn", None)
+    if status is None or asset_picker is None or manual_input is None or details is None:
+        return
+
+    merge_rows = getattr(self, "_merge_stellar_asset_rows", None)
+    if not callable(merge_rows):
+        merge_rows = lambda base_rows, extra_rows=None: _hotfix_merge_stellar_asset_rows(self, base_rows, extra_rows)
+    rows = merge_rows(
+        self._stellar_asset_explorer_rows(),
+        getattr(window, "_stellar_asset_directory_rows", []),
+    )
+    broker = getattr(self.controller, "broker", None)
+    broker_name = str(getattr(self.controller, "exchange", "") or "Broker").strip() or "Broker"
+    selected_value = str(asset_picker.currentData() or "").strip()
+    if asset_table is not None and asset_table.currentRow() >= 0:
+        selected_item = asset_table.item(asset_table.currentRow(), 0)
+        if selected_item is not None:
+            selected_value = str(selected_item.data(Qt.UserRole) or selected_item.text() or "").strip() or selected_value
+    show_screened_only = bool(safe_filter.isChecked()) if safe_filter is not None else False
+    show_needs_trustline_only = bool(trustline_filter.isChecked()) if trustline_filter is not None else False
+    filtered_rows = []
+    for row in rows:
+        if show_screened_only and not bool(row.get("screened")):
+            continue
+        if show_needs_trustline_only and not bool(row.get("needs_trustline")):
+            continue
+        filtered_rows.append(row)
+
+    blocked = asset_picker.blockSignals(True)
+    asset_picker.clear()
+    selected_index = 0
+    for row in filtered_rows:
+        label = str(row.get("code") or "")
+        issuer = str(row.get("issuer") or "").strip()
+        source = str(row.get("source") or "").strip()
+        risk_label = str(row.get("risk_label") or "").strip()
+        roi_value = row.get("roi_pct")
+        roi_label = f"{float(roi_value):+.2f}%" if roi_value not in (None, "") else ""
+        if issuer:
+            label = f"{label} | {issuer[:12]}..."
+        if risk_label:
+            label = f"{label} [{risk_label}]"
+        if roi_label:
+            label = f"{label} ROI {roi_label}"
+        if source:
+            label = f"{label} {{{source}}}"
+        asset_picker.addItem(label, row.get("id"))
+    if selected_value:
+        for index in range(asset_picker.count()):
+            if str(asset_picker.itemData(index) or "").strip() == selected_value:
+                asset_picker.setCurrentIndex(index)
+                selected_index = index
+                break
+    elif asset_picker.count():
+        asset_picker.setCurrentIndex(0)
+    asset_picker.blockSignals(blocked)
+    window._stellar_asset_all_rows = list(rows)
+    window._stellar_asset_rows = list(filtered_rows)
+    if asset_table is not None:
+        table_blocked = asset_table.blockSignals(True)
+        asset_table.setColumnCount(7)
+        asset_table.setHorizontalHeaderLabels(
+            ["Asset", "Issuer", "Trust", "Safety", "ROI 24h", "Score", "Source"]
+        )
+        asset_table.setRowCount(len(filtered_rows))
+        selected_table_row = -1
+        for row_index, row in enumerate(filtered_rows):
+            trust_state = "Trusted" if row.get("trusted") else ("Needs trustline" if row.get("needs_trustline") else "Native")
+            roi_value = row.get("roi_pct")
+            roi_text = f"{float(roi_value):+.2f}%" if roi_value not in (None, "") else "-"
+            score_value = row.get("score")
+            score_text = f"{float(score_value):.0f}" if score_value not in (None, "") else "-"
+            values = [
+                str(row.get("code") or ""),
+                str(row.get("issuer") or ""),
+                trust_state,
+                str(row.get("risk_label") or ""),
+                roi_text,
+                score_text,
+                str(row.get("source") or ""),
+            ]
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column_index == 0:
+                    item.setData(Qt.UserRole, str(row.get("id") or ""))
+                asset_table.setItem(row_index, column_index, item)
+            if str(row.get("id") or "") == str(asset_picker.currentData() or ""):
+                selected_table_row = row_index
+        asset_table.resizeColumnsToContents()
+        asset_table.horizontalHeader().setStretchLastSection(True)
+        if selected_table_row >= 0:
+            asset_table.selectRow(selected_table_row)
+        elif filtered_rows:
+            asset_table.selectRow(0)
+        asset_table.blockSignals(table_blocked)
+
+    current_row = self._selected_stellar_asset_row(window)
+    if not str(manual_input.text() or "").strip() and current_row is not None:
+        manual_input.setText(str(current_row.get("id") or ""))
+
+    typed_row = self._parse_stellar_asset_entry(manual_input.text() if manual_input is not None else "")
+
+    if message:
+        status.setText(message)
+    elif filtered_rows:
+        imported_count = len(
             [
-                "RSI",
-                "EMA Fast",
-                "EMA Slow",
-                "ATR",
-                "Profit",
-                "Sharpe",
-                "Win Rate",
-                "Final Equity",
+                row
+                for row in filtered_rows
+                if "Directory" in str(row.get("source") or "")
             ]
         )
-        layout.addWidget(table)
+        status.setText(
+            f"Loaded {len(filtered_rows)} Stellar assets"
+            + (f" ({len(rows)} total)" if len(filtered_rows) != len(rows) else "")
+            + (f" | Directory imports: {imported_count}" if imported_count else "")
+            + ". Screened assets passed the app's Horizon liquidity/account heuristics; review issuers before trusting them."
+        )
+    else:
+        status.setText(
+            "No Stellar assets match the current filters. Connect a Stellar broker, adjust the filters, or type XLM / CODE:ISSUER manually."
+        )
+
+    quick_links = []
+    for row in filtered_rows[:24]:
+        code = html.escape(str(row.get("code") or ""))
+        issuer = str(row.get("issuer") or "").strip()
+        source = html.escape(str(row.get("source") or "Known"))
+        trust_state = "Trusted" if row.get("trusted") else ("Needs trustline" if row.get("needs_trustline") else "Native")
+        risk_label = html.escape(str(row.get("risk_label") or "Known"))
+        score_value = row.get("score")
+        roi_value = row.get("roi_pct")
+        roi_symbol = html.escape(str(row.get("roi_symbol") or "").strip())
+        metric_parts = []
+        if score_value not in (None, ""):
+            metric_parts.append(f"Score {float(score_value):.0f}")
+        if roi_value not in (None, ""):
+            roi_text = f"ROI {float(roi_value):+.2f}%"
+            if roi_symbol:
+                roi_text = f"{roi_text} via {roi_symbol}"
+            metric_parts.append(roi_text)
+        asset_label = code if not issuer else f"{code}:{html.escape(issuer)}"
+        quick_links.append(
+            f"<li><a href=\"{html.escape(str(row.get('url') or ''))}\">{asset_label}</a> "
+            f"<span style='color:#8ea3bf;'>({source} | {risk_label} | {html.escape(trust_state)}"
+            + (f" | {' | '.join(metric_parts)}" if metric_parts else "")
+            + ")</span></li>"
+        )
+
+    broker_hint = (
+        "Stellar broker connected."
+        if getattr(broker, "asset_registry", None)
+        else "Explorer shortcuts available even without a live Stellar broker."
+    )
+    directory_cursor = html.escape(str(directory_cursor_input.text() or "").strip()) if directory_cursor_input is not None else ""
+    next_cursor = html.escape(str(getattr(window, "_stellar_asset_next_cursor", "") or "").strip())
+    selected_asset_html = "<p>No asset is selected.</p>"
+    if current_row is not None:
+        selected_identifier = html.escape(str(current_row.get("id") or ""))
+        selected_source = html.escape(str(current_row.get("source") or "Known"))
+        selected_risk = html.escape(str(current_row.get("risk_label") or "Known"))
+        selected_trust = "Trusted" if current_row.get("trusted") else ("Needs trustline" if current_row.get("needs_trustline") else "Native")
+        selected_score = current_row.get("score")
+        selected_roi = current_row.get("roi_pct")
+        selected_roi_symbol = html.escape(str(current_row.get("roi_symbol") or "").strip())
+        selected_metrics = []
+        if selected_score not in (None, ""):
+            selected_metrics.append(f"Score: {float(selected_score):.0f}")
+        if selected_roi not in (None, ""):
+            selected_roi_text = f"ROI 24h: {float(selected_roi):+.2f}%"
+            if selected_roi_symbol:
+                selected_roi_text = f"{selected_roi_text} via {selected_roi_symbol}"
+            selected_metrics.append(selected_roi_text)
+        selected_asset_html = "".join(
+            [
+                "<div style='padding:10px; border:1px solid #24344f; border-radius:8px; background:#101a2d;'>",
+                f"<b>{selected_identifier}</b><br/>",
+                f"<span style='color:#8ea3bf;'>Source: {selected_source} | Safety: {selected_risk} | Trust: {html.escape(selected_trust)}</span>",
+                f"<br/><span style='color:#8ea3bf;'>{' | '.join(selected_metrics)}</span>" if selected_metrics else "",
+                "</div>",
+            ]
+        )
+    typed_asset_html = ""
+    if typed_row is not None and not bool(typed_row.get("screened")):
+        typed_asset_html = (
+            "<p style='color:#f6c177;'><b>Manual asset:</b> typed assets are unverified by the app. "
+            "Confirm the issuer before opening a trustline.</p>"
+        )
+    details_sections = [
+        "<h2>Stellar Asset Explorer</h2>",
+        "<p>Filter for screened assets, review trust status, open public asset pages from <b>stellar.expert</b>, and add trustlines before trading.</p>",
+        "<p><a href=\"https://stellar.expert/explorer/public/asset\">Open Asset Directory</a></p>",
+        f"<p>{html.escape(broker_hint)} Broker: <b>{html.escape(broker_name.upper())}</b></p>",
+    ]
+    if directory_cursor or next_cursor:
+        details_sections.append(
+            f"<p style='color:#8ea3bf;'>Directory cursor: <code>{directory_cursor or 'first page'}</code>"
+            + (f" | Next cursor: <code>{next_cursor}</code>" if next_cursor else "")
+            + "</p>"
+        )
+    details_sections.extend(
+        [
+            "<p style='color:#8ea3bf;'>Screened means the asset passed the app's Horizon-based activity and liquidity checks. It is safer than unverified listings, but not a guarantee.</p>",
+            "<h3>Selected Asset</h3>",
+            selected_asset_html,
+            typed_asset_html,
+            "<h3>Quick Links</h3>",
+            (
+                f"<ul>{''.join(quick_links)}</ul>"
+                if quick_links
+                else "<p>No broker asset registry is available yet. Use the text field above with values like <code>XLM</code> or <code>USDC:G...</code>.</p>"
+            ),
+        ]
+    )
+    details.setHtml("".join(details_sections))
+    if trustline_btn is not None:
+        broker_ready = str(getattr(self.controller, "exchange", "") or "").strip().lower() == "stellar" and hasattr(broker, "create_trustline")
+        trust_target = typed_row if typed_row is not None else current_row
+        can_trust = bool(
+            broker_ready
+            and trust_target is not None
+            and str(trust_target.get("code") or "").upper() != "XLM"
+            and (bool(trust_target.get("needs_trustline")) or typed_row is not None)
+        )
+        trustline_btn.setEnabled(can_trust)
+        if not broker_ready:
+            trustline_btn.setToolTip("Connect a Stellar broker with a secret seed to add trustlines.")
+        elif trust_target is None:
+            trustline_btn.setToolTip("Select a Stellar asset or type CODE:ISSUER to open a trustline.")
+        elif str(trust_target.get("code") or "").upper() == "XLM":
+            trustline_btn.setToolTip("XLM is native and does not need a trustline.")
+        elif not bool(trust_target.get("needs_trustline")) and typed_row is None:
+            trustline_btn.setToolTip("This asset already has a trustline.")
+        else:
+            trustline_btn.setToolTip("Submit a Stellar trustline transaction for the selected asset.")
+    if load_directory_btn is not None:
+        can_load_directory = str(getattr(self.controller, "exchange", "") or "").strip().lower() == "stellar" and hasattr(broker, "fetch_asset_directory_page")
+        load_directory_btn.setEnabled(can_load_directory)
+        if not can_load_directory:
+            load_directory_btn.setToolTip("Connect a Stellar broker to load an asset directory page.")
+        else:
+            load_directory_btn.setToolTip("Load a page of additional Stellar assets from the directory feed.")
+    if auto_trust_btn is not None:
+        can_auto_trust = bool(
+            str(getattr(self.controller, "exchange", "") or "").strip().lower() == "stellar"
+            and hasattr(broker, "create_trustline")
+            and hasattr(broker, "estimate_asset_roi")
+            and any(
+                str(row.get("code") or "").upper() != "XLM"
+                and bool(row.get("needs_trustline"))
+                and bool(row.get("screened"))
+                for row in filtered_rows
+            )
+        )
+        auto_trust_btn.setEnabled(can_auto_trust)
+        if not can_auto_trust:
+            auto_trust_btn.setToolTip("Show at least one screened Stellar asset that still needs a trustline to auto-select by ROI.")
+        else:
+            auto_trust_btn.setToolTip("Compute recent ROI for the visible screened assets and trust the best positive candidate automatically.")
+
+
+def _hotfix_open_selected_stellar_asset(self, window=None, typed=False):
+    """Open selected or typed Stellar asset in external explorer.
+
+    window: Stellar asset explorer dock window instance.
+    typed: If True, use typed code/issuer in input box instead of row selection.
+    """
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return
+
+    status = cast(Optional[QLabel], getattr(window, "_stellar_asset_status", None))
+    asset_picker = cast(Optional[QComboBox], getattr(window, "_stellar_asset_picker", None))
+    manual_input = cast(Optional[QLineEdit], getattr(window, "_stellar_asset_input", None))
+
+    url = "https://stellar.expert/explorer/public/asset"
+    if typed:
+        parsed = self._parse_stellar_asset_entry(manual_input.text() if manual_input is not None else "")
+        if parsed is None:
+            if status is not None:
+                status.setText("Type XLM or CODE:ISSUER before opening a Stellar asset page.")
+            return
+        url = str(parsed.get("url") or url)
+    else:
+        row = self._selected_stellar_asset_row(window)
+        if row is not None:
+            url = str(row.get("url") or "").strip() or url
+
+    QDesktopServices.openUrl(QUrl(url))
+    if status is not None:
+        status.setText(f"Opened {url}")
+
+
+async def _hotfix_open_stellar_asset_trustline_async(self, window=None):
+    """Request a Stellar trustline for selected or typed asset from explorer."""
+    window = window or getattr(self, "detached_tool_windows", {}).get("stellar_asset_explorer")
+    if window is None:
+        return
+
+    status = cast(Optional[QLabel], getattr(window, "_stellar_asset_status", None))
+    manual_input = cast(Optional[QLineEdit], getattr(window, "_stellar_asset_input", None))
+    broker = getattr(self.controller, "broker", None)
+    if broker is None or str(getattr(self.controller, "exchange", "") or "").strip().lower() != "stellar":
+        raise RuntimeError("Connect a Stellar broker before opening a trustline.")
+    if not hasattr(broker, "create_trustline"):
+        raise RuntimeError("The connected broker does not support Stellar trustlines.")
+
+    typed_row = self._parse_stellar_asset_entry(manual_input.text() if manual_input is not None else "")
+    row = typed_row if typed_row is not None else self._selected_stellar_asset_row(window)
+    if row is None:
+        raise ValueError("Select a Stellar asset or type CODE:ISSUER before opening a trustline.")
+    if str(row.get("code") or "").upper() == "XLM":
+        message = "XLM is native and does not require a trustline."
+        if status is not None:
+            status.setText(message)
+        return
+
+    identifier = self._stellar_asset_identifier(row.get("code"), row.get("issuer"))
+    if status is not None:
+        status.setText(f"Submitting trustline for {identifier}...")
+    result = await broker.create_trustline(identifier)
+    if hasattr(self, "_refresh_markets"):
+        self._refresh_markets()
+    self._refresh_stellar_asset_explorer_window(
+        window,
+        message=str(result.get("message") or f"Trustline submitted for {identifier}."),
+    )
+    if hasattr(self, "system_console"):
+        self.system_console.log(
+            str(result.get("message") or f"Trustline submitted for {identifier}."),
+            "INFO",
+        )
+
+
+def _hotfix_open_stellar_asset_trustline(self, window=None):
+    """Fire-and-forget wrapper for async Stellar trustline request with error handling."""
+    async def runner():
+        try:
+            await self._open_stellar_asset_trustline_async(window)
+        except Exception as exc:
+            if hasattr(self, "logger"):
+                self.logger.exception("Stellar trustline request failed")
+            if hasattr(self, "system_console"):
+                self.system_console.log(f"Trustline request failed: {exc}", "ERROR")
+            self._refresh_stellar_asset_explorer_window(window, message=str(exc))
+            self._show_async_message("Stellar Trustline Failed", str(exc), QMessageBox.Icon.Critical)
+
+    asyncio.get_event_loop().create_task(runner())
+
+
+def _hotfix_open_stellar_asset_explorer_window(self):
+    window = self._get_or_create_tool_window(
+        "stellar_asset_explorer",
+        "Stellar Asset Explorer",
+        width=980,
+        height=700,
+    )
+
+    if getattr(window, "_stellar_asset_container", None) is None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        status = QLabel("Loading Stellar asset shortcuts.")
+        status.setWordWrap(True)
+        status.setStyleSheet(
+            "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; padding: 10px; border-radius: 8px;"
+        )
+        layout.addWidget(status)
+
+        controls = QFrame()
+        controls.setStyleSheet(
+            "QFrame { background-color: #0f1727; border: 1px solid #24344f; border-radius: 10px; }"
+            "QLabel { color: #d7dfeb; font-weight: 700; }"
+            "QComboBox, QLineEdit { background-color: #0b1220; color: #f4f8ff; border: 1px solid #2a3d5c; border-radius: 6px; padding: 6px 10px; min-width: 180px; }"
+        )
+        controls_layout = QGridLayout(controls)
+        controls_layout.setContentsMargins(14, 12, 14, 12)
+        controls_layout.setHorizontalSpacing(16)
+        controls_layout.setVerticalSpacing(8)
+
+        asset_picker = QComboBox()
+        manual_input = QLineEdit()
+        manual_input.setPlaceholderText("XLM or CODE:ISSUER")
+        directory_cursor_input = QLineEdit()
+        directory_cursor_input.setPlaceholderText("Directory cursor (optional)")
+        safe_filter = QCheckBox("Show only screened assets")
+        safe_filter.setChecked(True)
+        trustline_filter = QCheckBox("Only assets that need trustlines")
+        open_selected_btn = QPushButton("Open Selected Asset")
+        open_typed_btn = QPushButton("Open Typed Asset")
+        open_trustline_btn = QPushButton("Open Trustline")
+        open_directory_btn = QPushButton("Open Asset Directory")
+        load_directory_btn = QPushButton("Load Directory Page")
+        auto_trust_btn = QPushButton("Trust Best ROI")
+        refresh_btn = QPushButton("Refresh Asset List")
+
+        open_selected_btn.clicked.connect(lambda: self._open_selected_stellar_asset(window))
+        open_typed_btn.clicked.connect(lambda: self._open_selected_stellar_asset(window, typed=True))
+        open_trustline_btn.clicked.connect(lambda: self._open_stellar_asset_trustline(window))
+        open_directory_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://stellar.expert/explorer/public/asset"))
+        )
+        load_directory_btn.clicked.connect(lambda: self._load_stellar_asset_directory_page(window))
+        auto_trust_btn.clicked.connect(lambda: self._auto_trust_stellar_asset_by_roi(window))
+        refresh_btn.clicked.connect(lambda: self._refresh_stellar_asset_explorer_window(window))
+
+        controls_layout.addWidget(QLabel("Known Asset"), 0, 0)
+        controls_layout.addWidget(asset_picker, 0, 1, 1, 3)
+        controls_layout.addWidget(QLabel("Manual Asset"), 1, 0)
+        controls_layout.addWidget(manual_input, 1, 1, 1, 3)
+        controls_layout.addWidget(QLabel("Directory Cursor"), 2, 0)
+        controls_layout.addWidget(directory_cursor_input, 2, 1, 1, 2)
+        controls_layout.addWidget(load_directory_btn, 2, 3)
+        controls_layout.addWidget(safe_filter, 3, 0, 1, 2)
+        controls_layout.addWidget(trustline_filter, 3, 2, 1, 2)
+        controls_layout.addWidget(open_selected_btn, 4, 0)
+        controls_layout.addWidget(open_typed_btn, 4, 1)
+        controls_layout.addWidget(open_trustline_btn, 4, 2)
+        controls_layout.addWidget(auto_trust_btn, 4, 3)
+        controls_layout.addWidget(open_directory_btn, 5, 0, 1, 2)
+        controls_layout.addWidget(refresh_btn, 5, 2, 1, 2)
+        layout.addWidget(controls)
+
+        asset_table = QTableWidget()
+        asset_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        asset_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        asset_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        asset_table.verticalHeader().setVisible(False)
+        asset_table.setAlternatingRowColors(True)
+        layout.addWidget(asset_table)
+
+        details = QTextBrowser()
+        details.setOpenExternalLinks(True)
+        details.setStyleSheet(
+            "QTextBrowser { background-color: #0b1220; color: #d7dfeb; border: 1px solid #24344f; border-radius: 10px; padding: 10px; }"
+        )
+        layout.addWidget(details, 1)
 
         window.setCentralWidget(container)
-        window._optimization_container = container
-        window._optimization_status = status
-        window._optimization_summary = summary
-        window._optimization_table = table
-        window._optimization_run_btn = run_btn
-        window._optimization_apply_btn = apply_btn
+        window._stellar_asset_container = container
+        window._stellar_asset_status = status
+        window._stellar_asset_picker = asset_picker
+        window._stellar_asset_input = manual_input
+        window._stellar_asset_directory_cursor = directory_cursor_input
+        window._stellar_asset_table = asset_table
+        window._stellar_asset_details = details
+        window._stellar_asset_filter_safe = safe_filter
+        window._stellar_asset_filter_untrusted = trustline_filter
+        window._stellar_asset_trustline_btn = open_trustline_btn
+        window._stellar_asset_load_directory_btn = load_directory_btn
+        window._stellar_asset_auto_trust_btn = auto_trust_btn
+        window._stellar_asset_directory_rows = []
+        window._stellar_asset_next_cursor = ""
+        window._stellar_asset_rows = []
 
-    self._refresh_optimization_window(window)
+        asset_picker.currentIndexChanged.connect(
+            lambda _idx: self._refresh_stellar_asset_explorer_window(window)
+        )
+        asset_table.itemSelectionChanged.connect(lambda: self._refresh_stellar_asset_explorer_window(window))
+        manual_input.textChanged.connect(lambda _text: self._refresh_stellar_asset_explorer_window(window))
+        safe_filter.toggled.connect(lambda _checked: self._refresh_stellar_asset_explorer_window(window))
+        trustline_filter.toggled.connect(lambda _checked: self._refresh_stellar_asset_explorer_window(window))
+
+    self._refresh_stellar_asset_explorer_window(window)
     window.show()
     window.raise_()
     window.activateWindow()
@@ -5612,67 +11251,15 @@ def _hotfix_show_optimization_window(self):
 
 
 def _hotfix_refresh_optimization_window(self, window=None, message=None):
-    window = window or self.detached_tool_windows.get("strategy_optimization")
-    if window is None:
-        return
+    refresh_optimization_window(self, window=window, message=message)
 
-    status = getattr(window, "_optimization_status", None)
-    summary = getattr(window, "_optimization_summary", None)
-    table = getattr(window, "_optimization_table", None)
-    run_btn = getattr(window, "_optimization_run_btn", None)
-    apply_btn = getattr(window, "_optimization_apply_btn", None)
-    if status is None or summary is None or table is None:
-        return
 
-    context = getattr(self, "_optimization_context", {}) or {}
-    symbol = context.get("symbol", "-")
-    timeframe = context.get("timeframe", "-")
-    strategy_name = context.get("strategy_name", None) or getattr(self.controller, "strategy_name", None) or getattr(getattr(self.controller, "config", None), "strategy", "Trend Following")
-    dataset = context.get("data")
-    candle_count = len(dataset) if hasattr(dataset, "__len__") else 0
+def _hotfix_refresh_optimization_selectors(self, window=None):
+    refresh_optimization_selectors(self, window=window)
 
-    if message is not None:
-        self._optimization_status_message = message
 
-    running = bool(getattr(self, "_optimization_running", False))
-    status_message = getattr(self, "_optimization_status_message", None)
-    status.setText(status_message or ("Optimization running..." if running else "Optimization workspace ready."))
-    summary.setText(f"Symbol: {symbol} | Timeframe: {timeframe} | Strategy: {strategy_name} | Candles: {candle_count}")
-    if run_btn is not None:
-        run_btn.setEnabled(not running)
-        run_btn.setText("Running..." if running else "Run Optimization")
-    if apply_btn is not None:
-        apply_btn.setEnabled((not running) and isinstance(getattr(self, "optimization_best", None), dict))
-
-    results = getattr(self, "optimization_results", None)
-    if results is None or getattr(results, "empty", True):
-        table.setRowCount(0)
-        return
-
-    display = results.head(25).reset_index(drop=True)
-    table.setRowCount(len(display))
-
-    columns = [
-        ("rsi_period", "{:g}"),
-        ("ema_fast", "{:g}"),
-        ("ema_slow", "{:g}"),
-        ("atr_period", "{:g}"),
-        ("total_profit", "{:.2f}"),
-        ("sharpe_ratio", "{:.3f}"),
-        ("win_rate", "{:.2%}"),
-        ("final_equity", "{:.2f}"),
-    ]
-
-    for row_idx, (_, row) in enumerate(display.iterrows()):
-        for col_idx, (column, fmt) in enumerate(columns):
-            value = row.get(column, "")
-            try:
-                text = fmt.format(float(value))
-            except Exception:
-                text = str(value)
-            table.setItem(row_idx, col_idx, QTableWidgetItem(text))
-
-    table.resizeColumnsToContents()
+def _hotfix_optimization_selection_changed(self):
+    optimization_selection_changed(self)
 
 
 async def _hotfix_run_strategy_optimization(self):
@@ -5684,7 +11271,13 @@ async def _hotfix_run_strategy_optimization(self):
     try:
         from backtesting.optimizer import StrategyOptimizer
 
-        context = await _hotfix_prepare_backtest_context(self)
+        self._show_optimization_window()
+        context = await _hotfix_prepare_backtest_context_with_selection(
+            self,
+            symbol=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_symbol_picker", None), "currentText", lambda: "")()).strip() or None,
+            timeframe=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_timeframe_picker", None), "currentText", lambda: "")()).strip() or None,
+            strategy_name=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_strategy_picker", None), "currentText", lambda: "")()).strip() or None,
+        )
         data = candles_to_df(context.get("data"))
         if data is None or not hasattr(data, "__len__") or len(data) == 0:
             raise RuntimeError("No historical data available for optimization")
@@ -5694,8 +11287,10 @@ async def _hotfix_run_strategy_optimization(self):
             initial_balance=getattr(self.controller, "initial_capital", 10000),
         )
         self._optimization_running = True
+        self._optimization_mode = "param"
         self._optimization_status_message = "Optimization running..."
         self._optimization_context = context
+        _hotfix_refresh_optimization_selectors(self)
         self._show_optimization_window()
         self._refresh_optimization_window(message="Optimization running...")
         await asyncio.sleep(0)
@@ -5706,6 +11301,8 @@ async def _hotfix_run_strategy_optimization(self):
             context["symbol"],
             context.get("strategy_name"),
         )
+        self.strategy_ranking_results = None
+        self.strategy_ranking_best = None
         self.optimization_best = None
         if self.optimization_results is not None and not self.optimization_results.empty:
             self.optimization_best = self.optimization_results.iloc[0].to_dict()
@@ -5725,58 +11322,1436 @@ async def _hotfix_run_strategy_optimization(self):
         self._refresh_optimization_window()
 
 
-def _hotfix_apply_best_optimization_params(self):
+async def _hotfix_run_strategy_ranking(self):
+    if getattr(self, "_optimization_running", False):
+        self._show_optimization_window()
+        self._refresh_optimization_window(message="Optimization is already running.")
+        return
+
     try:
-        best = getattr(self, "optimization_best", None)
-        if not isinstance(best, dict):
-            raise RuntimeError("Run optimization before applying parameters")
+        from backtesting.strategy_ranker import StrategyRanker
 
-        context = getattr(self, "_optimization_context", {}) or {}
-        strategy_source = context.get("strategy")
-        strategy_name = context.get("strategy_name")
+        self._show_optimization_window()
+        context = await _hotfix_prepare_backtest_context_with_selection(
+            self,
+            symbol=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_symbol_picker", None), "currentText", lambda: "")()).strip() or None,
+            timeframe=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_timeframe_picker", None), "currentText", lambda: "")()).strip() or None,
+            strategy_name=str(getattr(getattr(self.detached_tool_windows.get("strategy_optimization"), "_optimization_strategy_picker", None), "currentText", lambda: "")()).strip() or None,
+        )
+        data = candles_to_df(context.get("data"))
+        if data is None or not hasattr(data, "__len__") or len(data) == 0:
+            raise RuntimeError("No historical data available for strategy ranking")
 
-        if strategy_source is None:
-            raise RuntimeError("No strategy context available")
+        ranker = StrategyRanker(
+            strategy_registry=context["strategy"],
+            initial_balance=getattr(self.controller, "initial_capital", 10000),
+        )
+        self._optimization_running = True
+        self._optimization_mode = "ranking"
+        self._optimization_status_message = "Ranking all strategies..."
+        self._optimization_context = context
+        _hotfix_refresh_optimization_selectors(self)
+        self._show_optimization_window()
+        self._refresh_optimization_window(message="Ranking all strategies...")
+        await asyncio.sleep(0)
 
-        if hasattr(strategy_source, "_resolve_strategy"):
-            target = strategy_source._resolve_strategy(strategy_name)
-        else:
-            target = strategy_source
+        self.strategy_ranking_results = await asyncio.to_thread(
+            ranker.rank,
+            data,
+            context["symbol"],
+            context.get("timeframe"),
+            list(getattr(context["strategy"], "list", lambda: [])()),
+        )
+        self.strategy_ranking_best = None
+        if self.strategy_ranking_results is not None and not self.strategy_ranking_results.empty:
+            self.strategy_ranking_best = self.strategy_ranking_results.iloc[0].to_dict()
 
-        applied = []
-        for key in ["rsi_period", "ema_fast", "ema_slow", "atr_period"]:
-            if key in best and hasattr(target, key):
-                setattr(target, key, int(best[key]))
-                applied.append(f"{key}={int(best[key])}")
-
-        strategy_params = dict(getattr(self.controller, "strategy_params", {}) or {})
-        for key in ["rsi_period", "ema_fast", "ema_slow", "atr_period"]:
-            if key in best:
-                strategy_params[key] = int(best[key])
-        self.controller.strategy_params = strategy_params
-        self.settings.setValue("strategy/rsi_period", strategy_params.get("rsi_period", 14))
-        self.settings.setValue("strategy/ema_fast", strategy_params.get("ema_fast", 20))
-        self.settings.setValue("strategy/ema_slow", strategy_params.get("ema_slow", 50))
-        self.settings.setValue("strategy/atr_period", strategy_params.get("atr_period", 14))
-
-        if not applied:
-            raise RuntimeError("No compatible strategy parameters were available to apply")
-
-        self.system_console.log(f"Applied optimized params: {', '.join(applied)}", "INFO")
-        self._refresh_optimization_window(message="Applied best optimization parameters.")
+        self.system_console.log("Strategy ranking completed.", "INFO")
+        self._optimization_status_message = "Strategy ranking completed."
+        self._show_optimization_window()
+        self._refresh_optimization_window(message="Strategy ranking completed.")
 
     except Exception as e:
-        self.system_console.log(f"Apply optimization failed: {e}", "ERROR")
-        self._refresh_optimization_window(message=f"Apply optimization failed: {e}")
+        self.system_console.log(f"Strategy ranking failed: {e}", "ERROR")
+        self._optimization_status_message = f"Strategy ranking failed: {e}"
+        self._show_optimization_window()
+        self._refresh_optimization_window(message=f"Strategy ranking failed: {e}")
+    finally:
+        self._optimization_running = False
+        self._refresh_optimization_window()
+
+
+def _hotfix_assign_ranked_strategies_to_symbol(self):
+    try:
+        lock_message = _hotfix_strategy_assignment_lock_message(self)
+        if lock_message:
+            raise RuntimeError(lock_message)
+
+        results = getattr(self, "strategy_ranking_results", None)
+        if results is None or getattr(results, "empty", True):
+            raise RuntimeError("Run strategy ranking before assigning strategies to a symbol")
+
+        window = getattr(self, "detached_tool_windows", {}).get("strategy_optimization")
+        assign_count = getattr(window, "_optimization_assign_count", None) if window is not None else None
+        top_n = int(assign_count.value()) if assign_count is not None else int(getattr(self.controller, "max_symbol_strategies", 3) or 3)
+        context = getattr(self, "_optimization_context", {}) or {}
+        symbol = str(context.get("symbol") or "").strip()
+        if not symbol:
+            raise RuntimeError("No symbol selected for strategy assignment")
+
+        timeframe = str(context.get("timeframe") or "").strip()
+        self.controller.multi_strategy_enabled = True
+        assigned = self.controller.assign_ranked_strategies_to_symbol(
+            symbol,
+            results.to_dict("records"),
+            top_n=top_n,
+            timeframe=timeframe,
+        )
+        assigned_names = ", ".join(str(item.get("strategy_name") or "").strip() for item in assigned)
+        self.system_console.log(f"Assigned top {len(assigned)} strategies to {symbol}: {assigned_names}", "INFO")
+        self._refresh_optimization_window(message=f"Assigned top {len(assigned)} strategies to {symbol}.")
+    except Exception as e:
+        self.system_console.log(f"Strategy assignment failed: {e}", "ERROR")
+        self._refresh_optimization_window(message=f"Strategy assignment failed: {e}")
+
+
+def _hotfix_apply_best_optimization_params(self):
+    apply_best_optimization_params(self)
 
 
 def _hotfix_optimize_strategy(self):
-    self._show_optimization_window()
-    task_factory = getattr(self.controller, "_create_task", None)
-    if callable(task_factory):
-        task_factory(self._run_strategy_optimization(), "strategy_optimization")
+    optimize_strategy(self)
+
+
+def _hotfix_strategy_assignment_auto_status(self):
+    controller = getattr(self, "controller", None)
+    resolver = getattr(controller, "strategy_auto_assignment_status", None) if controller is not None else None
+    if callable(resolver):
+        try:
+            status = dict(resolver() or {})
+        except Exception:
+            status = {}
+    else:
+        enabled = bool(getattr(controller, "strategy_auto_assignment_enabled", False)) if controller is not None else False
+        status = {
+            "enabled": enabled,
+            "ready": not enabled or bool(getattr(controller, "strategy_auto_assignment_ready", False)),
+            "running": bool(getattr(controller, "strategy_auto_assignment_in_progress", False)) if controller is not None else False,
+            "completed": 0,
+            "total": 0,
+            "current_symbol": "",
+            "message": "",
+        }
+    return status
+
+
+def _hotfix_strategy_assignment_lock_message(self):
+    status = _hotfix_strategy_assignment_auto_status(self)
+    enabled = bool(status.get("enabled", False))
+    ready = bool(status.get("ready", not enabled))
+    if (not enabled) or ready:
+        return ""
+
+    custom_message = str(status.get("message") or "").strip()
+    if custom_message:
+        return custom_message
+
+    completed = int(status.get("completed", 0) or 0)
+    total = int(status.get("total", 0) or 0)
+    current_symbol = str(status.get("current_symbol") or "").strip()
+    if total > 0:
+        suffix = f" Current symbol: {current_symbol}." if current_symbol else ""
+        return f"Automatic strategy assignment is still scanning symbols ({completed}/{total}).{suffix}"
+    return "Automatic strategy assignment is still scanning symbols."
+
+
+def _hotfix_strategy_assignment_mode_label(mode):
+    normalized = str(mode or "").strip().lower()
+    if normalized == "single":
+        return "Assigned Strategy"
+    if normalized == "ranked":
+        return "Ranked Mix"
+    return "Default Strategy"
+
+
+def _hotfix_strategy_assignment_rows(self):
+    controller = getattr(self, "controller", None)
+    if controller is None:
+        return []
+
+    symbols = []
+    for source in (
+        getattr(controller, "symbols", []) or [],
+        list(getattr(controller, "symbol_strategy_assignments", {}).keys()),
+        list(getattr(controller, "symbol_strategy_rankings", {}).keys()),
+        [self._current_chart_symbol()] if hasattr(self, "_current_chart_symbol") else [],
+    ):
+        for symbol in list(source or []):
+            normalized = str(symbol or "").strip().upper().replace("-", "/").replace("_", "/")
+            if normalized and normalized not in symbols:
+                symbols.append(normalized)
+
+    rows = []
+    state_resolver = getattr(controller, "strategy_assignment_state_for_symbol", None)
+    default_strategy = str(getattr(controller, "strategy_name", "Trend Following") or "Trend Following").strip()
+    default_timeframe = str(getattr(self, "current_timeframe", getattr(controller, "time_frame", "1h")) or "1h").strip()
+    for symbol in symbols:
+        state = state_resolver(symbol) if callable(state_resolver) else {}
+        explicit_rows = list(state.get("explicit_rows", []) or [])
+        active_rows = list(state.get("active_rows", []) or [])
+        ranked_rows = list(state.get("ranked_rows", []) or [])
+        mode = str(state.get("mode") or "default").strip().lower()
+        timeframe = str(
+            (explicit_rows[0].get("timeframe") if explicit_rows else "")
+            or (active_rows[0].get("timeframe") if active_rows else "")
+            or default_timeframe
+        ).strip() or default_timeframe
+        if active_rows:
+            strategy_text = ", ".join(
+                str(item.get("strategy_name") or "").strip()
+                for item in active_rows[:3]
+                if str(item.get("strategy_name") or "").strip()
+            )
+            if len(active_rows) > 3:
+                strategy_text = f"{strategy_text}, +{len(active_rows) - 3} more"
+        else:
+            strategy_text = default_strategy
+        rows.append(
+            {
+                "symbol": symbol,
+                "mode": _hotfix_strategy_assignment_mode_label(mode),
+                "strategies": strategy_text or default_strategy,
+                "timeframe": timeframe,
+                "ranked_count": len(ranked_rows),
+                "active_count": len(active_rows),
+            }
+        )
+    return rows
+
+
+def _hotfix_refresh_strategy_assignment_window(self, window=None, message=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None:
         return
-    asyncio.get_event_loop().create_task(self._run_strategy_optimization())
+
+    status = getattr(window, "_strategy_assignment_status", None)
+    summary = getattr(window, "_strategy_assignment_summary", None)
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    strategy_picker = getattr(window, "_strategy_assignment_strategy_picker", None)
+    timeframe_picker = getattr(window, "_strategy_assignment_timeframe_picker", None)
+    top_n = getattr(window, "_strategy_assignment_top_n", None)
+    table = getattr(window, "_strategy_assignment_table", None)
+    agent_status = getattr(window, "_strategy_assignment_agent_status", None)
+    agent_table = getattr(window, "_strategy_assignment_agent_table", None)
+    if any(part is None for part in (status, summary, symbol_picker, strategy_picker, timeframe_picker, top_n, table)):
+        return
+
+    controller = getattr(self, "controller", None)
+    if controller is None:
+        return
+
+    auto_status = _hotfix_strategy_assignment_auto_status(self)
+    lock_message = _hotfix_strategy_assignment_lock_message(self)
+    edits_locked = bool(lock_message)
+
+    rows = _hotfix_strategy_assignment_rows(self)
+    selected_symbol = str(
+        getattr(window, "_strategy_assignment_selected_symbol", "")
+        or symbol_picker.currentText()
+        or (rows[0]["symbol"] if rows else "")
+    ).strip()
+    state_resolver = getattr(controller, "strategy_assignment_state_for_symbol", None)
+    state = state_resolver(selected_symbol) if callable(state_resolver) and selected_symbol else {}
+    explicit_rows = list(state.get("explicit_rows", []) or [])
+    active_rows = list(state.get("active_rows", []) or [])
+    ranked_rows = list(state.get("ranked_rows", []) or [])
+    default_strategy = str(getattr(controller, "strategy_name", "Trend Following") or "Trend Following").strip()
+    selected_strategy = str(
+        (explicit_rows[0].get("strategy_name") if explicit_rows else "")
+        or (active_rows[0].get("strategy_name") if active_rows else "")
+        or default_strategy
+    ).strip()
+    selected_timeframe = str(
+        (explicit_rows[0].get("timeframe") if explicit_rows else "")
+        or (active_rows[0].get("timeframe") if active_rows else "")
+        or getattr(self, "current_timeframe", getattr(controller, "time_frame", "1h"))
+    ).strip()
+
+    setattr(self, "_strategy_assignment_bootstrapping", True)
+    try:
+        current_symbols = [row["symbol"] for row in rows]
+        blocked = symbol_picker.blockSignals(True)
+        symbol_picker.clear()
+        for symbol in current_symbols:
+            symbol_picker.addItem(symbol)
+        if selected_symbol and symbol_picker.findText(selected_symbol) < 0:
+            symbol_picker.addItem(selected_symbol)
+        if selected_symbol:
+            symbol_picker.setCurrentText(selected_symbol)
+        symbol_picker.blockSignals(blocked)
+
+        self._populate_strategy_picker(strategy_picker, selected_strategy=selected_strategy)
+
+        timeframe_candidates = _hotfix_backtest_timeframe_candidates(self)
+        blocked = timeframe_picker.blockSignals(True)
+        timeframe_picker.clear()
+        for timeframe in timeframe_candidates:
+            timeframe_picker.addItem(timeframe)
+        if selected_timeframe and timeframe_picker.findText(selected_timeframe) < 0:
+            timeframe_picker.addItem(selected_timeframe)
+        if selected_timeframe:
+            timeframe_picker.setCurrentText(selected_timeframe)
+        timeframe_picker.blockSignals(blocked)
+
+        top_n.setValue(max(1, min(10, len(explicit_rows) if len(explicit_rows) > 1 else int(getattr(controller, "max_symbol_strategies", 3) or 3))))
+    finally:
+        setattr(self, "_strategy_assignment_bootstrapping", False)
+
+    window._strategy_assignment_selected_symbol = selected_symbol
+    status.setText(message or lock_message or "Assign a symbol to the default strategy, one strategy, or a ranked mix.")
+
+    mode_label = _hotfix_strategy_assignment_mode_label(state.get("mode"))
+    active_text = ", ".join(
+        str(item.get("strategy_name") or "").strip()
+        for item in active_rows[:3]
+        if str(item.get("strategy_name") or "").strip()
+    ) or default_strategy
+    if len(active_rows) > 3:
+        active_text = f"{active_text}, +{len(active_rows) - 3} more"
+    decision_chain_resolver = getattr(controller, "latest_agent_decision_chain_for_symbol", None)
+    decision_overview_resolver = getattr(controller, "latest_agent_decision_overview_for_symbol", None)
+    decision_chain = []
+    if callable(decision_chain_resolver) and selected_symbol:
+        try:
+            decision_chain = list(decision_chain_resolver(selected_symbol, limit=12) or [])
+        except Exception:
+            decision_chain = []
+    decision_overview = {}
+    if callable(decision_overview_resolver) and selected_symbol:
+        try:
+            decision_overview = dict(decision_overview_resolver(selected_symbol) or {})
+        except Exception:
+            decision_overview = {}
+
+    auto_suffix = ""
+    if bool(auto_status.get("enabled", False)):
+        if edits_locked:
+            completed = int(auto_status.get("completed", 0) or 0)
+            total = int(auto_status.get("total", 0) or 0)
+            auto_suffix = f" | Auto Scan: {completed}/{total}"
+        else:
+            auto_suffix = " | Auto Scan: Ready"
+    agent_suffix = f" | Agent Steps: {len(decision_chain)}"
+    agent_best_strategy = str(decision_overview.get("strategy_name") or "").strip()
+    agent_best_timeframe = str(decision_overview.get("timeframe") or "").strip()
+    if agent_best_strategy:
+        label = f"{agent_best_strategy} ({agent_best_timeframe or '-'})"
+        agent_suffix = f"{agent_suffix} | Agent Best: {label}"
+    adaptive_profiles = []
+    adaptive_profiles_resolver = getattr(controller, "adaptive_strategy_profiles_for_symbol", None)
+    if callable(adaptive_profiles_resolver) and selected_symbol:
+        try:
+            adaptive_profiles = [
+                dict(item)
+                for item in (adaptive_profiles_resolver(selected_symbol) or [])
+                if isinstance(item, dict)
+            ]
+        except Exception:
+            adaptive_profiles = []
+    adaptive_profiles.sort(
+        key=lambda item: _coerce_float(item.get("adaptive_weight")) or 0.0,
+        reverse=True,
+    )
+    adaptive_suffix = ""
+    adaptive_leader = adaptive_profiles[0] if adaptive_profiles else {}
+    adaptive_leader_name = str(adaptive_leader.get("strategy_name") or "").strip()
+    adaptive_leader_weight = _coerce_float(adaptive_leader.get("adaptive_weight"))
+    if adaptive_leader_name and adaptive_leader_weight is not None:
+        adaptive_suffix = f" | Adaptive Leader: {adaptive_leader_name} x{adaptive_leader_weight:.2f}"
+    summary.setText(
+        f"Selected Symbol: {selected_symbol or '-'} | Mode: {mode_label} | "
+        f"Trading With: {active_text} | Ranked Candidates: {len(ranked_rows)}{auto_suffix}{agent_suffix}{adaptive_suffix}"
+    )
+
+    use_default_btn = getattr(window, "_strategy_assignment_use_default_btn", None)
+    assign_single_btn = getattr(window, "_strategy_assignment_assign_single_btn", None)
+    assign_ranked_btn = getattr(window, "_strategy_assignment_assign_ranked_btn", None)
+    strategy_picker.setEnabled(not edits_locked)
+    timeframe_picker.setEnabled(not edits_locked)
+    top_n.setEnabled(not edits_locked)
+    if use_default_btn is not None:
+        use_default_btn.setEnabled(not edits_locked)
+    if assign_single_btn is not None:
+        assign_single_btn.setEnabled(not edits_locked)
+    if assign_ranked_btn is not None:
+        assign_ranked_btn.setEnabled(not edits_locked)
+
+    table.setColumnCount(6)
+    table.setHorizontalHeaderLabels(["Symbol", "Mode", "Strategies", "Timeframe", "Ranked", "Live"])
+    table.setRowCount(len(rows))
+    selected_row = -1
+    for row_index, row in enumerate(rows):
+        values = [
+            row.get("symbol", ""),
+            row.get("mode", ""),
+            row.get("strategies", ""),
+            row.get("timeframe", ""),
+            str(row.get("ranked_count", 0)),
+            f"{int(row.get('active_count', 0))} {'strategy' if int(row.get('active_count', 0)) == 1 else 'strategies'}",
+        ]
+        for col_index, value in enumerate(values):
+            table.setItem(row_index, col_index, QTableWidgetItem(str(value)))
+        if str(row.get("symbol") or "").strip() == selected_symbol:
+            selected_row = row_index
+    table.resizeColumnsToContents()
+    table.horizontalHeader().setStretchLastSection(True)
+    if selected_row >= 0:
+        table.selectRow(selected_row)
+
+    if agent_status is not None:
+        if decision_chain:
+            final_agent = str(decision_overview.get("final_agent") or decision_chain[-1].get("agent_name") or "").strip()
+            final_stage = str(decision_overview.get("final_stage") or decision_chain[-1].get("stage") or "").strip()
+            timestamp_label = str(decision_overview.get("timestamp_label") or decision_chain[-1].get("timestamp_label") or "").strip()
+            detail = f"Latest Agent Chain: {len(decision_chain)} steps"
+            if final_agent or final_stage:
+                detail = f"{detail} | Final: {final_agent or '-'} / {final_stage or '-'}"
+            if timestamp_label:
+                detail = f"{detail} | {timestamp_label}"
+            agent_status.setText(detail)
+        else:
+            agent_status.setText("Latest Agent Chain: no stored decision yet for the selected symbol.")
+
+    if agent_table is not None:
+        agent_table.setColumnCount(6)
+        agent_table.setHorizontalHeaderLabels(["Agent", "Stage", "Strategy", "Timeframe", "Detail", "Time"])
+        agent_table.setRowCount(len(decision_chain))
+        for row_index, row in enumerate(decision_chain):
+            payload = dict(row.get("payload") or {})
+            detail = str(row.get("reason") or payload.get("regime") or payload.get("volatility") or payload.get("execution_strategy") or "").strip()
+            values = [
+                row.get("agent_name", ""),
+                row.get("stage", ""),
+                row.get("strategy_name", ""),
+                row.get("timeframe", ""),
+                detail,
+                row.get("timestamp_label", ""),
+            ]
+            for col_index, value in enumerate(values):
+                agent_table.setItem(row_index, col_index, QTableWidgetItem(str(value)))
+        agent_table.resizeColumnsToContents()
+        agent_table.horizontalHeader().setStretchLastSection(True)
+
+    adaptive_status = getattr(window, "_strategy_assignment_adaptive_status", None)
+    adaptive_table = getattr(window, "_strategy_assignment_adaptive_table", None)
+    if adaptive_status is not None:
+        if adaptive_profiles:
+            leader_timeframe = str(adaptive_leader.get("timeframe") or "-").strip() or "-"
+            leader_weight_text = (
+                f"{adaptive_leader_weight:.2f}" if adaptive_leader_weight is not None else "-"
+            )
+            adaptive_status.setText(
+                f"Adaptive Memory: {len(adaptive_profiles)} strategy profiles | "
+                f"Leader: {adaptive_leader_name} ({leader_timeframe}) x{leader_weight_text}"
+            )
+        else:
+            adaptive_status.setText("Adaptive Memory: no stored strategy profiles for the selected symbol.")
+    if adaptive_table is not None:
+        adaptive_table.setColumnCount(8)
+        adaptive_table.setHorizontalHeaderLabels(
+            ["Strategy", "Timeframe", "Mode", "Weight", "Samples", "Win Rate", "Avg P/L", "Scope"]
+        )
+        adaptive_table.setRowCount(len(adaptive_profiles))
+        for row_index, profile in enumerate(adaptive_profiles):
+            values = [
+                str(profile.get("strategy_name") or ""),
+                str(profile.get("timeframe") or ""),
+                str(profile.get("mode") or ""),
+                f"{(_coerce_float(profile.get('adaptive_weight')) or 0.0):.2f}",
+                str(int(_coerce_float(profile.get("sample_size")) or 0)),
+                f"{(_coerce_float(profile.get('win_rate')) or 0.0):.0%}",
+                f"{(_coerce_float(profile.get('average_pnl')) or 0.0):.2f}",
+                str(profile.get("scope") or ""),
+            ]
+            for col_index, value in enumerate(values):
+                adaptive_table.setItem(row_index, col_index, QTableWidgetItem(value))
+        adaptive_table.resizeColumnsToContents()
+        adaptive_table.horizontalHeader().setStretchLastSection(True)
+    if adaptive_profiles:
+        _hotfix_refresh_strategy_assignment_adaptive_details(
+            self,
+            window=window,
+            selected_symbol=selected_symbol,
+            strategy_name=adaptive_leader_name,
+            timeframe=str(adaptive_leader.get("timeframe") or "").strip() or None,
+        )
+    else:
+        adaptive_plot_status = getattr(window, "_strategy_assignment_adaptive_plot_status", None)
+        adaptive_plot = getattr(window, "_strategy_assignment_adaptive_plot", None)
+        adaptive_details = getattr(window, "_strategy_assignment_adaptive_details", None)
+        if adaptive_plot_status is not None:
+            adaptive_plot_status.setText("Adaptive history: no scored trades for the selected symbol.")
+        if adaptive_plot is not None and hasattr(adaptive_plot, "clear"):
+            adaptive_plot.clear()
+        if adaptive_details is not None:
+            adaptive_details.setHtml("<h3>Adaptive detail</h3><p>No adaptive-memory samples are available yet.</p>")
+
+
+def _hotfix_refresh_strategy_assignment_adaptive_details(
+    self,
+    window=None,
+    selected_symbol=None,
+    strategy_name=None,
+    timeframe=None,
+):
+    window = window or getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None:
+        return
+
+    details = getattr(window, "_strategy_assignment_adaptive_details", None)
+    plot_status = getattr(window, "_strategy_assignment_adaptive_plot_status", None)
+    plot = getattr(window, "_strategy_assignment_adaptive_plot", None)
+    if details is None and plot_status is None and plot is None:
+        return
+
+    controller = getattr(self, "controller", None)
+    if controller is None:
+        return
+
+    normalized_symbol = str(
+        selected_symbol
+        or getattr(window, "_strategy_assignment_selected_symbol", "")
+        or getattr(getattr(window, "_strategy_assignment_symbol_picker", None), "currentText", lambda: "")()
+    ).strip()
+    normalized_strategy = str(strategy_name or "").strip()
+    normalized_timeframe = str(timeframe or "").strip() or None
+    if not normalized_symbol or not normalized_strategy:
+        if plot_status is not None:
+            plot_status.setText("Adaptive history: select a strategy profile to inspect scored trades.")
+        if plot is not None and hasattr(plot, "clear"):
+            plot.clear()
+        if details is not None:
+            details.setHtml("<h3>Adaptive detail</h3><p>Select a strategy profile to inspect its scored trades.</p>")
+        return
+
+    detail_payload = {}
+    detail_resolver = getattr(controller, "adaptive_strategy_detail_for_symbol", None)
+    if callable(detail_resolver):
+        try:
+            detail_payload = dict(
+                detail_resolver(
+                    normalized_symbol,
+                    normalized_strategy,
+                    timeframe=normalized_timeframe,
+                    limit=8,
+                )
+                or {}
+            )
+        except Exception:
+            detail_payload = {}
+
+    timeline_payload = {}
+    timeline_resolver = getattr(controller, "adaptive_strategy_timeline_for_symbol", None)
+    if callable(timeline_resolver):
+        try:
+            timeline_payload = dict(
+                timeline_resolver(
+                    normalized_symbol,
+                    normalized_strategy,
+                    timeframe=normalized_timeframe,
+                    limit=16,
+                )
+                or {}
+            )
+        except Exception:
+            timeline_payload = {}
+
+    profile = dict(detail_payload.get("profile") or timeline_payload.get("profile") or {})
+    samples = [
+        dict(item)
+        for item in (detail_payload.get("samples") or [])
+        if isinstance(item, dict)
+    ]
+    timeline = [
+        dict(item)
+        for item in (timeline_payload.get("timeline") or [])
+        if isinstance(item, dict)
+    ]
+
+    if plot is not None and hasattr(plot, "clear"):
+        plot.clear()
+        if timeline:
+            x_values = []
+            y_values = []
+            for index, entry in enumerate(timeline):
+                x_values.append(_coerce_float(entry.get("timestamp_value")) or float(index))
+                y_values.append(_coerce_float(entry.get("adaptive_weight")) or 0.0)
+            plot.plot(
+                x_values,
+                y_values,
+                pen=pg.mkPen("#2a7fff", width=2),
+                symbol="o",
+                symbolSize=7,
+                symbolBrush=pg.mkBrush("#4fd1c5"),
+            )
+
+    current_weight = _coerce_float(profile.get("adaptive_weight"))
+    if current_weight is None and timeline:
+        current_weight = _coerce_float(timeline[-1].get("adaptive_weight"))
+    sample_count = len(samples) if samples else len(timeline)
+    if plot_status is not None:
+        status_text = f"Adaptive history: {sample_count} scored trades"
+        if current_weight is not None:
+            status_text = f"{status_text} | Current {current_weight:.2f}"
+        plot_status.setText(status_text)
+
+    if details is not None:
+        scope = html.escape(str(detail_payload.get("scope") or timeline_payload.get("scope") or "strategy"))
+        header = (
+            f"<h3>Adaptive detail</h3>"
+            f"<p><b>{html.escape(normalized_strategy)}</b> | Symbol {html.escape(normalized_symbol)}"
+            f" | Timeframe {html.escape(normalized_timeframe or '-')} | Scope {scope}</p>"
+        )
+        summary_bits = []
+        if current_weight is not None:
+            summary_bits.append(f"Current weight <b>{current_weight:.2f}</b>")
+        sample_size = int(_coerce_float(profile.get("sample_size")) or 0)
+        if sample_size:
+            summary_bits.append(f"Sample size <b>{sample_size}</b>")
+        win_rate = _coerce_float(profile.get("win_rate"))
+        if win_rate is not None:
+            summary_bits.append(f"Win rate <b>{win_rate:.0%}</b>")
+        average_pnl = _coerce_float(profile.get("average_pnl"))
+        if average_pnl is not None:
+            summary_bits.append(f"Average P/L <b>{average_pnl:.2f}</b>")
+        summary_html = f"<p>{' | '.join(summary_bits)}</p>" if summary_bits else ""
+        history_items = []
+        for sample in samples:
+            timestamp = html.escape(str(sample.get("timestamp") or "-"))
+            side = html.escape(str(sample.get("side") or "-"))
+            pnl = _coerce_float(sample.get("pnl"))
+            score = _coerce_float(sample.get("score"))
+            reason = html.escape(str(sample.get("reason") or "").strip() or "-")
+            pnl_text = f"{pnl:.2f}" if pnl is not None else "-"
+            score_text = f"{score:.2f}" if score is not None else "-"
+            history_items.append(
+                "<li>"
+                f"<b>{timestamp}</b> | {side} | "
+                f"P/L {pnl_text} | Score {score_text} | {reason}"
+                "</li>"
+            )
+        if history_items:
+            details.setHtml(header + summary_html + "<ul>" + "".join(history_items) + "</ul>")
+        else:
+            details.setHtml(header + summary_html + "<p>No scored trades are stored for this profile yet.</p>")
+
+
+def _hotfix_strategy_assignment_selection_changed(self):
+    if bool(getattr(self, "_strategy_assignment_bootstrapping", False)):
+        return
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None:
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    if symbol_picker is None:
+        return
+    window._strategy_assignment_selected_symbol = str(symbol_picker.currentText() or "").strip()
+    _hotfix_refresh_strategy_assignment_window(self, window=window)
+
+
+def _hotfix_strategy_assignment_table_selected(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    if window is None or bool(getattr(self, "_strategy_assignment_bootstrapping", False)):
+        return
+    table = getattr(window, "_strategy_assignment_table", None)
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    if table is None or symbol_picker is None or table.currentRow() < 0:
+        return
+    item = table.item(table.currentRow(), 0)
+    symbol = str(item.text() if item is not None else "").strip()
+    if not symbol:
+        return
+    blocked = symbol_picker.blockSignals(True)
+    symbol_picker.setCurrentText(symbol)
+    symbol_picker.blockSignals(blocked)
+    window._strategy_assignment_selected_symbol = symbol
+    _hotfix_refresh_strategy_assignment_window(self, window=window)
+
+
+def _hotfix_apply_default_strategy_assignment(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    controller = getattr(self, "controller", None)
+    if window is None or controller is None:
+        return
+    lock_message = _hotfix_strategy_assignment_lock_message(self)
+    if lock_message:
+        self.system_console.log(lock_message, "WARN")
+        _hotfix_refresh_strategy_assignment_window(self, window=window, message=lock_message)
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    symbol = str(symbol_picker.currentText() if symbol_picker is not None else "").strip()
+    if not symbol:
+        self.system_console.log("Select a symbol before clearing its strategy assignment.", "ERROR")
+        return
+    controller.clear_symbol_strategy_assignment(symbol)
+    _hotfix_refresh_strategy_assignment_window(
+        self,
+        window=window,
+        message=f"{symbol} now uses the default strategy with the rest of the system.",
+    )
+
+
+def _hotfix_apply_single_strategy_assignment(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    controller = getattr(self, "controller", None)
+    if window is None or controller is None:
+        return
+    lock_message = _hotfix_strategy_assignment_lock_message(self)
+    if lock_message:
+        self.system_console.log(lock_message, "WARN")
+        _hotfix_refresh_strategy_assignment_window(self, window=window, message=lock_message)
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    strategy_picker = getattr(window, "_strategy_assignment_strategy_picker", None)
+    timeframe_picker = getattr(window, "_strategy_assignment_timeframe_picker", None)
+    symbol = str(symbol_picker.currentText() if symbol_picker is not None else "").strip()
+    strategy_name = str(strategy_picker.currentText() if strategy_picker is not None else "").strip()
+    timeframe = str(timeframe_picker.currentText() if timeframe_picker is not None else "").strip()
+    if not symbol:
+        self.system_console.log("Select a symbol before assigning a strategy.", "ERROR")
+        return
+    try:
+        assigned = controller.assign_strategy_to_symbol(symbol, strategy_name, timeframe=timeframe)
+        strategy_label = str(assigned[0].get("strategy_name") or strategy_name).strip()
+        _hotfix_refresh_strategy_assignment_window(
+            self,
+            window=window,
+            message=f"{symbol} is now assigned to {strategy_label}.",
+        )
+    except Exception as exc:
+        self.system_console.log(f"Strategy assignment failed: {exc}", "ERROR")
+        _hotfix_refresh_strategy_assignment_window(self, window=window, message=f"Strategy assignment failed: {exc}")
+
+
+def _hotfix_apply_ranked_strategy_assignment_from_window(self):
+    window = getattr(self, "detached_tool_windows", {}).get("strategy_assignments")
+    controller = getattr(self, "controller", None)
+    if window is None or controller is None:
+        return
+    lock_message = _hotfix_strategy_assignment_lock_message(self)
+    if lock_message:
+        self.system_console.log(lock_message, "WARN")
+        _hotfix_refresh_strategy_assignment_window(self, window=window, message=lock_message)
+        return
+    symbol_picker = getattr(window, "_strategy_assignment_symbol_picker", None)
+    timeframe_picker = getattr(window, "_strategy_assignment_timeframe_picker", None)
+    top_n = getattr(window, "_strategy_assignment_top_n", None)
+    symbol = str(symbol_picker.currentText() if symbol_picker is not None else "").strip()
+    timeframe = str(timeframe_picker.currentText() if timeframe_picker is not None else "").strip()
+    if not symbol:
+        self.system_console.log("Select a symbol before assigning a ranked mix.", "ERROR")
+        return
+    rankings = controller.ranked_strategies_for_symbol(symbol) if hasattr(controller, "ranked_strategies_for_symbol") else []
+    if not rankings:
+        self.system_console.log(f"No ranked strategies are saved for {symbol}. Run Rank All Strategies first.", "ERROR")
+        _hotfix_refresh_strategy_assignment_window(
+            self,
+            window=window,
+            message=f"No ranked strategies are saved for {symbol} yet. Run Rank All Strategies first.",
+        )
+        return
+    assigned = controller.assign_ranked_strategies_to_symbol(
+        symbol,
+        rankings,
+        top_n=int(top_n.value()) if top_n is not None else None,
+        timeframe=timeframe,
+    )
+    _hotfix_refresh_strategy_assignment_window(
+        self,
+        window=window,
+        message=f"{symbol} now uses a ranked mix of {len(assigned)} strategies.",
+    )
+
+
+def _hotfix_show_strategy_assignment_window(self):
+    window = self._get_or_create_tool_window(
+        "strategy_assignments",
+        "Strategy Assigner",
+        width=1080,
+        height=680,
+    )
+
+    if getattr(window, "_strategy_assignment_container", None) is None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        status = QLabel("Assign a symbol to the default strategy, one strategy, or a ranked mix.")
+        status.setWordWrap(True)
+        status.setStyleSheet("color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; padding: 10px; border-radius: 8px;")
+        layout.addWidget(status)
+
+        controls_frame = QFrame()
+        controls_frame.setStyleSheet(
+            "QFrame { background-color: #0f1727; border: 1px solid #24344f; border-radius: 10px; }"
+            "QLabel { color: #d7dfeb; font-weight: 700; }"
+            "QComboBox, QSpinBox { background-color: #0b1220; color: #f4f8ff; border: 1px solid #2a3d5c; border-radius: 6px; padding: 6px 10px; min-width: 160px; }"
+        )
+        controls_layout = QGridLayout(controls_frame)
+        controls_layout.setContentsMargins(14, 12, 14, 12)
+        controls_layout.setHorizontalSpacing(16)
+        controls_layout.setVerticalSpacing(8)
+
+        symbol_picker = QComboBox()
+        strategy_picker = QComboBox()
+        timeframe_picker = QComboBox()
+        top_n = QSpinBox()
+        top_n.setRange(1, 10)
+        top_n.setValue(int(getattr(self.controller, "max_symbol_strategies", 3) or 3))
+
+        controls_layout.addWidget(QLabel("Symbol"), 0, 0)
+        controls_layout.addWidget(symbol_picker, 0, 1)
+        controls_layout.addWidget(QLabel("Assigned Strategy"), 0, 2)
+        controls_layout.addWidget(strategy_picker, 0, 3)
+        controls_layout.addWidget(QLabel("Timeframe"), 1, 0)
+        controls_layout.addWidget(timeframe_picker, 1, 1)
+        controls_layout.addWidget(QLabel("Ranked Mix Size"), 1, 2)
+        controls_layout.addWidget(top_n, 1, 3)
+        layout.addWidget(controls_frame)
+
+        button_row = QHBoxLayout()
+        use_default_btn = QPushButton("Use Default")
+        assign_single_btn = QPushButton("Assign Strategy")
+        assign_ranked_btn = QPushButton("Use Ranked Mix")
+        open_optimization_btn = QPushButton("Open Strategy Optimization")
+        use_default_btn.clicked.connect(self._apply_default_strategy_assignment)
+        assign_single_btn.clicked.connect(self._apply_single_strategy_assignment)
+        assign_ranked_btn.clicked.connect(self._apply_ranked_strategy_assignment)
+        open_optimization_btn.clicked.connect(self._optimize_strategy)
+        button_row.addWidget(use_default_btn)
+        button_row.addWidget(assign_single_btn)
+        button_row.addWidget(assign_ranked_btn)
+        button_row.addWidget(open_optimization_btn)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        summary = QLabel("Loading symbol assignments.")
+        summary.setWordWrap(True)
+        summary.setStyleSheet("color: #9fb0c7;")
+        layout.addWidget(summary)
+
+        table = QTableWidget()
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.itemSelectionChanged.connect(lambda: _hotfix_strategy_assignment_table_selected(self))
+        layout.addWidget(table)
+
+        agent_status = QLabel("Latest agent chain will appear once the selected symbol has been processed.")
+        agent_status.setWordWrap(True)
+        agent_status.setStyleSheet("color: #9fb0c7; font-style: italic;")
+        layout.addWidget(agent_status)
+
+        agent_table = QTableWidget()
+        agent_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        agent_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        agent_table.setMinimumHeight(180)
+        layout.addWidget(agent_table)
+
+        symbol_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
+        strategy_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
+        timeframe_picker.currentTextChanged.connect(lambda _text: _hotfix_strategy_assignment_selection_changed(self))
+
+        window.setCentralWidget(container)
+        window._strategy_assignment_container = container
+        window._strategy_assignment_status = status
+        window._strategy_assignment_summary = summary
+        window._strategy_assignment_symbol_picker = symbol_picker
+        window._strategy_assignment_strategy_picker = strategy_picker
+        window._strategy_assignment_timeframe_picker = timeframe_picker
+        window._strategy_assignment_top_n = top_n
+        window._strategy_assignment_table = table
+        window._strategy_assignment_agent_status = agent_status
+        window._strategy_assignment_agent_table = agent_table
+        window._strategy_assignment_use_default_btn = use_default_btn
+        window._strategy_assignment_assign_single_btn = assign_single_btn
+        window._strategy_assignment_assign_ranked_btn = assign_ranked_btn
+        window._strategy_assignment_open_optimization_btn = open_optimization_btn
+
+    _hotfix_refresh_strategy_assignment_window(self, window=window)
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    return window
+
+
+def _hotfix_ml_model_family_options():
+    return [
+        ("Linear", "linear"),
+        ("Tree Ensemble", "tree"),
+        ("Sequence Linear", "sequence"),
+    ]
+
+
+def _hotfix_get_ml_pipeline(self):
+    pipeline = getattr(self, "_ml_research_pipeline", None)
+    if pipeline is None:
+        pipeline = MLResearchPipeline()
+        self._ml_research_pipeline = pipeline
+    return pipeline
+
+
+def _hotfix_show_ml_research_window(self):
+    window = self._get_or_create_tool_window(
+        "ml_research_lab",
+        "ML Research Lab",
+        width=1180,
+        height=760,
+    )
+
+    if getattr(window, "_ml_research_container", None) is None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+
+        status = QLabel("ML research workspace ready.")
+        status.setStyleSheet("color: #e6edf7; font-weight: 700;")
+        layout.addWidget(status)
+
+        selection_frame = QFrame()
+        selection_frame.setStyleSheet(
+            "QFrame { background-color: #0f1727; border: 1px solid #24344f; border-radius: 10px; }"
+            "QLabel { color: #d7dfeb; font-weight: 700; }"
+            "QComboBox, QDoubleSpinBox { background-color: #0b1220; color: #f4f8ff; border: 1px solid #2a3d5c; border-radius: 6px; padding: 6px 10px; min-width: 140px; }"
+        )
+        selection_layout = QGridLayout(selection_frame)
+        selection_layout.setContentsMargins(14, 12, 14, 12)
+        selection_layout.setHorizontalSpacing(16)
+        selection_layout.setVerticalSpacing(8)
+
+        symbol_picker = QComboBox()
+        timeframe_picker = QComboBox()
+        family_picker = QComboBox()
+        for label, value in _hotfix_ml_model_family_options():
+            family_picker.addItem(label, value)
+
+        horizon_spin = QDoubleSpinBox()
+        horizon_spin.setDecimals(0)
+        horizon_spin.setRange(1, 50)
+        horizon_spin.setValue(3)
+
+        threshold_spin = QDoubleSpinBox()
+        threshold_spin.setDecimals(4)
+        threshold_spin.setRange(0.0, 0.25)
+        threshold_spin.setSingleStep(0.0005)
+        threshold_spin.setValue(0.0015)
+
+        test_size_spin = QDoubleSpinBox()
+        test_size_spin.setDecimals(2)
+        test_size_spin.setRange(0.10, 0.50)
+        test_size_spin.setSingleStep(0.05)
+        test_size_spin.setValue(0.25)
+
+        sequence_spin = QDoubleSpinBox()
+        sequence_spin.setDecimals(0)
+        sequence_spin.setRange(2, 12)
+        sequence_spin.setValue(4)
+
+        train_window_spin = QDoubleSpinBox()
+        train_window_spin.setDecimals(0)
+        train_window_spin.setRange(20, 5000)
+        train_window_spin.setValue(80)
+
+        test_window_spin = QDoubleSpinBox()
+        test_window_spin.setDecimals(0)
+        test_window_spin.setRange(10, 1000)
+        test_window_spin.setValue(30)
+
+        selection_layout.addWidget(QLabel("Symbol"), 0, 0)
+        selection_layout.addWidget(symbol_picker, 0, 1)
+        selection_layout.addWidget(QLabel("Timeframe"), 0, 2)
+        selection_layout.addWidget(timeframe_picker, 0, 3)
+        selection_layout.addWidget(QLabel("Model Family"), 0, 4)
+        selection_layout.addWidget(family_picker, 0, 5)
+        selection_layout.addWidget(QLabel("Horizon"), 1, 0)
+        selection_layout.addWidget(horizon_spin, 1, 1)
+        selection_layout.addWidget(QLabel("Return Threshold"), 1, 2)
+        selection_layout.addWidget(threshold_spin, 1, 3)
+        selection_layout.addWidget(QLabel("Test Size"), 1, 4)
+        selection_layout.addWidget(test_size_spin, 1, 5)
+        selection_layout.addWidget(QLabel("Sequence Length"), 2, 0)
+        selection_layout.addWidget(sequence_spin, 2, 1)
+        selection_layout.addWidget(QLabel("WF Train"), 2, 2)
+        selection_layout.addWidget(train_window_spin, 2, 3)
+        selection_layout.addWidget(QLabel("WF Test"), 2, 4)
+        selection_layout.addWidget(test_window_spin, 2, 5)
+        layout.addWidget(selection_frame)
+
+        controls = QHBoxLayout()
+        train_btn = QPushButton("Train Model")
+        walk_forward_btn = QPushButton("Run Walk-Forward")
+        deploy_btn = QPushButton("Deploy Selected")
+        train_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_ml_model_training()))
+        walk_forward_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_ml_walk_forward()))
+        deploy_btn.clicked.connect(self._deploy_selected_ml_model)
+        controls.addWidget(train_btn)
+        controls.addWidget(walk_forward_btn)
+        controls.addWidget(deploy_btn)
+        controls.addStretch()
+        layout.addLayout(controls)
+
+        summary = QLabel("-")
+        summary.setWordWrap(True)
+        summary.setStyleSheet("color: #9fb0c7;")
+        layout.addWidget(summary)
+
+        tabs = QTabWidget()
+
+        experiments_table = QTableWidget()
+        experiments_table.setAlternatingRowColors(True)
+        experiments_table.setSelectionBehavior(QTableWidget.SelectRows)
+        experiments_table.setSelectionMode(QTableWidget.SingleSelection)
+        experiments_table.setColumnCount(8)
+        experiments_table.setHorizontalHeaderLabels(
+            ["Experiment", "Model", "Family", "Symbol", "TF", "Test Acc", "Precision", "Created"]
+        )
+        tabs.addTab(experiments_table, "Experiments")
+
+        walk_table = QTableWidget()
+        walk_table.setAlternatingRowColors(True)
+        walk_table.setColumnCount(7)
+        walk_table.setHorizontalHeaderLabels(
+            ["Window", "Train Rows", "Test Rows", "Accuracy", "Precision", "Recall", "Avg Conf."]
+        )
+        tabs.addTab(walk_table, "Walk-Forward")
+
+        details = QTextBrowser()
+        details.setStyleSheet(
+            "QTextBrowser { background-color: #0b1220; color: #d7dfeb; border: 1px solid #24344f; border-radius: 10px; padding: 10px; }"
+        )
+        tabs.addTab(details, "Details")
+        layout.addWidget(tabs)
+
+        window.setCentralWidget(container)
+        window._ml_research_container = container
+        window._ml_research_status = status
+        window._ml_research_summary = summary
+        window._ml_research_symbol_picker = symbol_picker
+        window._ml_research_timeframe_picker = timeframe_picker
+        window._ml_research_family_picker = family_picker
+        window._ml_research_horizon_spin = horizon_spin
+        window._ml_research_threshold_spin = threshold_spin
+        window._ml_research_test_size_spin = test_size_spin
+        window._ml_research_sequence_spin = sequence_spin
+        window._ml_research_train_window_spin = train_window_spin
+        window._ml_research_test_window_spin = test_window_spin
+        window._ml_research_train_btn = train_btn
+        window._ml_research_walk_btn = walk_forward_btn
+        window._ml_research_deploy_btn = deploy_btn
+        window._ml_research_experiments_table = experiments_table
+        window._ml_research_walk_table = walk_table
+        window._ml_research_details = details
+
+        symbol_picker.currentTextChanged.connect(lambda _text: _hotfix_ml_research_selection_changed(self))
+        timeframe_picker.currentTextChanged.connect(lambda _text: _hotfix_ml_research_selection_changed(self))
+        family_picker.currentIndexChanged.connect(lambda _idx: _hotfix_ml_research_selection_changed(self))
+        horizon_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
+        threshold_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
+        test_size_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
+        sequence_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
+        train_window_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
+        test_window_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
+        experiments_table.itemSelectionChanged.connect(lambda: self._refresh_ml_research_window())
+
+    _hotfix_refresh_ml_research_selectors(self, window)
+    self._refresh_ml_research_window(window)
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    return window
+
+
+def _hotfix_refresh_ml_research_selectors(self, window=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("ml_research_lab")
+    if window is None:
+        return
+    symbol_picker = getattr(window, "_ml_research_symbol_picker", None)
+    timeframe_picker = getattr(window, "_ml_research_timeframe_picker", None)
+    family_picker = getattr(window, "_ml_research_family_picker", None)
+    if symbol_picker is None or timeframe_picker is None or family_picker is None:
+        return
+
+    context = getattr(self, "_ml_research_context", {}) or {}
+    symbol_candidates = _hotfix_backtest_symbol_candidates(self)
+    timeframe_candidates = _hotfix_backtest_timeframe_candidates(self)
+    target_symbol = str(context.get("symbol") or symbol_picker.currentText() or (symbol_candidates[0] if symbol_candidates else "")).strip()
+    target_timeframe = str(context.get("timeframe") or timeframe_picker.currentText() or getattr(self, "current_timeframe", getattr(self.controller, "time_frame", "1h"))).strip()
+    target_family = str(context.get("model_family") or family_picker.currentData() or "linear").strip()
+
+    symbol_picker.blockSignals(True)
+    symbol_picker.clear()
+    for symbol in symbol_candidates:
+        symbol_picker.addItem(symbol)
+    if target_symbol and symbol_picker.findText(target_symbol) < 0:
+        symbol_picker.addItem(target_symbol)
+    if target_symbol:
+        symbol_picker.setCurrentText(target_symbol)
+    symbol_picker.blockSignals(False)
+
+    timeframe_picker.blockSignals(True)
+    timeframe_picker.clear()
+    for timeframe in timeframe_candidates:
+        timeframe_picker.addItem(timeframe)
+    if target_timeframe and timeframe_picker.findText(target_timeframe) < 0:
+        timeframe_picker.addItem(target_timeframe)
+    timeframe_picker.setCurrentText(target_timeframe)
+    timeframe_picker.blockSignals(False)
+
+    for idx in range(family_picker.count()):
+        if str(family_picker.itemData(idx)) == target_family:
+            family_picker.blockSignals(True)
+            family_picker.setCurrentIndex(idx)
+            family_picker.blockSignals(False)
+            break
+
+
+def _hotfix_ml_research_selection_changed(self):
+    if bool(getattr(self, "_ml_research_running", False)):
+        return
+
+    window = getattr(self, "detached_tool_windows", {}).get("ml_research_lab")
+    if window is None:
+        return
+
+    symbol_picker = getattr(window, "_ml_research_symbol_picker", None)
+    timeframe_picker = getattr(window, "_ml_research_timeframe_picker", None)
+    family_picker = getattr(window, "_ml_research_family_picker", None)
+    if symbol_picker is None or timeframe_picker is None or family_picker is None:
+        return
+
+    self._ml_research_context = {
+        "symbol": str(symbol_picker.currentText() or "").strip(),
+        "timeframe": str(timeframe_picker.currentText() or "").strip(),
+        "model_family": str(family_picker.currentData() or "linear").strip(),
+        "horizon": int(getattr(window, "_ml_research_horizon_spin").value()),
+        "return_threshold": float(getattr(window, "_ml_research_threshold_spin").value()),
+        "test_size": float(getattr(window, "_ml_research_test_size_spin").value()),
+        "sequence_length": int(getattr(window, "_ml_research_sequence_spin").value()),
+        "train_window": int(getattr(window, "_ml_research_train_window_spin").value()),
+        "test_window": int(getattr(window, "_ml_research_test_window_spin").value()),
+    }
+    self._refresh_ml_research_window(message="ML research selection updated.")
+
+
+async def _hotfix_prepare_ml_research_context(self):
+    window = getattr(self, "detached_tool_windows", {}).get("ml_research_lab")
+    context = getattr(self, "_ml_research_context", {}) or {}
+    symbol = str(context.get("symbol") or "").strip() or (
+        str(getattr(getattr(window, "_ml_research_symbol_picker", None), "currentText", lambda: "")()).strip()
+    )
+    timeframe = str(context.get("timeframe") or "").strip() or (
+        str(getattr(getattr(window, "_ml_research_timeframe_picker", None), "currentText", lambda: "")()).strip()
+    )
+    backtest_context = await _hotfix_prepare_backtest_context_with_selection(self, symbol=symbol or None, timeframe=timeframe or None, strategy_name="ML Model")
+    data = backtest_context.get("data")
+    pipeline = _hotfix_get_ml_pipeline(self)
+    dataset = pipeline.build_dataset(
+        data,
+        horizon=int(context.get("horizon", 3) or 3),
+        return_threshold=float(context.get("return_threshold", 0.0015) or 0.0015),
+        symbol=backtest_context.get("symbol"),
+        timeframe=backtest_context.get("timeframe"),
+    )
+    return {
+        **backtest_context,
+        "dataset": dataset,
+        "model_family": str(context.get("model_family") or "linear"),
+        "test_size": float(context.get("test_size", 0.25) or 0.25),
+        "sequence_length": int(context.get("sequence_length", 4) or 4),
+        "train_window": int(context.get("train_window", 80) or 80),
+        "test_window": int(context.get("test_window", 30) or 30),
+    }
+
+
+def _hotfix_populate_ml_experiments_table(_self, table, results_frame):
+    if table is None:
+        return
+    frame = results_frame if isinstance(results_frame, pd.DataFrame) else pd.DataFrame()
+    if frame.empty:
+        table.setRowCount(0)
+        return
+    display = frame.copy().sort_values("created_at", ascending=False).reset_index(drop=True)
+    table.setRowCount(len(display))
+    columns = [
+        ("name", "{}"),
+        ("param_model_name", "{}"),
+        ("param_model_family", "{}"),
+        ("symbol", "{}"),
+        ("timeframe", "{}"),
+        ("test_accuracy", "{:.3f}"),
+        ("test_precision", "{:.3f}"),
+        ("created_at", "{}"),
+    ]
+    for row_idx, (_, row) in enumerate(display.iterrows()):
+        for col_idx, (column, fmt) in enumerate(columns):
+            value = row.get(column, "")
+            try:
+                text = fmt.format(float(value)) if fmt != "{}" and value != "" else fmt.format(value)
+            except Exception:
+                text = str(value)
+            item = QTableWidgetItem(text)
+            if col_idx == 1:
+                item.setData(Qt.UserRole, str(row.get("param_model_name") or ""))
+            table.setItem(row_idx, col_idx, item)
+    table.resizeColumnsToContents()
+
+
+def _hotfix_populate_ml_walk_table(_self, table, frame):
+    if table is None:
+        return
+    frame = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    if frame.empty:
+        table.setRowCount(0)
+        return
+    display = frame.copy().reset_index(drop=True)
+    table.setRowCount(len(display))
+    columns = [
+        ("window_index", "{:g}"),
+        ("train_rows", "{:g}"),
+        ("test_rows", "{:g}"),
+        ("accuracy", "{:.3f}"),
+        ("precision", "{:.3f}"),
+        ("recall", "{:.3f}"),
+        ("avg_confidence", "{:.3f}"),
+    ]
+    for row_idx, (_, row) in enumerate(display.iterrows()):
+        for col_idx, (column, fmt) in enumerate(columns):
+            value = row.get(column, "")
+            try:
+                text = fmt.format(float(value))
+            except Exception:
+                text = str(value)
+            table.setItem(row_idx, col_idx, QTableWidgetItem(text))
+    table.resizeColumnsToContents()
+
+
+def _hotfix_build_ml_research_details(_self, context, result=None, walk_summary=None):
+    lines = ["<h3 style='margin-top:0;'>ML Research Lab</h3>"]
+    if context:
+        lines.append(
+            "<p>"
+            f"<b>Symbol:</b> {html.escape(str(context.get('symbol') or '-'))} | "
+            f"<b>Timeframe:</b> {html.escape(str(context.get('timeframe') or '-'))} | "
+            f"<b>Family:</b> {html.escape(str(context.get('model_family') or '-'))} | "
+            f"<b>Horizon:</b> {html.escape(str(context.get('horizon') or '-'))}"
+            "</p>"
+        )
+    if result is not None:
+        metrics = dict(getattr(result, "metrics", {}) or {})
+        lines.append("<h4>Training Result</h4>")
+        lines.append(
+            "<ul>"
+            f"<li>Model: <b>{html.escape(str(getattr(result, 'model_name', '-') or '-'))}</b></li>"
+            f"<li>Train accuracy: <b>{metrics.get('train_accuracy', 0.0):.3f}</b></li>"
+            f"<li>Test accuracy: <b>{metrics.get('test_accuracy', 0.0):.3f}</b></li>"
+            f"<li>Test precision: <b>{metrics.get('test_precision', 0.0):.3f}</b></li>"
+            f"<li>Test recall: <b>{metrics.get('test_recall', 0.0):.3f}</b></li>"
+            f"<li>Avg test confidence: <b>{metrics.get('avg_test_confidence', 0.0):.3f}</b></li>"
+            "</ul>"
+        )
+    if isinstance(walk_summary, pd.DataFrame) and not walk_summary.empty:
+        lines.append("<h4>Walk-Forward</h4>")
+        lines.append(
+            "<ul>"
+            f"<li>Windows: <b>{len(walk_summary)}</b></li>"
+            f"<li>Avg accuracy: <b>{walk_summary['accuracy'].mean():.3f}</b></li>"
+            f"<li>Avg precision: <b>{walk_summary['precision'].mean():.3f}</b></li>"
+            f"<li>Avg recall: <b>{walk_summary['recall'].mean():.3f}</b></li>"
+            "</ul>"
+        )
+    if result is None and (not isinstance(walk_summary, pd.DataFrame) or walk_summary.empty):
+        lines.append("<p>Train a model or run walk-forward analysis to populate this workspace.</p>")
+    return "".join(lines)
+
+
+def _hotfix_refresh_ml_research_window(self, window=None, message=None):
+    window = window or getattr(self, "detached_tool_windows", {}).get("ml_research_lab")
+    if window is None:
+        return
+
+    status = getattr(window, "_ml_research_status", None)
+    summary = getattr(window, "_ml_research_summary", None)
+    train_btn = getattr(window, "_ml_research_train_btn", None)
+    walk_btn = getattr(window, "_ml_research_walk_btn", None)
+    deploy_btn = getattr(window, "_ml_research_deploy_btn", None)
+    experiments_table = getattr(window, "_ml_research_experiments_table", None)
+    walk_table = getattr(window, "_ml_research_walk_table", None)
+    details = getattr(window, "_ml_research_details", None)
+    if status is None or summary is None or experiments_table is None or walk_table is None or details is None:
+        return
+
+    if message is not None:
+        self._ml_research_status_message = message
+
+    context = getattr(self, "_ml_research_context", {}) or {}
+    running = bool(getattr(self, "_ml_research_running", False))
+    status.setText(getattr(self, "_ml_research_status_message", None) or ("ML research running..." if running else "ML research workspace ready."))
+    summary.setText(
+        f"Symbol: {context.get('symbol', '-')} | Timeframe: {context.get('timeframe', '-')} | "
+        f"Family: {context.get('model_family', '-')} | Horizon: {context.get('horizon', '-')} | "
+        f"Test Size: {float(context.get('test_size', 0.25) or 0.25):.0%}"
+    )
+    if train_btn is not None:
+        train_btn.setEnabled(not running)
+        train_btn.setText("Training..." if running else "Train Model")
+    if walk_btn is not None:
+        walk_btn.setEnabled(not running)
+        walk_btn.setText("Running..." if running else "Run Walk-Forward")
+
+    pipeline = _hotfix_get_ml_pipeline(self)
+    experiment_frame = pipeline.experiment_tracker.to_frame()
+    _hotfix_populate_ml_experiments_table(self, experiments_table, experiment_frame)
+    _hotfix_populate_ml_walk_table(self, walk_table, getattr(self, "_ml_walk_forward_summary", None))
+
+    selected_model_name = ""
+    current_row = experiments_table.currentRow()
+    if current_row >= 0:
+        item = experiments_table.item(current_row, 1)
+        if item is not None:
+            selected_model_name = str(item.data(Qt.UserRole) or item.text() or "").strip()
+    if deploy_btn is not None:
+        deploy_btn.setEnabled((not running) and bool(selected_model_name or getattr(getattr(self, "_ml_latest_result", None), "model_name", "")))
+
+    details.setHtml(
+        _hotfix_build_ml_research_details(
+            self,
+            context,
+            result=getattr(self, "_ml_latest_result", None),
+            walk_summary=getattr(self, "_ml_walk_forward_summary", None),
+        )
+    )
+
+
+async def _hotfix_run_ml_model_training(self):
+    if bool(getattr(self, "_ml_research_running", False)):
+        self._show_ml_research_window()
+        self._refresh_ml_research_window(message="ML research is already running.")
+        return
+
+    try:
+        self._show_ml_research_window()
+        context = await _hotfix_prepare_ml_research_context(self)
+        dataset = context.get("dataset")
+        if dataset is None or dataset.empty:
+            raise RuntimeError("No ML dataset could be built from the selected history")
+
+        self._ml_research_running = True
+        self._ml_research_status_message = "Training ML model..."
+        self._ml_research_context = {**(getattr(self, "_ml_research_context", {}) or {}), **context}
+        self._refresh_ml_research_window(message="Training ML model...")
+
+        pipeline = _hotfix_get_ml_pipeline(self)
+        model_name = (
+            f"{context['symbol'].replace('/', '_')}_{context['timeframe']}_{context['model_family']}_{int(datetime.now().timestamp())}"
+        )
+        result = await asyncio.to_thread(
+            pipeline.train_classifier,
+            dataset,
+            model_name,
+            context["model_family"],
+            context["sequence_length"],
+            context["test_size"],
+            "ml_research_lab",
+            "terminal_training",
+        )
+        self._ml_latest_result = result
+        self.system_console.log(f"ML model trained: {result.model_name}", "INFO")
+        self._ml_research_status_message = "ML training completed."
+        self._refresh_ml_research_window(message="ML training completed.")
+    except Exception as e:
+        self.system_console.log(f"ML training failed: {e}", "ERROR")
+        self._ml_research_status_message = f"ML training failed: {e}"
+        self._refresh_ml_research_window(message=f"ML training failed: {e}")
+    finally:
+        self._ml_research_running = False
+        self._refresh_ml_research_window()
+
+
+async def _hotfix_run_ml_walk_forward(self):
+    if bool(getattr(self, "_ml_research_running", False)):
+        self._show_ml_research_window()
+        self._refresh_ml_research_window(message="ML research is already running.")
+        return
+
+    try:
+        self._show_ml_research_window()
+        context = await _hotfix_prepare_ml_research_context(self)
+        dataset = context.get("dataset")
+        if dataset is None or dataset.empty:
+            raise RuntimeError("No ML dataset could be built from the selected history")
+
+        self._ml_research_running = True
+        self._ml_research_status_message = "Running ML walk-forward..."
+        self._ml_research_context = {**(getattr(self, "_ml_research_context", {}) or {}), **context}
+        self._refresh_ml_research_window(message="Running ML walk-forward...")
+
+        pipeline = _hotfix_get_ml_pipeline(self)
+        summary_df, predictions_df = await asyncio.to_thread(
+            pipeline.run_walk_forward,
+            dataset,
+            context["model_family"],
+            context["sequence_length"],
+            context["train_window"],
+            context["test_window"],
+            None,
+        )
+        self._ml_walk_forward_summary = summary_df
+        self._ml_walk_forward_predictions = predictions_df
+        self.system_console.log("ML walk-forward analysis completed.", "INFO")
+        self._ml_research_status_message = "ML walk-forward completed."
+        self._refresh_ml_research_window(message="ML walk-forward completed.")
+    except Exception as e:
+        self.system_console.log(f"ML walk-forward failed: {e}", "ERROR")
+        self._ml_research_status_message = f"ML walk-forward failed: {e}"
+        self._refresh_ml_research_window(message=f"ML walk-forward failed: {e}")
+    finally:
+        self._ml_research_running = False
+        self._refresh_ml_research_window()
+
+
+def _hotfix_deploy_selected_ml_model(self):
+    try:
+        window = getattr(self, "detached_tool_windows", {}).get("ml_research_lab")
+        pipeline = _hotfix_get_ml_pipeline(self)
+        model_name = ""
+        if window is not None:
+            table = getattr(window, "_ml_research_experiments_table", None)
+            if table is not None and table.currentRow() >= 0:
+                item = table.item(table.currentRow(), 1)
+                if item is not None:
+                    model_name = str(item.data(Qt.UserRole) or item.text() or "").strip()
+        if not model_name:
+            model_name = str(getattr(getattr(self, "_ml_latest_result", None), "model_name", "") or "").strip()
+        if not model_name:
+            raise RuntimeError("Train or select an ML model before deployment")
+
+        trading_system = getattr(self.controller, "trading_system", None)
+        strategy_registry = getattr(trading_system, "strategy", None)
+        if strategy_registry is None:
+            from strategy.strategy_registry import StrategyRegistry
+
+            strategy_registry = StrategyRegistry()
+            if trading_system is not None:
+                trading_system.strategy = strategy_registry
+
+        pipeline.deploy_to_strategy_registry(strategy_registry, model_name, strategy_name="ML Model")
+        self.controller.strategy_name = "ML Model"
+        if hasattr(strategy_registry, "set_active"):
+            strategy_registry.set_active("ML Model")
+        self.system_console.log(f"Deployed ML model: {model_name}", "INFO")
+        self._refresh_ml_research_window(message=f"Deployed ML model: {model_name}")
+    except Exception as e:
+        self.system_console.log(f"ML model deployment failed: {e}", "ERROR")
+        self._refresh_ml_research_window(message=f"ML model deployment failed: {e}")
 
 
 async def _hotfix_reload_chart_data(self, symbol, timeframe):
@@ -5845,12 +12820,170 @@ def _hotfix_settings_int(value, default):
         return default
 
 
+def _hotfix_update_database_mode_state(window):
+    if window is None:
+        return
+
+    mode_picker = getattr(window, "_settings_database_mode", None)
+    url_input = getattr(window, "_settings_database_url", None)
+    hint_label = getattr(window, "_settings_database_hint", None)
+    if mode_picker is None or url_input is None:
+        return
+
+    remote_selected = str(mode_picker.currentData() or "local").strip().lower() == "remote"
+    url_input.setEnabled(remote_selected)
+    if not remote_selected:
+        url_input.setPlaceholderText("Local SQLite is active. Switch to Remote to use a custom database URL.")
+    else:
+        url_input.setPlaceholderText("postgresql+psycopg://user:password@host:5432/dbname")
+
+    if hint_label is not None:
+        if remote_selected:
+            hint_label.setText(
+                "Use any SQLAlchemy connection URL your Python environment supports. "
+                "Example: postgresql+psycopg://user:password@host:5432/dbname"
+            )
+        else:
+            hint_label.setText("Local mode uses Sopotek's built-in SQLite database in the data folder.")
+
+
+def _hotfix_refresh_market_type_picker(window, controller):
+    picker = getattr(window, "_settings_market_type", None)
+    if picker is None:
+        return
+
+    current = str(picker.currentData() or getattr(controller, "market_trade_preference", "auto") or "auto").strip().lower()
+    if hasattr(controller, "supported_market_venues"):
+        supported = list(controller.supported_market_venues() or [])
+    else:
+        supported = ["auto", "spot"]
+    supported = [str(item).strip().lower() for item in supported if str(item).strip()]
+    if not supported:
+        supported = ["auto", "spot"]
+
+    picker.blockSignals(True)
+    picker.clear()
+    for label, value in MARKET_VENUE_CHOICES:
+        if value in supported:
+            picker.addItem(label, value)
+
+    target = current if current in supported else ("auto" if "auto" in supported else supported[0])
+    index = picker.findData(target)
+    picker.setCurrentIndex(index if index >= 0 else 0)
+    picker.blockSignals(False)
+
+
 def _hotfix_get_live_risk_engine(self):
     trading_system = getattr(self.controller, "trading_system", None)
     risk_engine = getattr(trading_system, "risk_engine", None)
     if risk_engine is not None:
         return risk_engine
     return getattr(self.controller, "risk_engine", None)
+
+
+def _hotfix_risk_profile_names():
+    return list(RISK_PROFILE_PRESETS.keys()) + ["Custom"]
+
+
+def _hotfix_normalize_risk_profile_name(name):
+    normalized = str(name or "").strip()
+    if normalized in RISK_PROFILE_PRESETS:
+        return normalized
+    if normalized.lower() == "custom":
+        return "Custom"
+    return "Balanced"
+
+
+def _hotfix_risk_profile_payload(name):
+    normalized = _hotfix_normalize_risk_profile_name(name)
+    payload = dict(RISK_PROFILE_PRESETS.get(normalized) or RISK_PROFILE_PRESETS["Balanced"])
+    payload["name"] = normalized
+    return payload
+
+
+def _hotfix_detect_risk_profile_name(values):
+    max_portfolio = float(values.get("max_portfolio_risk", 0.0) or 0.0)
+    max_trade = float(values.get("max_risk_per_trade", 0.0) or 0.0)
+    max_position = float(values.get("max_position_size_pct", 0.0) or 0.0)
+    max_gross = float(values.get("max_gross_exposure_pct", 0.0) or 0.0)
+    for name, profile in RISK_PROFILE_PRESETS.items():
+        if (
+            abs(max_portfolio - float(profile["max_portfolio_risk"])) <= 1e-9
+            and abs(max_trade - float(profile["max_risk_per_trade"])) <= 1e-9
+            and abs(max_position - float(profile["max_position_size_pct"])) <= 1e-9
+            and abs(max_gross - float(profile["max_gross_exposure_pct"])) <= 1e-9
+        ):
+            return name
+    return "Custom"
+
+
+def _hotfix_set_risk_profile_status(window, profile_name, source=""):
+    label = getattr(window, "_settings_risk_profile_description", None)
+    if label is None:
+        return
+    normalized = _hotfix_normalize_risk_profile_name(profile_name)
+    if normalized == "Custom":
+        label.setText(
+            "Custom profile: these limits no longer match one preset exactly. "
+            "You can keep them as-is or reapply a preset."
+        )
+        return
+    payload = _hotfix_risk_profile_payload(normalized)
+    prefix = f"{normalized}: {payload.get('description', '')}"
+    if source:
+        prefix = f"{source} {prefix}".strip()
+    label.setText(prefix)
+
+
+def _hotfix_apply_risk_profile_to_window(window, profile_name):
+    if window is None:
+        return
+    normalized = _hotfix_normalize_risk_profile_name(profile_name)
+    picker = getattr(window, "_settings_risk_profile", None)
+    if picker is None:
+        return
+    window._risk_profile_updating = True
+    try:
+        if normalized != "Custom":
+            payload = _hotfix_risk_profile_payload(normalized)
+            for attr_name, key in (
+                ("_settings_max_portfolio", "max_portfolio_risk"),
+                ("_settings_max_trade", "max_risk_per_trade"),
+                ("_settings_max_position", "max_position_size_pct"),
+                ("_settings_max_gross", "max_gross_exposure_pct"),
+            ):
+                widget = getattr(window, attr_name, None)
+                if widget is not None:
+                    widget.setValue(float(payload[key]))
+        profile_index = picker.findText(normalized)
+        if profile_index < 0:
+            profile_index = picker.findText("Custom")
+        picker.setCurrentIndex(profile_index if profile_index >= 0 else 0)
+    finally:
+        window._risk_profile_updating = False
+    _hotfix_set_risk_profile_status(window, normalized)
+
+
+def _hotfix_sync_risk_profile_from_window(window):
+    if window is None or bool(getattr(window, "_risk_profile_updating", False)):
+        return
+    profile_name = _hotfix_detect_risk_profile_name(
+        {
+            "max_portfolio_risk": getattr(getattr(window, "_settings_max_portfolio", None), "value", lambda: 0.0)(),
+            "max_risk_per_trade": getattr(getattr(window, "_settings_max_trade", None), "value", lambda: 0.0)(),
+            "max_position_size_pct": getattr(getattr(window, "_settings_max_position", None), "value", lambda: 0.0)(),
+            "max_gross_exposure_pct": getattr(getattr(window, "_settings_max_gross", None), "value", lambda: 0.0)(),
+        }
+    )
+    picker = getattr(window, "_settings_risk_profile", None)
+    if picker is not None:
+        window._risk_profile_updating = True
+        try:
+            profile_index = picker.findText(profile_name)
+            picker.setCurrentIndex(profile_index if profile_index >= 0 else picker.findText("Custom"))
+        finally:
+            window._risk_profile_updating = False
+    _hotfix_set_risk_profile_status(window, profile_name)
 
 
 def _hotfix_build_strategy_params(values, controller):
@@ -5887,19 +13020,21 @@ def _hotfix_build_strategy_params(values, controller):
 def _hotfix_update_color_button(button, color):
     if button is None:
         return
+    qcolor = QColor(str(color or "#1f2937"))
+    text_color = "#11161f" if qcolor.lightnessF() >= 0.62 else "#ffffff"
     button.setText(color)
     button.setStyleSheet(
         """
         QPushButton {
             background-color: %s;
-            color: white;
+            color: %s;
             border: 1px solid #31415f;
             border-radius: 8px;
             padding: 6px 10px;
             font-weight: 700;
         }
         """
-        % color
+        % (color, text_color)
     )
 
 
@@ -5922,17 +13057,35 @@ def _hotfix_collect_settings_values(self, window=None):
     return {
         "timeframe": window._settings_timeframe.currentText(),
         "order_type": window._settings_order_type.currentText(),
+        "market_trade_preference": window._settings_market_type.currentData(),
+        "database_mode": window._settings_database_mode.currentData(),
+        "database_url": window._settings_database_url.text().strip(),
         "history_limit": int(window._settings_history_limit.value()),
         "initial_capital": float(window._settings_initial_capital.value()),
+        "hedging_enabled": bool(window._settings_hedging_enabled.currentData()),
         "refresh_interval_ms": int(window._settings_refresh_ms.value()),
         "orderbook_interval_ms": int(window._settings_orderbook_ms.value()),
+        "forex_candle_price_component": window._settings_forex_candle_source.currentData(),
         "show_bid_ask_lines": window._settings_bid_ask_mode.currentData(),
+        "chart_background_color": getattr(window, "_settings_chart_background_color", self.chart_background_color),
+        "chart_grid_color": getattr(window, "_settings_chart_grid_color", self.chart_grid_color),
+        "chart_axis_color": getattr(window, "_settings_chart_axis_color", self.chart_axis_color),
         "candle_up_color": getattr(window, "_settings_up_color", self.candle_up_color),
         "candle_down_color": getattr(window, "_settings_down_color", self.candle_down_color),
+        "risk_profile_name": _hotfix_detect_risk_profile_name(
+            {
+                "max_portfolio_risk": float(window._settings_max_portfolio.value()),
+                "max_risk_per_trade": float(window._settings_max_trade.value()),
+                "max_position_size_pct": float(window._settings_max_position.value()),
+                "max_gross_exposure_pct": float(window._settings_max_gross.value()),
+            }
+        ),
         "max_portfolio_risk": float(window._settings_max_portfolio.value()),
         "max_risk_per_trade": float(window._settings_max_trade.value()),
         "max_position_size_pct": float(window._settings_max_position.value()),
         "max_gross_exposure_pct": float(window._settings_max_gross.value()),
+        "margin_closeout_guard_enabled": bool(window._settings_margin_closeout_guard.currentData()),
+        "max_margin_closeout_pct": float(window._settings_margin_closeout_pct.value()),
         "strategy_name": window._settings_strategy_name.currentText(),
         "strategy_rsi_period": int(window._settings_strategy_rsi_period.value()),
         "strategy_ema_fast": int(window._settings_strategy_ema_fast.value()),
@@ -5948,7 +13101,54 @@ def _hotfix_collect_settings_values(self, window=None):
         "telegram_chat_id": window._settings_telegram_chat_id.text().strip(),
         "openai_api_key": window._settings_openai_api_key.text().strip(),
         "openai_model": window._settings_openai_model.text().strip(),
+        "news_enabled": window._settings_news_enabled.currentData(),
+        "news_autotrade_enabled": window._settings_news_autotrade.currentData(),
+        "news_draw_on_chart": window._settings_news_chart.currentData(),
+        "news_feed_url": window._settings_news_feed_url.text().strip(),
     }
+
+
+async def _hotfix_test_openai_from_settings_async(self, window):
+    try:
+        api_key = window._settings_openai_api_key.text().strip()
+        model = window._settings_openai_model.text().strip() or "gpt-5-mini"
+        result = await self.controller.test_openai_connection(api_key=api_key, model=model)
+    except Exception as exc:
+        result = {"ok": False, "message": f"OpenAI test failed: {exc}"}
+
+    ok = bool(result.get("ok"))
+    message = str(result.get("message") or ("OpenAI connection OK." if ok else "OpenAI test failed."))
+    label = getattr(window, "_settings_openai_test_status", None)
+    button = getattr(window, "_settings_openai_test_button", None)
+    if label is not None:
+        tone = "#32d296" if ok else "#ff6b6b"
+        label.setStyleSheet(f"color: {tone}; padding-top: 4px;")
+        label.setText(message)
+    if button is not None:
+        button.setEnabled(True)
+        button.setText("Test OpenAI")
+
+
+def _hotfix_test_openai_from_settings(self, window=None):
+    window = window or self.detached_tool_windows.get("application_settings")
+    if window is None:
+        return
+
+    label = getattr(window, "_settings_openai_test_status", None)
+    button = getattr(window, "_settings_openai_test_button", None)
+    if label is not None:
+        label.setStyleSheet("color: #9fb0c7; padding-top: 4px;")
+        label.setText("Testing OpenAI connection...")
+    if button is not None:
+        button.setEnabled(False)
+        button.setText("Testing...")
+
+    runner = _hotfix_test_openai_from_settings_async(self, window)
+    task_factory = getattr(self.controller, "_create_task", None)
+    if callable(task_factory):
+        window._settings_openai_test_task = task_factory(runner, "settings_openai_test")
+    else:
+        window._settings_openai_test_task = asyncio.create_task(runner)
 
 
 def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False):
@@ -5957,11 +13157,29 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
 
     timeframe = values.get("timeframe", getattr(self, "current_timeframe", "1h"))
     order_type = values.get("order_type", getattr(self, "order_type", "limit"))
+    market_trade_preference = str(
+        values.get("market_trade_preference", getattr(self.controller, "market_trade_preference", "auto"))
+        or "auto"
+    ).strip().lower()
     history_limit = max(100, int(values.get("history_limit", getattr(self.controller, "limit", 50000))))
     initial_capital = max(0.0, float(values.get("initial_capital", getattr(self.controller, "initial_capital", 10000))))
     refresh_interval_ms = max(250, int(values.get("refresh_interval_ms", 1000)))
     orderbook_interval_ms = max(250, int(values.get("orderbook_interval_ms", 1500)))
+    database_mode = str(values.get("database_mode", getattr(self.controller, "database_mode", "local")) or "local").strip().lower()
+    database_url = str(values.get("database_url", getattr(self.controller, "database_url", "")) or "").strip()
+    forex_candle_price_component = str(
+        values.get(
+            "forex_candle_price_component",
+            getattr(self.controller, "forex_candle_price_component", "bid"),
+        )
+        or "bid"
+    ).strip().lower()
     show_bid_ask_lines = bool(values.get("show_bid_ask_lines", getattr(self, "show_bid_ask_lines", True)))
+    chart_background_color = str(
+        values.get("chart_background_color", getattr(self, "chart_background_color", "#11161f")) or "#11161f"
+    )
+    chart_grid_color = str(values.get("chart_grid_color", getattr(self, "chart_grid_color", "#8290a0")) or "#8290a0")
+    chart_axis_color = str(values.get("chart_axis_color", getattr(self, "chart_axis_color", "#9aa4b2")) or "#9aa4b2")
     candle_up_color = values.get("candle_up_color", getattr(self, "candle_up_color", "#26a69a"))
     candle_down_color = values.get("candle_down_color", getattr(self, "candle_down_color", "#ef5350"))
     strategy_name = Strategy.normalize_strategy_name(
@@ -5973,12 +13191,82 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
     self.order_type = order_type
     self.controller.time_frame = timeframe
     self.controller.order_type = order_type
+    if hasattr(self.controller, "set_market_trade_preference"):
+        self.controller.set_market_trade_preference(market_trade_preference)
+    market_trade_preference = str(
+        getattr(self.controller, "market_trade_preference", market_trade_preference) or market_trade_preference
+    ).strip().lower()
+    if hasattr(self.controller, "set_forex_candle_price_component"):
+        self.controller.set_forex_candle_price_component(forex_candle_price_component)
+    forex_candle_price_component = str(
+        getattr(
+            self.controller,
+            "forex_candle_price_component",
+            forex_candle_price_component,
+        )
+        or forex_candle_price_component
+    ).strip().lower()
+    if hasattr(self.controller, "configure_storage_database"):
+        self.controller.configure_storage_database(
+            database_mode=database_mode,
+            database_url=database_url,
+            persist=persist,
+            raise_on_error=bool(persist),
+        )
     self.controller.limit = history_limit
     self.controller.initial_capital = initial_capital
+    backtest_window = getattr(self, "detached_tool_windows", {}).get("backtesting_workspace")
+    backtest_history_limit = getattr(backtest_window, "_backtest_history_limit", None) if backtest_window is not None else None
+    if backtest_history_limit is not None:
+        backtest_history_limit.blockSignals(True)
+        backtest_history_limit.setValue(float(history_limit))
+        backtest_history_limit.blockSignals(False)
+    backtest_context = getattr(self, "_backtest_context", None)
+    if isinstance(backtest_context, dict):
+        backtest_context["history_limit"] = int(history_limit)
+    self.controller.risk_profile_name = str(
+        values.get(
+            "risk_profile_name",
+            _hotfix_detect_risk_profile_name(
+                {
+                    "max_portfolio_risk": values.get("max_portfolio_risk", getattr(self.controller, "max_portfolio_risk", 0.2)),
+                    "max_risk_per_trade": values.get("max_risk_per_trade", getattr(self.controller, "max_risk_per_trade", 0.02)),
+                    "max_position_size_pct": values.get("max_position_size_pct", getattr(self.controller, "max_position_size_pct", 0.05)),
+                    "max_gross_exposure_pct": values.get("max_gross_exposure_pct", getattr(self.controller, "max_gross_exposure_pct", 1.0)),
+                }
+            ),
+        )
+        or "Balanced"
+    )
     self.controller.max_portfolio_risk = float(values.get("max_portfolio_risk", getattr(self.controller, "max_portfolio_risk", 0.2)))
     self.controller.max_risk_per_trade = float(values.get("max_risk_per_trade", getattr(self.controller, "max_risk_per_trade", 0.02)))
     self.controller.max_position_size_pct = float(values.get("max_position_size_pct", getattr(self.controller, "max_position_size_pct", 0.05)))
     self.controller.max_gross_exposure_pct = float(values.get("max_gross_exposure_pct", getattr(self.controller, "max_gross_exposure_pct", 1.0)))
+    self.controller.hedging_enabled = bool(
+        values.get(
+            "hedging_enabled",
+            getattr(self.controller, "hedging_enabled", True),
+        )
+    )
+    self.controller.margin_closeout_guard_enabled = bool(
+        values.get(
+            "margin_closeout_guard_enabled",
+            getattr(self.controller, "margin_closeout_guard_enabled", True),
+        )
+    )
+    self.controller.max_margin_closeout_pct = max(
+        0.01,
+        min(
+            1.0,
+            float(
+                values.get(
+                    "max_margin_closeout_pct",
+                    getattr(self.controller, "max_margin_closeout_pct", 0.50),
+                )
+                or 0.50
+            ),
+        ),
+    )
     self.controller.strategy_name = strategy_name
     self.controller.strategy_params = strategy_params
     if hasattr(self.controller, "update_integration_settings"):
@@ -5988,11 +13276,25 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
             telegram_chat_id=values.get("telegram_chat_id", getattr(self.controller, "telegram_chat_id", "")),
             openai_api_key=values.get("openai_api_key", getattr(self.controller, "openai_api_key", "")),
             openai_model=values.get("openai_model", getattr(self.controller, "openai_model", "gpt-5-mini")),
+            news_enabled=bool(values.get("news_enabled", getattr(self.controller, "news_enabled", True))),
+            news_autotrade_enabled=bool(values.get("news_autotrade_enabled", getattr(self.controller, "news_autotrade_enabled", False))),
+            news_draw_on_chart=bool(values.get("news_draw_on_chart", getattr(self.controller, "news_draw_on_chart", True))),
+            news_feed_url=values.get("news_feed_url", getattr(self.controller, "news_feed_url", "")),
         )
 
+    self.chart_background_color = chart_background_color
+    self.chart_grid_color = chart_grid_color
+    self.chart_axis_color = chart_axis_color
     self.candle_up_color = candle_up_color
     self.candle_down_color = candle_down_color
     self.show_bid_ask_lines = show_bid_ask_lines
+    if getattr(self.controller, "news_draw_on_chart", False):
+        for chart in self._iter_chart_widgets():
+            if hasattr(self.controller, "request_news"):
+                asyncio.get_event_loop().create_task(self.controller.request_news(chart.symbol, force=True))
+    else:
+        for chart in self._iter_chart_widgets():
+            chart.clear_news_events()
 
     config = getattr(self.controller, "config", None)
     if config is not None and hasattr(config, "strategy"):
@@ -6032,6 +13334,8 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
         toggle_action.blockSignals(blocked)
 
     for chart in self._iter_chart_widgets():
+        if hasattr(chart, "set_visual_theme"):
+            chart.set_visual_theme(**self._chart_theme_kwargs())
         chart.set_candle_colors(candle_up_color, candle_down_color)
         chart.set_bid_ask_lines_visible(show_bid_ask_lines)
 
@@ -6053,33 +13357,44 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
                 self.chart_tabs.setTabText(current_index, f"{current_chart.symbol} ({timeframe})")
         if reload_chart and hasattr(self.controller, "request_candle_data"):
             asyncio.get_event_loop().create_task(
-                self.controller.request_candle_data(
-                    symbol=current_chart.symbol,
-                    timeframe=timeframe,
+                self._request_chart_data_for_widget(
+                    current_chart,
                     limit=history_limit,
                 )
             )
-        asyncio.get_event_loop().create_task(
-            self._reload_chart_data(current_chart.symbol, timeframe)
-        )
+        else:
+            asyncio.get_event_loop().create_task(
+                self._reload_chart_data(current_chart.symbol, timeframe)
+            )
         self._request_active_orderbook()
 
     if persist:
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("windowState", self.saveState())
+        self.settings.setValue("chart/background_color", chart_background_color)
+        self.settings.setValue("chart/grid_color", chart_grid_color)
+        self.settings.setValue("chart/axis_color", chart_axis_color)
         self.settings.setValue("chart/candle_up_color", candle_up_color)
         self.settings.setValue("chart/candle_down_color", candle_down_color)
+        self.settings.setValue("storage/database_mode", getattr(self.controller, "database_mode", database_mode))
+        self.settings.setValue("storage/database_url", getattr(self.controller, "database_url", database_url))
         self.settings.setValue("terminal/current_timeframe", timeframe)
         self.settings.setValue("terminal/order_type", order_type)
+        self.settings.setValue("trading/market_type", market_trade_preference)
+        self.settings.setValue("market_data/forex_candle_price_component", forex_candle_price_component)
         self.settings.setValue("terminal/history_limit", history_limit)
         self.settings.setValue("terminal/initial_capital", initial_capital)
         self.settings.setValue("terminal/refresh_interval_ms", refresh_interval_ms)
         self.settings.setValue("terminal/orderbook_interval_ms", orderbook_interval_ms)
         self.settings.setValue("terminal/show_bid_ask_lines", show_bid_ask_lines)
+        self.settings.setValue("risk/profile_name", getattr(self.controller, "risk_profile_name", "Balanced"))
         self.settings.setValue("risk/max_portfolio_risk", self.controller.max_portfolio_risk)
         self.settings.setValue("risk/max_risk_per_trade", self.controller.max_risk_per_trade)
         self.settings.setValue("risk/max_position_size_pct", self.controller.max_position_size_pct)
         self.settings.setValue("risk/max_gross_exposure_pct", self.controller.max_gross_exposure_pct)
+        self.settings.setValue("trading/hedging_enabled", bool(getattr(self.controller, "hedging_enabled", True)))
+        self.settings.setValue("risk/margin_closeout_guard_enabled", bool(self.controller.margin_closeout_guard_enabled))
+        self.settings.setValue("risk/max_margin_closeout_pct", float(self.controller.max_margin_closeout_pct))
         self.settings.setValue("strategy/name", strategy_name)
         self.settings.setValue("strategy/rsi_period", strategy_params["rsi_period"])
         self.settings.setValue("strategy/ema_fast", strategy_params["ema_fast"])
@@ -6095,6 +13410,10 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
         self.settings.setValue("integrations/telegram_chat_id", values.get("telegram_chat_id", getattr(self.controller, "telegram_chat_id", "")))
         self.settings.setValue("integrations/openai_api_key", values.get("openai_api_key", getattr(self.controller, "openai_api_key", "")))
         self.settings.setValue("integrations/openai_model", values.get("openai_model", getattr(self.controller, "openai_model", "gpt-5-mini")))
+        self.settings.setValue("integrations/news_enabled", bool(values.get("news_enabled", getattr(self.controller, "news_enabled", True))))
+        self.settings.setValue("integrations/news_autotrade_enabled", bool(values.get("news_autotrade_enabled", getattr(self.controller, "news_autotrade_enabled", False))))
+        self.settings.setValue("integrations/news_draw_on_chart", bool(values.get("news_draw_on_chart", getattr(self.controller, "news_draw_on_chart", True))))
+        self.settings.setValue("integrations/news_feed_url", values.get("news_feed_url", getattr(self.controller, "news_feed_url", "")))
         self._save_detached_chart_layouts()
 
 
@@ -6124,7 +13443,10 @@ def _hotfix_show_settings_window(self):
         timeframe = QComboBox()
         timeframe.addItems(["1m", "5m", "15m", "1h", "4h", "1d"])
         order_type = QComboBox()
-        order_type.addItems(["market", "limit"])
+        order_type.addItems(["market", "limit", "stop_limit"])
+        market_type = QComboBox()
+        for label, value in MARKET_VENUE_CHOICES:
+            market_type.addItem(label, value)
 
         history_limit = QDoubleSpinBox()
         history_limit.setDecimals(0)
@@ -6148,13 +13470,36 @@ def _hotfix_show_settings_window(self):
         orderbook_ms.setRange(250, 60000)
         orderbook_ms.setSingleStep(250)
 
+        hedging_mode = QComboBox()
+        hedging_mode.addItem("Enabled (when broker supports hedging)", True)
+        hedging_mode.addItem("Disabled", False)
+
         general_form.addRow("Default timeframe", timeframe)
         general_form.addRow("Default order type", order_type)
+        general_form.addRow("Trading venue", market_type)
+        general_form.addRow("Hedging mode", hedging_mode)
         general_form.addRow("History limit (candles)", history_limit)
         general_form.addRow("Initial capital", initial_capital)
         general_form.addRow("Terminal refresh (ms)", refresh_ms)
         general_form.addRow("Orderbook refresh (ms)", orderbook_ms)
         tabs.addTab(general_tab, "General")
+
+        storage_tab = QWidget()
+        storage_form = QFormLayout(storage_tab)
+
+        database_mode = QComboBox()
+        database_mode.addItem("Local SQLite", "local")
+        database_mode.addItem("Remote URL", "remote")
+
+        database_url = QLineEdit()
+        database_hint = QLabel()
+        database_hint.setWordWrap(True)
+        database_hint.setStyleSheet("color: #8fa7c6; padding-top: 2px;")
+
+        storage_form.addRow("Database backend", database_mode)
+        storage_form.addRow("Remote database URL", database_url)
+        storage_form.addRow("", database_hint)
+        tabs.addTab(storage_tab, "Storage")
 
         display_tab = QWidget()
         display_form = QFormLayout(display_tab)
@@ -6163,8 +13508,45 @@ def _hotfix_show_settings_window(self):
         bid_ask_mode.addItem("Show", True)
         bid_ask_mode.addItem("Hide", False)
 
+        forex_candle_source = QComboBox()
+        forex_candle_source.addItem("Bid (MT4-style)", "bid")
+        forex_candle_source.addItem("Mid", "mid")
+        forex_candle_source.addItem("Ask", "ask")
+        forex_candle_source.setToolTip("MT4-style forex charts typically use bid candles.")
+
+        display_hint = QLabel("MT4-style chart colors let you tune the plot background, foreground, grid, and candles.")
+        display_hint.setWordWrap(True)
+        display_hint.setStyleSheet("color: #8fa7c6; padding-top: 2px;")
+
+        chart_background_btn = QPushButton()
+        chart_grid_btn = QPushButton()
+        chart_axis_btn = QPushButton()
         up_color_btn = QPushButton()
         down_color_btn = QPushButton()
+        chart_background_btn.clicked.connect(
+            lambda: _hotfix_pick_settings_color(
+                window,
+                "_settings_chart_background_color",
+                chart_background_btn,
+                "Select Chart Background Color",
+            )
+        )
+        chart_grid_btn.clicked.connect(
+            lambda: _hotfix_pick_settings_color(
+                window,
+                "_settings_chart_grid_color",
+                chart_grid_btn,
+                "Select Chart Grid Color",
+            )
+        )
+        chart_axis_btn.clicked.connect(
+            lambda: _hotfix_pick_settings_color(
+                window,
+                "_settings_chart_axis_color",
+                chart_axis_btn,
+                "Select Chart Foreground Color",
+            )
+        )
         up_color_btn.clicked.connect(
             lambda: _hotfix_pick_settings_color(
                 window,
@@ -6182,13 +13564,26 @@ def _hotfix_show_settings_window(self):
             )
         )
 
+        display_form.addRow("Forex candle source", forex_candle_source)
         display_form.addRow("Bid/ask guide lines", bid_ask_mode)
+        display_form.addRow("", display_hint)
+        display_form.addRow("Chart background", chart_background_btn)
+        display_form.addRow("Chart foreground", chart_axis_btn)
+        display_form.addRow("Grid color", chart_grid_btn)
         display_form.addRow("Bullish candle color", up_color_btn)
         display_form.addRow("Bearish candle color", down_color_btn)
         tabs.addTab(display_tab, "Display")
 
         risk_tab = QWidget()
         risk_form = QFormLayout(risk_tab)
+
+        risk_profile = QComboBox()
+        for name in _hotfix_risk_profile_names():
+            risk_profile.addItem(name)
+
+        risk_profile_description = QLabel()
+        risk_profile_description.setWordWrap(True)
+        risk_profile_description.setStyleSheet("color: #8fa7c6; padding-top: 2px;")
 
         max_portfolio = QDoubleSpinBox()
         max_portfolio.setDecimals(4)
@@ -6210,17 +13605,31 @@ def _hotfix_show_settings_window(self):
         max_gross.setRange(0, 100000)
         max_gross.setSingleStep(0.01)
 
+        margin_closeout_guard = QComboBox()
+        margin_closeout_guard.addItem("Enabled", True)
+        margin_closeout_guard.addItem("Disabled", False)
+
+        margin_closeout_pct = QDoubleSpinBox()
+        margin_closeout_pct.setDecimals(4)
+        margin_closeout_pct.setRange(0.01, 1.0)
+        margin_closeout_pct.setSingleStep(0.01)
+        margin_closeout_pct.setToolTip("Blocks new trades when margin closeout risk reaches this ratio. Example: 0.50 = 50%.")
+
+        risk_form.addRow("Risk profile", risk_profile)
+        risk_form.addRow("", risk_profile_description)
         risk_form.addRow("Max portfolio risk", max_portfolio)
         risk_form.addRow("Max risk per trade", max_trade)
         risk_form.addRow("Max position size", max_position)
         risk_form.addRow("Max gross exposure", max_gross)
+        risk_form.addRow("Closeout guard", margin_closeout_guard)
+        risk_form.addRow("Closeout block threshold", margin_closeout_pct)
         tabs.addTab(risk_tab, "Risk")
 
         strategy_tab = QWidget()
         strategy_form = QFormLayout(strategy_tab)
 
         strategy_name = QComboBox()
-        strategy_name.addItems(["Trend Following", "Mean Reversion", "Breakout", "AI Hybrid"])
+        self._populate_strategy_picker(strategy_name, selected_strategy=getattr(self.controller, "strategy_name", "Trend Following"))
 
         strategy_rsi_period = QDoubleSpinBox()
         strategy_rsi_period.setDecimals(0)
@@ -6299,11 +13708,43 @@ def _hotfix_show_settings_window(self):
         openai_model = QLineEdit()
         openai_model.setPlaceholderText("gpt-5-mini")
 
+        openai_test_button = QPushButton("Test OpenAI")
+        openai_test_button.setStyleSheet(self._action_button_style())
+        openai_test_status = QLabel("Use this to verify the typed OpenAI key and model before saving.")
+        openai_test_status.setWordWrap(True)
+        openai_test_status.setStyleSheet("color: #9fb0c7; padding-top: 4px;")
+        openai_test_row = QWidget()
+        openai_test_layout = QVBoxLayout(openai_test_row)
+        openai_test_layout.setContentsMargins(0, 0, 0, 0)
+        openai_test_layout.setSpacing(6)
+        openai_test_layout.addWidget(openai_test_button)
+        openai_test_layout.addWidget(openai_test_status)
+
+        news_enabled = QComboBox()
+        news_enabled.addItem("Disabled", False)
+        news_enabled.addItem("Enabled", True)
+
+        news_autotrade = QComboBox()
+        news_autotrade.addItem("Off", False)
+        news_autotrade.addItem("On", True)
+
+        news_chart = QComboBox()
+        news_chart.addItem("Hide", False)
+        news_chart.addItem("Draw on charts", True)
+
+        news_feed_url = QLineEdit()
+        news_feed_url.setPlaceholderText(NewsService.DEFAULT_FEED_URL)
+
         integrations_form.addRow("Telegram notifications", telegram_enabled)
         integrations_form.addRow("Telegram bot token", telegram_bot_token)
         integrations_form.addRow("Telegram chat ID", telegram_chat_id)
         integrations_form.addRow("OpenAI API key", openai_api_key)
         integrations_form.addRow("OpenAI model", openai_model)
+        integrations_form.addRow("OpenAI test", openai_test_row)
+        integrations_form.addRow("News feed", news_enabled)
+        integrations_form.addRow("Trade from news bias", news_autotrade)
+        integrations_form.addRow("Draw news on chart", news_chart)
+        integrations_form.addRow("News feed URL", news_feed_url)
         tabs.addTab(integrations_tab, "Integrations")
 
         summary = QLabel("-")
@@ -6330,17 +13771,31 @@ def _hotfix_show_settings_window(self):
         window._settings_tabs = tabs
         window._settings_timeframe = timeframe
         window._settings_order_type = order_type
+        window._settings_market_type = market_type
+        window._settings_hedging_enabled = hedging_mode
+        window._settings_database_mode = database_mode
+        window._settings_database_url = database_url
+        window._settings_database_hint = database_hint
         window._settings_history_limit = history_limit
         window._settings_initial_capital = initial_capital
         window._settings_refresh_ms = refresh_ms
         window._settings_orderbook_ms = orderbook_ms
+        window._settings_forex_candle_source = forex_candle_source
         window._settings_bid_ask_mode = bid_ask_mode
+        window._settings_chart_background_button = chart_background_btn
+        window._settings_chart_axis_button = chart_axis_btn
+        window._settings_chart_grid_button = chart_grid_btn
         window._settings_up_button = up_color_btn
         window._settings_down_button = down_color_btn
+        window._settings_risk_profile = risk_profile
+        window._settings_risk_profile_description = risk_profile_description
         window._settings_max_portfolio = max_portfolio
         window._settings_max_trade = max_trade
         window._settings_max_position = max_position
         window._settings_max_gross = max_gross
+        window._settings_margin_closeout_guard = margin_closeout_guard
+        window._settings_margin_closeout_pct = margin_closeout_pct
+        window._risk_profile_updating = False
         window._settings_strategy_name = strategy_name
         window._settings_strategy_rsi_period = strategy_rsi_period
         window._settings_strategy_ema_fast = strategy_ema_fast
@@ -6356,7 +13811,20 @@ def _hotfix_show_settings_window(self):
         window._settings_telegram_chat_id = telegram_chat_id
         window._settings_openai_api_key = openai_api_key
         window._settings_openai_model = openai_model
+        window._settings_openai_test_button = openai_test_button
+        window._settings_openai_test_status = openai_test_status
+        window._settings_news_enabled = news_enabled
+        window._settings_news_autotrade = news_autotrade
+        window._settings_news_chart = news_chart
+        window._settings_news_feed_url = news_feed_url
         window._settings_summary = summary
+        openai_test_button.clicked.connect(lambda: _hotfix_test_openai_from_settings(self, window))
+        database_mode.currentIndexChanged.connect(lambda *_: _hotfix_update_database_mode_state(window))
+        risk_profile.currentTextChanged.connect(lambda value: _hotfix_apply_risk_profile_to_window(window, value))
+        max_portfolio.valueChanged.connect(lambda *_: _hotfix_sync_risk_profile_from_window(window))
+        max_trade.valueChanged.connect(lambda *_: _hotfix_sync_risk_profile_from_window(window))
+        max_position.valueChanged.connect(lambda *_: _hotfix_sync_risk_profile_from_window(window))
+        max_gross.valueChanged.connect(lambda *_: _hotfix_sync_risk_profile_from_window(window))
 
     risk_engine = _hotfix_get_live_risk_engine(self)
     refresh_interval = 1000
@@ -6366,16 +13834,45 @@ def _hotfix_show_settings_window(self):
     if hasattr(self, "orderbook_timer") and self.orderbook_timer is not None:
         orderbook_interval = max(250, self.orderbook_timer.interval())
 
+    _hotfix_refresh_market_type_picker(window, self.controller)
     window._settings_timeframe.setCurrentText(getattr(self, "current_timeframe", getattr(self.controller, "time_frame", "1h")))
     window._settings_order_type.setCurrentText(getattr(self, "order_type", getattr(self.controller, "order_type", "limit")))
+    market_index = window._settings_market_type.findData(getattr(self.controller, "market_trade_preference", "auto"))
+    window._settings_market_type.setCurrentIndex(market_index if market_index >= 0 else 0)
+    database_mode_index = window._settings_database_mode.findData(getattr(self.controller, "database_mode", "local"))
+    window._settings_database_mode.setCurrentIndex(database_mode_index if database_mode_index >= 0 else 0)
+    window._settings_database_url.setText(str(getattr(self.controller, "database_url", "") or ""))
+    _hotfix_update_database_mode_state(window)
+    window._settings_hedging_enabled.setCurrentIndex(0 if getattr(self.controller, "hedging_enabled", True) else 1)
     window._settings_history_limit.setValue(float(getattr(self.controller, "limit", 50000)))
     window._settings_initial_capital.setValue(float(getattr(self.controller, "initial_capital", 10000)))
     window._settings_refresh_ms.setValue(float(refresh_interval))
     window._settings_orderbook_ms.setValue(float(orderbook_interval))
+    forex_candle_source_index = window._settings_forex_candle_source.findData(
+        getattr(self.controller, "forex_candle_price_component", "bid")
+    )
+    window._settings_forex_candle_source.setCurrentIndex(
+        forex_candle_source_index if forex_candle_source_index >= 0 else 0
+    )
     window._settings_bid_ask_mode.setCurrentIndex(0 if getattr(self, "show_bid_ask_lines", True) else 1)
 
+    window._settings_chart_background_color = getattr(self, "chart_background_color", "#11161f")
+    window._settings_chart_grid_color = getattr(self, "chart_grid_color", "#8290a0")
+    window._settings_chart_axis_color = getattr(self, "chart_axis_color", "#9aa4b2")
     window._settings_up_color = getattr(self, "candle_up_color", "#26a69a")
     window._settings_down_color = getattr(self, "candle_down_color", "#ef5350")
+    _hotfix_update_color_button(
+        window._settings_chart_background_button,
+        window._settings_chart_background_color,
+    )
+    _hotfix_update_color_button(
+        window._settings_chart_grid_button,
+        window._settings_chart_grid_color,
+    )
+    _hotfix_update_color_button(
+        window._settings_chart_axis_button,
+        window._settings_chart_axis_color,
+    )
     _hotfix_update_color_button(window._settings_up_button, window._settings_up_color)
     _hotfix_update_color_button(window._settings_down_button, window._settings_down_color)
 
@@ -6383,6 +13880,26 @@ def _hotfix_show_settings_window(self):
     window._settings_max_trade.setValue(float(getattr(risk_engine, "max_risk_per_trade", getattr(self.controller, "max_risk_per_trade", 0.02))))
     window._settings_max_position.setValue(float(getattr(risk_engine, "max_position_size_pct", getattr(self.controller, "max_position_size_pct", 0.05))))
     window._settings_max_gross.setValue(float(getattr(risk_engine, "max_gross_exposure_pct", getattr(self.controller, "max_gross_exposure_pct", 1.0))))
+    window._settings_margin_closeout_guard.setCurrentIndex(
+        0 if getattr(self.controller, "margin_closeout_guard_enabled", True) else 1
+    )
+    window._settings_margin_closeout_pct.setValue(
+        float(getattr(self.controller, "max_margin_closeout_pct", 0.50))
+    )
+    configured_profile = str(
+        getattr(self.controller, "risk_profile_name", "")
+        or self.settings.value("risk/profile_name", "")
+        or ""
+    ).strip()
+    detected_profile = _hotfix_detect_risk_profile_name(
+        {
+            "max_portfolio_risk": window._settings_max_portfolio.value(),
+            "max_risk_per_trade": window._settings_max_trade.value(),
+            "max_position_size_pct": window._settings_max_position.value(),
+            "max_gross_exposure_pct": window._settings_max_gross.value(),
+        }
+    )
+    _hotfix_apply_risk_profile_to_window(window, configured_profile or detected_profile)
     strategy_params = dict(getattr(self.controller, "strategy_params", {}) or {})
     current_strategy_name = Strategy.normalize_strategy_name(
         getattr(self.controller, "strategy_name", None) or getattr(getattr(self.controller, "config", None), "strategy", "Trend Following")
@@ -6402,15 +13919,29 @@ def _hotfix_show_settings_window(self):
     window._settings_telegram_chat_id.setText(str(getattr(self.controller, "telegram_chat_id", "") or ""))
     window._settings_openai_api_key.setText(str(getattr(self.controller, "openai_api_key", "") or ""))
     window._settings_openai_model.setText(str(getattr(self.controller, "openai_model", "gpt-5-mini") or "gpt-5-mini"))
+    window._settings_openai_test_status.setStyleSheet("color: #9fb0c7; padding-top: 4px;")
+    window._settings_openai_test_status.setText("Use this to verify the typed OpenAI key and model before saving.")
+    window._settings_openai_test_button.setEnabled(True)
+    window._settings_openai_test_button.setText("Test OpenAI")
+    window._settings_news_enabled.setCurrentIndex(1 if getattr(self.controller, "news_enabled", True) else 0)
+    window._settings_news_autotrade.setCurrentIndex(1 if getattr(self.controller, "news_autotrade_enabled", False) else 0)
+    window._settings_news_chart.setCurrentIndex(1 if getattr(self.controller, "news_draw_on_chart", True) else 0)
+    window._settings_news_feed_url.setText(str(getattr(self.controller, "news_feed_url", NewsService.DEFAULT_FEED_URL) or NewsService.DEFAULT_FEED_URL))
 
     window._settings_summary.setText(
         "Current defaults: "
         f"{window._settings_timeframe.currentText()} | "
         f"{window._settings_order_type.currentText()} orders | "
+        f"{window._settings_market_type.currentText()} venue | "
+        f"{window._settings_database_mode.currentText()} storage | "
+        f"{window._settings_risk_profile.currentText()} risk | "
+        f"closeout {'on' if window._settings_margin_closeout_guard.currentData() else 'off'} @ {window._settings_margin_closeout_pct.value():.2%} | "
         f"{window._settings_strategy_name.currentText()} | "
+        f"hedging {'on' if window._settings_hedging_enabled.currentData() else 'off'} | "
         f"history {int(window._settings_history_limit.value())} candles | "
         f"capital {window._settings_initial_capital.value():.2f} | "
         f"Telegram {'on' if window._settings_telegram_enabled.currentData() else 'off'} | "
+        f"News {'on' if window._settings_news_enabled.currentData() else 'off'} | "
         f"OpenAI {'set' if window._settings_openai_api_key.text().strip() else 'not set'}"
     )
 
@@ -6433,11 +13964,18 @@ def _hotfix_apply_settings_window(self, window=None):
         if summary is not None:
             summary.setText(
                 "Saved settings. "
+                f"Storage: {getattr(self.controller, 'current_database_label', lambda: values.get('database_mode', 'local'))()} | "
+                f"Risk profile: {values.get('risk_profile_name', 'Custom')} | "
+                f"Closeout guard: {'enabled' if values.get('margin_closeout_guard_enabled') else 'disabled'} @ {float(values.get('max_margin_closeout_pct', 0.50) or 0.50):.2%} | "
+                f"Hedging: {'enabled' if values.get('hedging_enabled', True) else 'disabled'} | "
                 f"Strategy: {values['strategy_name']} | "
                 f"Timeframe: {values['timeframe']} | "
                 f"Order type: {values['order_type']} | "
+                f"Venue: {values['market_trade_preference']} | "
+                f"FX candles: {str(values.get('forex_candle_price_component') or 'bid').capitalize()} | "
                 f"History: {values['history_limit']} | "
                 f"Bid/ask lines: {'shown' if values['show_bid_ask_lines'] else 'hidden'} | "
+                f"News auto: {'enabled' if values['news_autotrade_enabled'] else 'disabled'} | "
                 f"Telegram: {'enabled' if values['telegram_enabled'] else 'disabled'} | "
                 f"OpenAI model: {values.get('openai_model') or 'gpt-5-mini'}"
             )
@@ -6445,6 +13983,10 @@ def _hotfix_apply_settings_window(self, window=None):
         self.system_console.log("Application settings updated successfully.", "INFO")
 
     except Exception as e:
+        active_window = window or self.detached_tool_windows.get("application_settings")
+        summary = getattr(active_window, "_settings_summary", None)
+        if summary is not None:
+            summary.setText(f"Unable to save settings: {e}")
         self.logger.error(f"Settings error: {e}")
 
 
@@ -6466,17 +14008,31 @@ def _hotfix_restore_settings(self):
     values = {
         "timeframe": self.settings.value("terminal/current_timeframe", getattr(self.controller, "time_frame", getattr(self, "current_timeframe", "1h"))),
         "order_type": self.settings.value("terminal/order_type", getattr(self.controller, "order_type", getattr(self, "order_type", "limit"))),
+        "market_trade_preference": self.settings.value("trading/market_type", getattr(self.controller, "market_trade_preference", "auto")),
+        "database_mode": self.settings.value("storage/database_mode", getattr(self.controller, "database_mode", "local")),
+        "database_url": self.settings.value("storage/database_url", getattr(self.controller, "database_url", "")),
         "history_limit": _hotfix_settings_int(self.settings.value("terminal/history_limit", getattr(self.controller, "limit", 50000)), getattr(self.controller, "limit", 50000)),
         "initial_capital": _hotfix_settings_float(self.settings.value("terminal/initial_capital", getattr(self.controller, "initial_capital", 10000)), getattr(self.controller, "initial_capital", 10000)),
+        "hedging_enabled": _hotfix_settings_bool(self.settings.value("trading/hedging_enabled", getattr(self.controller, "hedging_enabled", True)), getattr(self.controller, "hedging_enabled", True)),
         "refresh_interval_ms": _hotfix_settings_int(self.settings.value("terminal/refresh_interval_ms", 1000), 1000),
         "orderbook_interval_ms": _hotfix_settings_int(self.settings.value("terminal/orderbook_interval_ms", 1500), 1500),
+        "forex_candle_price_component": self.settings.value(
+            "market_data/forex_candle_price_component",
+            getattr(self.controller, "forex_candle_price_component", "bid"),
+        ),
         "show_bid_ask_lines": _hotfix_settings_bool(self.settings.value("terminal/show_bid_ask_lines", getattr(self, "show_bid_ask_lines", True)), getattr(self, "show_bid_ask_lines", True)),
+        "chart_background_color": self.settings.value("chart/background_color", getattr(self, "chart_background_color", "#11161f")),
+        "chart_grid_color": self.settings.value("chart/grid_color", getattr(self, "chart_grid_color", "#8290a0")),
+        "chart_axis_color": self.settings.value("chart/axis_color", getattr(self, "chart_axis_color", "#9aa4b2")),
         "candle_up_color": self.settings.value("chart/candle_up_color", getattr(self, "candle_up_color", "#26a69a")),
         "candle_down_color": self.settings.value("chart/candle_down_color", getattr(self, "candle_down_color", "#ef5350")),
+        "risk_profile_name": self.settings.value("risk/profile_name", getattr(self.controller, "risk_profile_name", "Balanced")),
         "max_portfolio_risk": _hotfix_settings_float(self.settings.value("risk/max_portfolio_risk", getattr(self.controller, "max_portfolio_risk", 0.2)), getattr(self.controller, "max_portfolio_risk", 0.2)),
         "max_risk_per_trade": _hotfix_settings_float(self.settings.value("risk/max_risk_per_trade", getattr(self.controller, "max_risk_per_trade", 0.02)), getattr(self.controller, "max_risk_per_trade", 0.02)),
         "max_position_size_pct": _hotfix_settings_float(self.settings.value("risk/max_position_size_pct", getattr(self.controller, "max_position_size_pct", 0.05)), getattr(self.controller, "max_position_size_pct", 0.05)),
         "max_gross_exposure_pct": _hotfix_settings_float(self.settings.value("risk/max_gross_exposure_pct", getattr(self.controller, "max_gross_exposure_pct", 1.0)), getattr(self.controller, "max_gross_exposure_pct", 1.0)),
+        "margin_closeout_guard_enabled": _hotfix_settings_bool(self.settings.value("risk/margin_closeout_guard_enabled", getattr(self.controller, "margin_closeout_guard_enabled", True)), getattr(self.controller, "margin_closeout_guard_enabled", True)),
+        "max_margin_closeout_pct": _hotfix_settings_float(self.settings.value("risk/max_margin_closeout_pct", getattr(self.controller, "max_margin_closeout_pct", 0.50)), getattr(self.controller, "max_margin_closeout_pct", 0.50)),
         "strategy_name": self.settings.value("strategy/name", getattr(self.controller, "strategy_name", "Trend Following")),
         "strategy_rsi_period": _hotfix_settings_int(self.settings.value("strategy/rsi_period", strategy_params.get("rsi_period", 14)), 14),
         "strategy_ema_fast": _hotfix_settings_int(self.settings.value("strategy/ema_fast", strategy_params.get("ema_fast", 20)), 20),
@@ -6487,6 +14043,15 @@ def _hotfix_restore_settings(self):
         "strategy_breakout_lookback": _hotfix_settings_int(self.settings.value("strategy/breakout_lookback", strategy_params.get("breakout_lookback", 20)), 20),
         "strategy_min_confidence": _hotfix_settings_float(self.settings.value("strategy/min_confidence", strategy_params.get("min_confidence", 0.55)), 0.55),
         "strategy_signal_amount": _hotfix_settings_float(self.settings.value("strategy/signal_amount", strategy_params.get("signal_amount", 1.0)), 1.0),
+        "telegram_enabled": _hotfix_settings_bool(self.settings.value("integrations/telegram_enabled", getattr(self.controller, "telegram_enabled", False)), getattr(self.controller, "telegram_enabled", False)),
+        "telegram_bot_token": self.settings.value("integrations/telegram_bot_token", getattr(self.controller, "telegram_bot_token", "")),
+        "telegram_chat_id": self.settings.value("integrations/telegram_chat_id", getattr(self.controller, "telegram_chat_id", "")),
+        "openai_api_key": self.settings.value("integrations/openai_api_key", getattr(self.controller, "openai_api_key", "")),
+        "openai_model": self.settings.value("integrations/openai_model", getattr(self.controller, "openai_model", "gpt-5-mini")),
+        "news_enabled": _hotfix_settings_bool(self.settings.value("integrations/news_enabled", getattr(self.controller, "news_enabled", True)), getattr(self.controller, "news_enabled", True)),
+        "news_autotrade_enabled": _hotfix_settings_bool(self.settings.value("integrations/news_autotrade_enabled", getattr(self.controller, "news_autotrade_enabled", False)), getattr(self.controller, "news_autotrade_enabled", False)),
+        "news_draw_on_chart": _hotfix_settings_bool(self.settings.value("integrations/news_draw_on_chart", getattr(self.controller, "news_draw_on_chart", True)), getattr(self.controller, "news_draw_on_chart", True)),
+        "news_feed_url": self.settings.value("integrations/news_feed_url", getattr(self.controller, "news_feed_url", NewsService.DEFAULT_FEED_URL)),
     }
 
     _hotfix_apply_settings_values(self, values, persist=False, reload_chart=False)
@@ -6507,23 +14072,36 @@ def _hotfix_close_event(self, event):
             task = getattr(self, task_name, None)
             if task is not None and not task.done():
                 task.cancel()
+        if hasattr(self, "_disconnect_controller_signals"):
+            self._disconnect_controller_signals()
+        if hasattr(self, "_safe_disconnect") and hasattr(self, "ai_signal"):
+            self._safe_disconnect(self.ai_signal, self._update_ai_signal)
     except Exception:
         pass
 
     values = {
         "timeframe": getattr(self, "current_timeframe", getattr(self.controller, "time_frame", "1h")),
         "order_type": getattr(self, "order_type", getattr(self.controller, "order_type", "limit")),
+        "market_trade_preference": getattr(self.controller, "market_trade_preference", "auto"),
+        "forex_candle_price_component": getattr(self.controller, "forex_candle_price_component", "bid"),
         "history_limit": getattr(self.controller, "limit", 50000),
         "initial_capital": getattr(self.controller, "initial_capital", 10000),
+        "hedging_enabled": getattr(self.controller, "hedging_enabled", True),
         "refresh_interval_ms": self.refresh_timer.interval() if hasattr(self, "refresh_timer") and self.refresh_timer is not None else 1000,
         "orderbook_interval_ms": self.orderbook_timer.interval() if hasattr(self, "orderbook_timer") and self.orderbook_timer is not None else 1500,
         "show_bid_ask_lines": getattr(self, "show_bid_ask_lines", True),
+        "chart_background_color": getattr(self, "chart_background_color", "#11161f"),
+        "chart_grid_color": getattr(self, "chart_grid_color", "#8290a0"),
+        "chart_axis_color": getattr(self, "chart_axis_color", "#9aa4b2"),
         "candle_up_color": getattr(self, "candle_up_color", "#26a69a"),
         "candle_down_color": getattr(self, "candle_down_color", "#ef5350"),
+        "risk_profile_name": getattr(self.controller, "risk_profile_name", "Balanced"),
         "max_portfolio_risk": getattr(self.controller, "max_portfolio_risk", 0.2),
         "max_risk_per_trade": getattr(self.controller, "max_risk_per_trade", 0.02),
         "max_position_size_pct": getattr(self.controller, "max_position_size_pct", 0.05),
         "max_gross_exposure_pct": getattr(self.controller, "max_gross_exposure_pct", 1.0),
+        "margin_closeout_guard_enabled": getattr(self.controller, "margin_closeout_guard_enabled", True),
+        "max_margin_closeout_pct": getattr(self.controller, "max_margin_closeout_pct", 0.50),
         "strategy_name": getattr(self.controller, "strategy_name", "Trend Following"),
         "strategy_rsi_period": getattr(getattr(self.controller, "strategy_params", {}), "get", lambda *_: 14)("rsi_period", 14),
         "strategy_ema_fast": getattr(getattr(self.controller, "strategy_params", {}), "get", lambda *_: 20)("ema_fast", 20),
@@ -6534,6 +14112,15 @@ def _hotfix_close_event(self, event):
         "strategy_breakout_lookback": getattr(getattr(self.controller, "strategy_params", {}), "get", lambda *_: 20)("breakout_lookback", 20),
         "strategy_min_confidence": getattr(getattr(self.controller, "strategy_params", {}), "get", lambda *_: 0.55)("min_confidence", 0.55),
         "strategy_signal_amount": getattr(getattr(self.controller, "strategy_params", {}), "get", lambda *_: 1.0)("signal_amount", 1.0),
+        "telegram_enabled": getattr(self.controller, "telegram_enabled", False),
+        "telegram_bot_token": getattr(self.controller, "telegram_bot_token", ""),
+        "telegram_chat_id": getattr(self.controller, "telegram_chat_id", ""),
+        "openai_api_key": getattr(self.controller, "openai_api_key", ""),
+        "openai_model": getattr(self.controller, "openai_model", "gpt-5-mini"),
+        "news_enabled": getattr(self.controller, "news_enabled", True),
+        "news_autotrade_enabled": getattr(self.controller, "news_autotrade_enabled", False),
+        "news_draw_on_chart": getattr(self.controller, "news_draw_on_chart", True),
+        "news_feed_url": getattr(self.controller, "news_feed_url", NewsService.DEFAULT_FEED_URL),
     }
     _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False)
     super(Terminal, self).closeEvent(event)
@@ -6581,12 +14168,19 @@ async def _hotfix_refresh_markets_async(self):
 
     active_symbol = self._current_chart_symbol()
     if active_symbol and hasattr(self.controller, "request_candle_data"):
-        await self.controller.request_candle_data(
-            symbol=active_symbol,
-            timeframe=getattr(self, "current_timeframe", "1h"),
-            limit=self._history_request_limit(),
-        )
-        await self._reload_chart_data(active_symbol, getattr(self, "current_timeframe", "1h"))
+        active_chart = self._current_chart_widget()
+        if isinstance(active_chart, ChartWidget) and str(getattr(active_chart, "symbol", "") or "").strip() == str(active_symbol).strip():
+            await self._request_chart_data_for_widget(
+                active_chart,
+                limit=self._history_request_limit(),
+            )
+        else:
+            await self.controller.request_candle_data(
+                symbol=active_symbol,
+                timeframe=getattr(self, "current_timeframe", "1h"),
+                limit=self._history_request_limit(),
+            )
+            await self._reload_chart_data(active_symbol, getattr(self, "current_timeframe", "1h"))
 
     if active_symbol and hasattr(self.controller, "request_orderbook"):
         await self.controller.request_orderbook(symbol=active_symbol, limit=20)
@@ -6638,6 +14232,8 @@ def _hotfix_refresh_active_orderbook(self):
             if not hasattr(self.controller, "request_orderbook"):
                 raise RuntimeError("Orderbook refresh is not supported by this controller")
             await self.controller.request_orderbook(symbol=symbol, limit=20)
+            if hasattr(self.controller, "request_recent_trades"):
+                await self.controller.request_recent_trades(symbol=symbol, limit=40)
             self.system_console.log(f"Orderbook refreshed for {symbol}.", "INFO")
         except Exception as e:
             self.system_console.log(f"Orderbook refresh failed: {e}", "ERROR")
@@ -6659,12 +14255,10 @@ def _hotfix_refresh_active_chart_data(self):
             if not hasattr(self.controller, "request_candle_data"):
                 raise RuntimeError("Chart refresh is not supported by this controller")
 
-            await self.controller.request_candle_data(
-                symbol=symbol,
-                timeframe=timeframe,
+            await self._request_chart_data_for_widget(
+                chart,
                 limit=self._history_request_limit(),
             )
-            await self._reload_chart_data(symbol, timeframe)
             self.system_console.log(f"Chart data refreshed for {symbol} ({timeframe}).", "INFO")
         except Exception as e:
             self.system_console.log(f"Chart refresh failed: {e}", "ERROR")
@@ -6674,14 +14268,58 @@ def _hotfix_refresh_active_chart_data(self):
 
 # Bind overrides
 Terminal.run_backtest_clicked = _hotfix_run_backtest_clicked
+Terminal._prepare_and_run_backtest = _hotfix_prepare_and_run_backtest
+Terminal._load_backtest_history_runner = _hotfix_load_backtest_history_runner
+Terminal._backtest_requested_range_text = staticmethod(_hotfix_backtest_requested_range_text)
+Terminal._backtest_requested_limit = staticmethod(_hotfix_backtest_requested_limit)
+Terminal._backtest_symbol_candidates = _hotfix_backtest_symbol_candidates
+Terminal._backtest_timeframe_candidates = _hotfix_backtest_timeframe_candidates
+Terminal._refresh_backtest_selectors = _hotfix_refresh_backtest_selectors
+Terminal._backtest_selection_changed = _hotfix_backtest_selection_changed
+Terminal._start_backtest_graph_animation = _hotfix_start_backtest_graph_animation
+Terminal._stop_backtest_graph_animation = staticmethod(_hotfix_stop_backtest_graph_animation)
+Terminal._tick_backtest_graph_animation = _hotfix_tick_backtest_graph_animation
 Terminal.start_backtest = _hotfix_start_backtest
 Terminal.stop_backtest = _hotfix_stop_backtest
 Terminal._generate_report = _hotfix_generate_report
 Terminal._show_optimization_window = _hotfix_show_optimization_window
+Terminal._refresh_optimization_selectors = _hotfix_refresh_optimization_selectors
+Terminal._optimization_selection_changed = _hotfix_optimization_selection_changed
 Terminal._refresh_optimization_window = _hotfix_refresh_optimization_window
 Terminal._run_strategy_optimization = _hotfix_run_strategy_optimization
+Terminal._run_strategy_ranking = _hotfix_run_strategy_ranking
 Terminal._apply_best_optimization_params = _hotfix_apply_best_optimization_params
+Terminal._assign_ranked_strategies_to_symbol = _hotfix_assign_ranked_strategies_to_symbol
 Terminal._optimize_strategy = _hotfix_optimize_strategy
+Terminal._open_strategy_assignment_window = _hotfix_show_strategy_assignment_window
+Terminal._show_strategy_assignment_window = _hotfix_show_strategy_assignment_window
+Terminal._refresh_strategy_assignment_window = _hotfix_refresh_strategy_assignment_window
+Terminal._refresh_strategy_assignment_adaptive_details = _hotfix_refresh_strategy_assignment_adaptive_details
+Terminal._apply_default_strategy_assignment = _hotfix_apply_default_strategy_assignment
+Terminal._apply_single_strategy_assignment = _hotfix_apply_single_strategy_assignment
+Terminal._apply_ranked_strategy_assignment = _hotfix_apply_ranked_strategy_assignment_from_window
+Terminal._stellar_expert_asset_url = _hotfix_stellar_expert_asset_url
+Terminal._stellar_asset_identifier = _hotfix_stellar_asset_identifier
+Terminal._parse_stellar_asset_entry = _hotfix_parse_stellar_asset_entry
+Terminal._selected_stellar_asset_row = _hotfix_selected_stellar_asset_row
+Terminal._is_stellar_asset_blocked = _hotfix_is_stellar_asset_blocked
+Terminal._stellar_asset_explorer_rows = _hotfix_stellar_asset_explorer_rows
+Terminal._merge_stellar_asset_rows = _hotfix_merge_stellar_asset_rows
+Terminal._refresh_stellar_asset_explorer_window = _hotfix_refresh_stellar_asset_explorer_window
+Terminal._open_selected_stellar_asset = _hotfix_open_selected_stellar_asset
+Terminal._load_stellar_asset_directory_page_async = _hotfix_load_stellar_asset_directory_page_async
+Terminal._load_stellar_asset_directory_page = _hotfix_load_stellar_asset_directory_page
+Terminal._open_stellar_asset_trustline_async = _hotfix_open_stellar_asset_trustline_async
+Terminal._open_stellar_asset_trustline = _hotfix_open_stellar_asset_trustline
+Terminal._auto_trust_stellar_asset_by_roi_async = _hotfix_auto_trust_stellar_asset_by_roi_async
+Terminal._auto_trust_stellar_asset_by_roi = _hotfix_auto_trust_stellar_asset_by_roi
+Terminal._open_stellar_asset_explorer_window = _hotfix_open_stellar_asset_explorer_window
+Terminal._open_ml_research_window = _hotfix_show_ml_research_window
+Terminal._show_ml_research_window = _hotfix_show_ml_research_window
+Terminal._refresh_ml_research_window = _hotfix_refresh_ml_research_window
+Terminal._run_ml_model_training = _hotfix_run_ml_model_training
+Terminal._run_ml_walk_forward = _hotfix_run_ml_walk_forward
+Terminal._deploy_selected_ml_model = _hotfix_deploy_selected_ml_model
 Terminal._reload_chart_data = _hotfix_reload_chart_data
 Terminal._refresh_markets = _hotfix_refresh_markets
 Terminal._reload_balance = _hotfix_reload_balance
@@ -6713,3 +14351,7 @@ Terminal.save_settings = _hotfix_save_settings
 
 
 
+
+from frontend.ui.actions.operator_features import install_terminal_operator_features
+
+install_terminal_operator_features(Terminal)

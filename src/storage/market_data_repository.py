@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
+import math
 
 from sqlalchemy import BigInteger, Column, DateTime, Float, Integer, String, and_, or_, select
 
-from storage.database import Base, SessionLocal
+from storage import database as storage_db
 
 
-class Candle(Base):
+class Candle(storage_db.Base):
     __tablename__ = "candles"
 
     id = Column(Integer, primary_key=True)
@@ -77,20 +78,59 @@ class MarketDataRepository:
             return None
 
         try:
+            open_numeric = float(open_value)
+            high_numeric = float(high_value)
+            low_numeric = float(low_value)
+            close_numeric = float(close_value)
+            volume_numeric = float(volume_value or 0.0)
+        except Exception:
+            return None
+
+        ohlc_values = [open_numeric, high_numeric, low_numeric, close_numeric]
+        if any((not math.isfinite(value)) or value <= 0 for value in ohlc_values):
+            return None
+        if not math.isfinite(volume_numeric):
+            volume_numeric = 0.0
+
+        try:
             return {
                 "exchange": str(exchange or "").lower() or None,
                 "symbol": str(symbol),
                 "timeframe": str(timeframe or "1h"),
-                "open": float(open_value),
-                "high": float(high_value),
-                "low": float(low_value),
-                "close": float(close_value),
-                "volume": float(volume_value or 0.0),
+                "open": open_numeric,
+                "high": max(ohlc_values),
+                "low": min(ohlc_values),
+                "close": close_numeric,
+                "volume": max(volume_numeric, 0.0),
                 "timestamp": normalized_ts,
                 "timestamp_ms": int(timestamp_ms),
             }
         except Exception:
             return None
+
+    def _normalize_boundary_timestamp_ms(self, value, *, end_of_day=False):
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            text_value = value.strip()
+            if not text_value:
+                return None
+            if "T" not in text_value and len(text_value) <= 10:
+                text_value = (
+                    f"{text_value}T23:59:59.999999+00:00"
+                    if end_of_day
+                    else f"{text_value}T00:00:00+00:00"
+                )
+            value = text_value
+        elif isinstance(value, datetime) and end_of_day:
+            if value.tzinfo is None:
+                value = value.replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            else:
+                value = value.astimezone(timezone.utc).replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        _timestamp, timestamp_ms = self._normalize_timestamp(value)
+        return timestamp_ms
 
     def save_candles(self, symbol, timeframe, candles, exchange=None):
         normalized_rows = []
@@ -119,7 +159,7 @@ class MarketDataRepository:
         exchange_value = normalized_rows[0]["exchange"]
         timestamp_values = [row["timestamp_ms"] for row in normalized_rows]
 
-        with SessionLocal() as session:
+        with storage_db.SessionLocal() as session:
             stmt = select(Candle.timestamp_ms).where(
                 Candle.symbol == str(symbol),
                 Candle.timeframe == str(timeframe or "1h"),
@@ -142,8 +182,8 @@ class MarketDataRepository:
             session.commit()
             return len(pending)
 
-    def get_candles(self, symbol, timeframe="1h", limit=300, exchange=None):
-        with SessionLocal() as session:
+    def get_candles(self, symbol, timeframe="1h", limit=300, exchange=None, start_time=None, end_time=None):
+        with storage_db.SessionLocal() as session:
             stmt = select(Candle).where(Candle.symbol == str(symbol))
 
             timeframe_value = str(timeframe or "1h")
@@ -153,9 +193,23 @@ class MarketDataRepository:
                 exchange_value = str(exchange).lower()
                 stmt = stmt.where(or_(Candle.exchange == exchange_value, Candle.exchange.is_(None)))
 
-            stmt = stmt.order_by(Candle.timestamp_ms.desc()).limit(int(limit))
-            rows = list(session.execute(stmt).scalars().all())
-            rows.reverse()
+            start_timestamp_ms = self._normalize_boundary_timestamp_ms(start_time, end_of_day=False)
+            end_timestamp_ms = self._normalize_boundary_timestamp_ms(end_time, end_of_day=True)
+            if start_timestamp_ms is not None:
+                stmt = stmt.where(Candle.timestamp_ms >= int(start_timestamp_ms))
+            if end_timestamp_ms is not None:
+                stmt = stmt.where(Candle.timestamp_ms <= int(end_timestamp_ms))
+
+            range_requested = start_timestamp_ms is not None or end_timestamp_ms is not None
+            if range_requested:
+                stmt = stmt.order_by(Candle.timestamp_ms.asc())
+                rows = list(session.execute(stmt).scalars().all())
+                if limit is not None:
+                    rows = rows[-max(1, int(limit)) :]
+            else:
+                stmt = stmt.order_by(Candle.timestamp_ms.desc()).limit(int(limit))
+                rows = list(session.execute(stmt).scalars().all())
+                rows.reverse()
 
             return [
                 [
@@ -168,4 +222,3 @@ class MarketDataRepository:
                 ]
                 for row in rows
             ]
-

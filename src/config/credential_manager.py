@@ -2,11 +2,101 @@ import json
 import keyring
 import traceback
 
+from security.credential_manager import FileCredentialManager
+
+
+_credential_manager_instance = None
+
 
 class CredentialManager:
 
     SERVICE_NAME = "SopotekTradingAI"
     ACCOUNT_INDEX = "accounts_index"
+
+    @staticmethod
+    def _manager():
+        global _credential_manager_instance
+        if _credential_manager_instance is None:
+            _credential_manager_instance = FileCredentialManager()
+        return _credential_manager_instance
+
+    @staticmethod
+    def _legacy_read_account_index():
+        try:
+            data = keyring.get_password(
+                CredentialManager.SERVICE_NAME,
+                CredentialManager.ACCOUNT_INDEX
+            )
+            if not data:
+                return []
+            parsed = json.loads(data)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            traceback.print_exc()
+            return []
+
+    @staticmethod
+    def _legacy_write_account_index(accounts):
+        try:
+            keyring.set_password(
+                CredentialManager.SERVICE_NAME,
+                CredentialManager.ACCOUNT_INDEX,
+                json.dumps(list(accounts or []))
+            )
+        except Exception:
+            traceback.print_exc()
+
+    @staticmethod
+    def _legacy_load_account(account_name: str):
+        try:
+            data = keyring.get_password(
+                CredentialManager.SERVICE_NAME,
+                account_name
+            )
+            if not data:
+                return None
+            return json.loads(data)
+        except Exception:
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def _legacy_delete_account(account_name):
+        try:
+            keyring.delete_password(
+                CredentialManager.SERVICE_NAME,
+                account_name
+            )
+        except Exception:
+            traceback.print_exc()
+
+    @staticmethod
+    def _migrate_legacy_account(account_name):
+        payload = CredentialManager._legacy_load_account(account_name)
+        if payload is None:
+            return None
+        CredentialManager._manager().save_account(account_name, payload)
+        CredentialManager._legacy_delete_account(account_name)
+        accounts = [name for name in CredentialManager._legacy_read_account_index() if name != account_name]
+        CredentialManager._legacy_write_account_index(accounts)
+        return payload
+
+    @staticmethod
+    def _migrate_legacy_accounts():
+        migrated = False
+        manager = CredentialManager._manager()
+        existing = set(manager.list_accounts())
+        for account_name in CredentialManager._legacy_read_account_index():
+            if account_name in existing:
+                continue
+            payload = CredentialManager._legacy_load_account(account_name)
+            if payload is None:
+                continue
+            manager.save_account(account_name, payload)
+            CredentialManager._legacy_delete_account(account_name)
+            migrated = True
+        if migrated:
+            CredentialManager._legacy_write_account_index([])
 
     # =====================================================
     # SAVE ACCOUNT
@@ -16,25 +106,7 @@ class CredentialManager:
     def save_account(account_name: str, config: dict):
 
         try:
-
-            data = json.dumps(config)
-
-            keyring.set_password(
-                CredentialManager.SERVICE_NAME,
-                account_name,
-                data
-            )
-
-            accounts = CredentialManager.list_accounts()
-            if account_name in accounts:
-                accounts.remove(account_name)
-            accounts.insert(0, account_name)
-
-            keyring.set_password(
-                CredentialManager.SERVICE_NAME,
-                CredentialManager.ACCOUNT_INDEX,
-                json.dumps(accounts)
-            )
+            CredentialManager._manager().save_account(account_name, config)
 
         except Exception:
             traceback.print_exc()
@@ -43,18 +115,10 @@ class CredentialManager:
     def touch_account(account_name: str):
 
         try:
-            accounts = CredentialManager.list_accounts()
-            if account_name not in accounts:
-                return
-
-            accounts.remove(account_name)
-            accounts.insert(0, account_name)
-
-            keyring.set_password(
-                CredentialManager.SERVICE_NAME,
-                CredentialManager.ACCOUNT_INDEX,
-                json.dumps(accounts)
-            )
+            CredentialManager._migrate_legacy_accounts()
+            if CredentialManager._manager().load_account(account_name) is None:
+                CredentialManager._migrate_legacy_account(account_name)
+            CredentialManager._manager().touch_account(account_name)
 
         except Exception:
             traceback.print_exc()
@@ -67,16 +131,11 @@ class CredentialManager:
     def load_account(account_name: str):
 
         try:
-
-            data = keyring.get_password(
-                CredentialManager.SERVICE_NAME,
-                account_name
-            )
-
-            if not data:
-                return None
-
-            return json.loads(data)
+            CredentialManager._migrate_legacy_accounts()
+            account = CredentialManager._manager().load_account(account_name)
+            if account is not None:
+                return account
+            return CredentialManager._migrate_legacy_account(account_name)
 
         except Exception:
             traceback.print_exc()
@@ -91,16 +150,8 @@ class CredentialManager:
     def list_accounts():
 
         try:
-
-            data = keyring.get_password(
-                CredentialManager.SERVICE_NAME,
-                CredentialManager.ACCOUNT_INDEX
-            )
-
-            if not data:
-                return []
-
-            return json.loads(data)
+            CredentialManager._migrate_legacy_accounts()
+            return CredentialManager._manager().list_accounts()
 
         except Exception:
             traceback.print_exc()
@@ -115,23 +166,10 @@ class CredentialManager:
     def delete_account(account_name):
 
         try:
-
-            keyring.delete_password(
-                CredentialManager.SERVICE_NAME,
-                account_name
-            )
-
-            accounts = CredentialManager.list_accounts()
-
-            if account_name in accounts:
-
-                accounts.remove(account_name)
-
-                keyring.set_password(
-                    CredentialManager.SERVICE_NAME,
-                    CredentialManager.ACCOUNT_INDEX,
-                    json.dumps(accounts)
-                )
+            CredentialManager._manager().delete_account(account_name)
+            CredentialManager._legacy_delete_account(account_name)
+            accounts = [name for name in CredentialManager._legacy_read_account_index() if name != account_name]
+            CredentialManager._legacy_write_account_index(accounts)
 
         except Exception:
             traceback.print_exc()

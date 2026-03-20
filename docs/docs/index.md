@@ -47,4 +47,4 @@ Sopotek Trading AI is a desktop trading workstation for broker connectivity, cha
 - `Position Analysis`: broker-aware account and position summary
 - `Trade Checklist`: pre-trade and post-trade discipline form
 - `Closed Journal` and `Journal Review`: history, notes, and weekly/monthly review
-- `Market ChatGPT`: app-aware assistant with voice, screenshots, and command control
+- `Sopotek Pilot`: app-aware assistant with voice, screenshots, and command control

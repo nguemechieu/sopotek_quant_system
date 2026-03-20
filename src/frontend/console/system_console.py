@@ -15,6 +15,7 @@ from PySide6.QtCore import Signal, Qt
 class SystemConsole(QWidget):
 
     log_signal = Signal(str)
+    screenshot_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -40,9 +41,11 @@ class SystemConsole(QWidget):
 
         self.clear_button = QPushButton("Clear")
         self.save_button = QPushButton("Save Logs")
+        self.screenshot_button = QPushButton("Screenshot")
 
         btn_layout.addWidget(self.clear_button)
         btn_layout.addWidget(self.save_button)
+        btn_layout.addWidget(self.screenshot_button)
 
         self.layout.addLayout(btn_layout)
 
@@ -54,6 +57,7 @@ class SystemConsole(QWidget):
         # Button actions
         self.clear_button.clicked.connect(self.clear_console)
         self.save_button.clicked.connect(self.save_logs)
+        self.screenshot_button.clicked.connect(self.screenshot_requested.emit)
 
     # ------------------------------------------------
     # Write log to console

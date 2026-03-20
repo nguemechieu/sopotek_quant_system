@@ -8,10 +8,15 @@ from event_bus.event_types import EventType
 
 class BinanceUsWebSocket:
 
-    def __init__(self, symbols, event_bus):
+    def __init__(self, symbols, event_bus, exchange_name="binanceus"):
         self.symbols = symbols
         self.bus = event_bus
-        self.url = "wss://stream.binance.us:9443/ws"
+        exchange_code = str(exchange_name or "binanceus").strip().lower()
+        self.url = (
+            "wss://stream.binance.com:9443/ws"
+            if exchange_code == "binance"
+            else "wss://stream.binance.us:9443/ws"
+        )
 
     async def connect(self):
         streams = "/".join(

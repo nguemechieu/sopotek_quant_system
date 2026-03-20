@@ -23,11 +23,15 @@ class TradingEngine:
     # ===================================
 
     async def start(self):
-        await self.market_data.start()
+        starter = getattr(self.market_data, "start", None)
+        if callable(starter):
+            await starter()
 
     # ===================================
     # STOP ENGINE
     # ===================================
 
     async def stop(self):
-        await self.market_data.stop()
+        stopper = getattr(self.market_data, "stop", None)
+        if callable(stopper):
+            await stopper()

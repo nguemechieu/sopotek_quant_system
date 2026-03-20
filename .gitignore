@@ -14,3 +14,4 @@ src/reports/*.pdf
 output/docs-site/
 output/screenshots/
 src/output/
+credentials.json

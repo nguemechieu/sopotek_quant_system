@@ -93,7 +93,7 @@ This layer supports offline evaluation, reporting, and live performance summarie
 5. Recommendation, AI signal, and analytics windows consume the same runtime state.
 
 ### Trade Flow
-1. Manual trade ticket, chart action, AI engine, or Market ChatGPT creates a trade request.
+1. Manual trade ticket, chart action, AI engine, or Sopotek Pilot creates a trade request.
 2. `ExecutionManager` applies behavior guard and broker-aware normalization.
 3. `OrderRouter` / broker adapter submits the order.
 4. Order state updates are tracked and normalized.
@@ -103,15 +103,15 @@ This layer supports offline evaluation, reporting, and live performance summarie
 ### Integration Flow
 1. Integration settings load from `QSettings`.
 2. `TelegramService` long-polls when enabled.
-3. Telegram messages can request status, charts, screenshots, and ChatGPT answers.
-4. OpenAI is used for Market ChatGPT and optional speech output.
-5. Voice input routes through the local voice service and then into Market ChatGPT.
+3. Telegram messages can request status, charts, screenshots, and Sopotek Pilot answers.
+4. OpenAI is used for Sopotek Pilot and optional speech output.
+5. Voice input routes through the local voice service and then into Sopotek Pilot.
 
 ### Review And Discipline Flow
 1. Execution updates are persisted into the trade repository.
 2. Closed-journal and review windows merge broker history with local trade metadata.
 3. Trade checklist, journal notes, setup tags, lessons, and review metrics stay available through `QSettings` and SQLite-backed views.
-4. Market ChatGPT can consume this review context when answering performance or behavior questions.
+4. Sopotek Pilot can consume this review context when answering performance or behavior questions.
 
 ## Persistence Model
 

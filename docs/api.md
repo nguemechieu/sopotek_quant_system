@@ -15,6 +15,7 @@ Representative broker behaviors used across adapters include:
 - `fetch_ticker(symbol)`
 - `fetch_ohlcv(symbol, timeframe, limit)`
 - `fetch_orderbook(symbol)`
+- `fetch_trades(symbol, limit)` for public market prints where supported
 - `fetch_positions()`
 - `fetch_open_orders()`
 - `create_order(...)`
@@ -29,7 +30,7 @@ Key behavior surfaces include:
 - broker-aware normalization of order input
 - behavior-guard interception
 - order-state tracking and persistence
-- source tagging such as manual, bot, and chatgpt
+- source tagging such as manual, bot, and the internal `chatgpt` source used for Sopotek Pilot actions
 - rejected-order normalization
 
 ### Strategy Interface
@@ -48,6 +49,7 @@ The strategy layer exposes normalized strategy selection and signal reasoning be
 - ticker updates
 - connection status
 - orderbook updates
+- recent public trade updates for the active symbol
 - news updates
 - AI signal monitor updates
 - strategy debug updates
@@ -76,7 +78,7 @@ Supports:
 - bot polling
 - status, balances, positions, orders, screenshots, chart screenshots
 - command keyboard
-- plain-text ChatGPT relay and slash-command relay
+- plain-text Sopotek Pilot relay and slash-command relay
 
 ### OpenAI And Voice
 - OpenAI controller flow: `src/frontend/ui/app_controller.py`
@@ -85,7 +87,7 @@ Supports:
 Supports:
 - runtime context chat
 - Telegram question routing
-- Market ChatGPT in-app conversation
+- Sopotek Pilot in-app conversation
 - speech recognition and spoken replies
 
 ### Review And Journal APIs
@@ -98,7 +100,7 @@ These are responsible for:
 - merged closed-trade history
 - journal-field persistence
 - weekly and monthly review summaries
-- trade-history analysis consumed by Market ChatGPT
+- trade-history analysis consumed by Sopotek Pilot
 
 ## Testing Surfaces
 

@@ -1,7 +1,25 @@
+import html
+import re
+from datetime import datetime, timezone
+
 import numpy as np
+import pandas as pd
 import pyqtgraph as pg
 from PySide6 import QtCore
-from PySide6.QtWidgets import QFrame, QLabel, QHBoxLayout, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 from pyqtgraph import DateAxisItem, InfiniteLine, PlotWidget, ScatterPlotItem, SignalProxy, TextItem, mkPen
 
 from frontend.ui.chart.chart_items import CandlestickItem
@@ -40,10 +58,61 @@ from frontend.ui.chart.indicator_utils import (
 )
 
 
+TIMEFRAME_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mn"]
+
+
+class TradingDateAxisItem(DateAxisItem):
+    def tickStrings(self, values, scale, spacing):
+        labels = []
+        if spacing < 60:
+            time_format = "%m-%d %H:%M:%S"
+        elif spacing < 86400:
+            time_format = "%m-%d %H:%M"
+        elif spacing < 31 * 86400:
+            time_format = "%Y-%m-%d"
+        else:
+            time_format = "%Y-%m"
+
+        for value in values:
+            try:
+                numeric = float(value)
+            except Exception:
+                labels.append("")
+                continue
+
+            if not np.isfinite(numeric):
+                labels.append("")
+                continue
+
+            try:
+                dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+                labels.append(dt.strftime(time_format))
+            except Exception:
+                labels.append("")
+
+        return labels
+
+
 class ChartWidget(QWidget):
     sigMouseMoved = QtCore.Signal(object)
+    sigTradeLevelRequested = QtCore.Signal(dict)
+    sigTradeLevelChanged = QtCore.Signal(dict)
+    sigTradeContextAction = QtCore.Signal(dict)
+    sigTimeframeSelected = QtCore.Signal(str)
+    sigActivated = QtCore.Signal(object)
 
-    def __init__(self, symbol: str, timeframe: str, controller, candle_up_color: str = "#26a69a", candle_down_color: str = "#ef5350"):
+    def __init__(
+        self,
+        symbol: str,
+        timeframe: str,
+        controller,
+        candle_up_color: str = "#26a69a",
+        candle_down_color: str = "#ef5350",
+        show_volume_panel: bool = False,
+        chart_background: str = "#11161f",
+        grid_color: str = "#8290a0",
+        axis_color: str = "#9aa4b2",
+    ):
         super().__init__()
         self.controller = controller
         self.symbol = symbol
@@ -52,6 +121,7 @@ class ChartWidget(QWidget):
         self.candle_down_color = candle_down_color
         self._last_candles = None
         self.show_bid_ask_lines = True
+        self.show_volume_panel = bool(show_volume_panel)
         self._last_bid = None
         self._last_ask = None
 
@@ -68,46 +138,186 @@ class ChartWidget(QWidget):
         self._watermark_initialized = False
         self._auto_fit_pending = True
         self._last_view_context = None
-        self.default_visible_bars = 120
-        self.chart_background = "#0a1020"
-        self.panel_background = "#0c1730"
-        self.grid_color = (112, 138, 184, 42)
-        self.axis_color = "#8fa7c6"
-        self.muted_text = "#7f95b5"
+        self.default_visible_bars = 96
+        self.chart_background = str(chart_background or "#11161f")
+        self.panel_background = "#171d29"
+        self.grid_color = str(grid_color or "#8290a0")
+        self.axis_color = str(axis_color or "#9aa4b2")
+        self.muted_text = "#728198"
         self._last_price_change = None
+        self._news_events = []
+        self._news_items = []
+        self._visible_news_events = []
+        self._trade_overlay_updating = False
+        self._trade_overlay_state = {"side": "buy", "entry": None, "stop_loss": None, "take_profit": None}
+        self._last_orderbook_bids = []
+        self._last_orderbook_asks = []
+        self._timeframe_picker_updating = False
+        self.chart_overlays_visible = True
+        self.compact_view_mode = False
+        self._chart_status_mode = "idle"
+        self._chart_status_message = ""
+        self._chart_status_detail = ""
+        self._chart_status_requested_bars = None
+        self._chart_loading_frames = ["|", "/", "-", "\\"]
+        self._chart_loading_index = 0
+        self._chart_status_clear_timer = QtCore.QTimer(self)
+        self._chart_status_clear_timer.setSingleShot(True)
+        self._chart_status_clear_timer.timeout.connect(self._clear_status_notice)
+        self._chart_loading_timer = QtCore.QTimer(self)
+        self._chart_loading_timer.setInterval(150)
+        self._chart_loading_timer.timeout.connect(self._tick_loading_status)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(8)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(6)
 
         self.info_bar = QFrame()
         self.info_bar.setStyleSheet(
             """
             QFrame {
-                background-color: #0c1730;
-                border: 1px solid #173055;
-                border-radius: 12px;
+                background-color: #131a24;
+                border: 1px solid #243142;
+                border-radius: 14px;
             }
             """
         )
         info_layout = QHBoxLayout(self.info_bar)
-        info_layout.setContentsMargins(14, 10, 14, 10)
-        info_layout.setSpacing(12)
+        info_layout.setContentsMargins(12, 8, 12, 8)
+        info_layout.setSpacing(10)
+
+        left_info = QVBoxLayout()
+        left_info.setContentsMargins(0, 0, 0, 0)
+        left_info.setSpacing(1)
+
+        self.instrument_label = QLabel()
+        self.instrument_label.setStyleSheet("color: #f6f8fb; font-weight: 800; font-size: 16px;")
+        left_info.addWidget(self.instrument_label)
 
         self.market_stats_label = QLabel()
-        self.market_stats_label.setStyleSheet("color: #32d296; font-weight: 700; font-size: 12px;")
-        info_layout.addWidget(self.market_stats_label, 1)
+        self.market_stats_label.setStyleSheet("color: #32d296; font-weight: 800; font-size: 15px;")
+        left_info.addWidget(self.market_stats_label)
+        info_layout.addLayout(left_info, 1)
 
         self.market_meta_label = QLabel()
-        self.market_meta_label.setStyleSheet("color: #7f95b5; font-size: 12px;")
-        info_layout.addWidget(self.market_meta_label, 2)
-
+        self.market_meta_label.setStyleSheet("color: #728198; font-size: 11px;")
+        self.market_micro_label = QLabel()
+        self.market_micro_label.setStyleSheet("color: #9aa4b2; font-size: 11px;")
+        self.background_context_label = QLabel()
+        self.background_context_label.setStyleSheet("color: #e7c56f; font-size: 11px; font-weight: 700;")
+        self.background_context_label.setWordWrap(True)
         self.ohlcv_label = QLabel()
-        self.ohlcv_label.setStyleSheet("color: #d8e6ff; font-weight: 700; font-size: 12px;")
+        self.ohlcv_label.setStyleSheet("color: #dde5ef; font-weight: 700; font-size: 11px;")
         self.ohlcv_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        info_layout.addWidget(self.ohlcv_label, 3)
+        for hidden_label in (
+            self.market_meta_label,
+            self.market_micro_label,
+            self.background_context_label,
+            self.ohlcv_label,
+        ):
+            hidden_label.hide()
+
+        controls_container = QFrame()
+        controls_container.setStyleSheet(
+            """
+            QFrame {
+                background-color: #0f1621;
+                border: 1px solid #243142;
+                border-radius: 12px;
+            }
+            """
+        )
+        controls_layout = QHBoxLayout(controls_container)
+        controls_layout.setContentsMargins(8, 6, 8, 6)
+        controls_layout.setSpacing(6)
+
+        timeframe_title = QLabel("Timeframe")
+        timeframe_title.setStyleSheet("color: #8fa4bf; font-size: 11px; font-weight: 700; padding-right: 4px;")
+        controls_layout.addWidget(timeframe_title)
+
+        self.timeframe_picker = QComboBox()
+        self.timeframe_picker.setMinimumWidth(88)
+        self.timeframe_picker.setMaximumWidth(108)
+        self.timeframe_picker.setStyleSheet(
+            """
+            QComboBox {
+                background-color: #162130;
+                color: #f6f8fb;
+                border: 1px solid #2b3b54;
+                border-radius: 12px;
+                padding: 6px 12px;
+                font-weight: 700;
+            }
+            QComboBox::drop-down {
+                border: 0;
+                width: 20px;
+            }
+            """
+        )
+        self.timeframe_picker.addItems(TIMEFRAME_OPTIONS)
+        if self.timeframe_picker.findText(str(self.timeframe)) < 0:
+            self.timeframe_picker.addItem(str(self.timeframe))
+        self.timeframe_picker.setCurrentText(str(self.timeframe))
+        self.timeframe_picker.setToolTip("Select the timeframe for this chart.")
+        self.timeframe_picker.currentTextChanged.connect(self._handle_timeframe_picker_changed)
+        controls_layout.addWidget(self.timeframe_picker)
+
+        self.overlay_toggle_button = QPushButton("Info")
+        self.overlay_toggle_button.setCheckable(True)
+        self.overlay_toggle_button.setChecked(True)
+        self.overlay_toggle_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.overlay_toggle_button.setMinimumHeight(30)
+        self.overlay_toggle_button.setStyleSheet(self._chart_nav_button_style(accent=True))
+        self.overlay_toggle_button.clicked.connect(lambda checked=False: self._set_chart_overlays_visible(checked))
+        controls_layout.addWidget(self.overlay_toggle_button)
+
+        for label, callback in (
+            ("<-", lambda: self._pan_chart(-0.28)),
+            ("+", lambda: self._zoom_chart(0.72)),
+            ("Fit", self._fit_recent_chart),
+            ("-", lambda: self._zoom_chart(1.35)),
+            ("->", lambda: self._pan_chart(0.28)),
+        ):
+            button = QPushButton(label)
+            button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(30)
+            button.setStyleSheet(self._chart_nav_button_style(accent=(label == "Fit")))
+            button.clicked.connect(lambda _checked=False, action=callback: action())
+            controls_layout.addWidget(button)
+
+        info_layout.addWidget(controls_container, 0)
 
         layout.addWidget(self.info_bar)
+
+        self.market_tabs = QTabWidget()
+        self.market_tabs.setDocumentMode(True)
+        self.market_tabs.setStyleSheet(
+            """
+            QTabWidget::pane {
+                border: 1px solid #273142;
+                background-color: #11161f;
+                border-radius: 14px;
+            }
+            QTabBar::tab {
+                background-color: #171d29;
+                color: #8e9bab;
+                padding: 8px 16px;
+                margin-right: 4px;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+            }
+            QTabBar::tab:selected {
+                background-color: #1f2735;
+                color: #f6f8fb;
+            }
+            """
+        )
+        layout.addWidget(self.market_tabs, 1)
+
+        self.candlestick_page = QWidget()
+        candlestick_layout = QVBoxLayout(self.candlestick_page)
+        candlestick_layout.setContentsMargins(0, 0, 0, 0)
+        candlestick_layout.setSpacing(0)
 
         self.splitter = QSplitter(QtCore.Qt.Orientation.Vertical)
         self.splitter.setChildrenCollapsible(False)
@@ -115,24 +325,25 @@ class ChartWidget(QWidget):
         self.splitter.setStyleSheet(
             """
             QSplitter::handle {
-                background-color: #132033;
-                border-top: 1px solid #24354f;
-                border-bottom: 1px solid #24354f;
+                background-color: #1a2230;
+                border-top: 1px solid #2b3748;
+                border-bottom: 1px solid #2b3748;
             }
             QSplitter::handle:hover {
-                background-color: #1c3150;
+                background-color: #243042;
             }
             """
         )
-        layout.addWidget(self.splitter)
+        candlestick_layout.addWidget(self.splitter)
+        self.market_tabs.addTab(self.candlestick_page, "Candlestick")
 
-        date_axis_top = DateAxisItem(orientation="bottom")
+        date_axis_top = TradingDateAxisItem(orientation="bottom")
         self.price_plot = PlotWidget(axisItems={"bottom": date_axis_top})
         self.price_plot.setLabel("right", "Price")
         self.price_plot.hideAxis("left")
         self.price_plot.showAxis("right")
         self.price_plot.hideAxis("bottom")
-        self.price_plot.setMinimumHeight(360)
+        self.price_plot.setMinimumHeight(460)
         self.splitter.addWidget(self.price_plot)
 
         self.candle_item = CandlestickItem(
@@ -146,38 +357,118 @@ class ChartWidget(QWidget):
         self.ema_curve.setVisible(False)
 
         self.signal_markers = ScatterPlotItem()
+        self.news_markers = ScatterPlotItem()
         self.trade_scatter = ScatterPlotItem()
         self.price_plot.addItem(self.signal_markers)
+        self.price_plot.addItem(self.news_markers)
         self.price_plot.addItem(self.trade_scatter)
 
-        date_axis_mid = DateAxisItem(orientation="bottom")
+        date_axis_mid = TradingDateAxisItem(orientation="bottom")
         self.volume_plot = PlotWidget(axisItems={"bottom": date_axis_mid})
         self.volume_plot.setXLink(self.price_plot)
         self.volume_plot.setLabel("left", "Volume")
         self.volume_plot.hideAxis("right")
         self.volume_plot.hideAxis("bottom")
-        self.volume_plot.setMinimumHeight(120)
+        self.volume_plot.setMinimumHeight(88)
+        self.volume_plot.setMaximumHeight(150)
         self.splitter.addWidget(self.volume_plot)
 
         self.volume_bars = pg.BarGraphItem(x=[], height=[], width=60.0, brush="#5c6bc0")
         self.volume_plot.addItem(self.volume_bars)
 
-        date_axis_bottom = DateAxisItem(orientation="bottom")
+        date_axis_bottom = TradingDateAxisItem(orientation="bottom")
         self.heatmap_plot = PlotWidget(axisItems={"bottom": date_axis_bottom})
         self.heatmap_plot.setXLink(self.price_plot)
         self.heatmap_plot.setLabel("left", "Orderbook")
-        self.heatmap_plot.setLabel("bottom", "Gregorian Time")
-        self.heatmap_plot.setMinimumHeight(120)
-        self.splitter.addWidget(self.heatmap_plot)
+        self.heatmap_plot.setLabel("bottom", "Date / Time (UTC)")
+        self.heatmap_plot.setMinimumHeight(80)
+        self.heatmap_plot.setMaximumHeight(135)
+        self.heatmap_plot.hide()
 
         self.heatmap_image = pg.ImageItem()
         colormap = pg.colormap.get("inferno")
         self.heatmap_image.setLookupTable(colormap.getLookupTable())
         self.heatmap_plot.addItem(self.heatmap_image)
 
+        self.depth_page = QWidget()
+        depth_layout = QVBoxLayout(self.depth_page)
+        depth_layout.setContentsMargins(10, 10, 10, 10)
+        depth_layout.setSpacing(8)
+
+        self.depth_summary_label = QLabel("Depth chart will populate when live order book data arrives.")
+        self.depth_summary_label.setStyleSheet("color: #8e9bab; font-size: 12px;")
+        depth_layout.addWidget(self.depth_summary_label)
+
+        self.depth_plot = PlotWidget()
+        self.depth_plot.setMinimumHeight(360)
+        self._style_plot(self.depth_plot, left_label="Cumulative Size", bottom_label="Price", show_bottom=True)
+        self.depth_bid_curve = self.depth_plot.plot(
+            [],
+            [],
+            pen=mkPen("#26a69a", width=2.2),
+            stepMode="right",
+            fillLevel=0,
+            brush=(38, 166, 154, 70),
+        )
+        self.depth_ask_curve = self.depth_plot.plot(
+            [],
+            [],
+            pen=mkPen("#ef5350", width=2.2),
+            stepMode="right",
+            fillLevel=0,
+            brush=(239, 83, 80, 70),
+        )
+        depth_layout.addWidget(self.depth_plot, 1)
+        self.market_tabs.addTab(self.depth_page, "Depth Chart")
+
+        self.market_info_page = QWidget()
+        info_tab_layout = QVBoxLayout(self.market_info_page)
+        info_tab_layout.setContentsMargins(10, 10, 10, 10)
+        info_tab_layout.setSpacing(10)
+
+        self.market_info_summary = QLabel("Market details will update with ticker, candle, and order book context.")
+        self.market_info_summary.setWordWrap(True)
+        self.market_info_summary.setStyleSheet(
+            "color: #ecf2f8; background-color: #171d29; border: 1px solid #273142; "
+            "border-radius: 12px; padding: 12px; font-size: 12px; font-weight: 600;"
+        )
+        info_tab_layout.addWidget(self.market_info_summary)
+
+        metrics_widget = QWidget()
+        metrics_layout = QGridLayout(metrics_widget)
+        metrics_layout.setContentsMargins(0, 0, 0, 0)
+        metrics_layout.setHorizontalSpacing(10)
+        metrics_layout.setVerticalSpacing(10)
+        self.market_info_cards = {}
+        for index, key in enumerate(
+            ["Last", "Mid", "Spread", "Best Bid", "Best Ask", "Range", "Visible Vol", "Depth Bias"]
+        ):
+            card = QFrame()
+            card.setStyleSheet(
+                "QFrame { background-color: #171d29; border: 1px solid #273142; border-radius: 12px; }"
+            )
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 12, 12, 12)
+            title = QLabel(key)
+            title.setStyleSheet("color: #8e9bab; font-size: 12px;")
+            value = QLabel("-")
+            value.setStyleSheet("color: #f6f8fb; font-size: 16px; font-weight: 700;")
+            card_layout.addWidget(title)
+            card_layout.addWidget(value)
+            metrics_layout.addWidget(card, index // 4, index % 4)
+            self.market_info_cards[key] = value
+        info_tab_layout.addWidget(metrics_widget)
+
+        self.market_info_details = QTextBrowser()
+        self.market_info_details.setStyleSheet(
+            "QTextBrowser { background-color: #171d29; color: #dde5ef; border: 1px solid #273142; border-radius: 12px; padding: 12px; }"
+        )
+        info_tab_layout.addWidget(self.market_info_details, 1)
+        self.market_tabs.addTab(self.market_info_page, "Market Info")
+
         self._style_plot(self.price_plot, right_label="Price", show_bottom=False)
-        self._style_plot(self.volume_plot, left_label="Volume", show_bottom=False)
-        self._style_plot(self.heatmap_plot, left_label="Orderbook", bottom_label="Time", show_bottom=True)
+        self._style_plot(self.volume_plot, left_label="Volume", bottom_label="Date / Time (UTC)", show_bottom=True)
+        self._style_plot(self.heatmap_plot, left_label="Orderbook", bottom_label="Date / Time (UTC)", show_bottom=False)
 
         self.v_line = InfiniteLine(angle=90, movable=False, pen=mkPen((142, 164, 196, 90), width=1, style=QtCore.Qt.PenStyle.DashLine))
         self.h_line = InfiniteLine(angle=0, movable=False, pen=mkPen((142, 164, 196, 90), width=1, style=QtCore.Qt.PenStyle.DashLine))
@@ -211,13 +502,27 @@ class ChartWidget(QWidget):
             line.setVisible(False)
             self.price_plot.addItem(line, ignoreBounds=True)
 
+        self.trade_entry_line = self._create_trade_overlay_line("#2a7fff", "Entry {value:.6f}", "entry")
+        self.trade_stop_line = self._create_trade_overlay_line("#ef5350", "SL {value:.6f}", "stop_loss")
+        self.trade_take_line = self._create_trade_overlay_line("#32d296", "TP {value:.6f}", "take_profit")
+
         self.text_item = TextItem(
             html="",
             anchor=(0.0, 1.0),
-            border=mkPen((30, 56, 96, 220)),
-            fill=pg.mkBrush(8, 17, 34, 225),
+            border=mkPen((76, 92, 115, 210)),
+            fill=pg.mkBrush(23, 29, 41, 238),
         )
         self.price_plot.addItem(self.text_item)
+
+        self.news_hover_item = TextItem(
+            html="",
+            anchor=(0.0, 1.0),
+            border=mkPen((244, 162, 97, 180), width=1),
+            fill=pg.mkBrush(23, 29, 41, 240),
+        )
+        self.news_hover_item.setZValue(20)
+        self.news_hover_item.setVisible(False)
+        self.price_plot.addItem(self.news_hover_item)
 
         self.watermark_item = TextItem(
             html="",
@@ -227,21 +532,65 @@ class ChartWidget(QWidget):
         )
         self.watermark_item.setZValue(-10)
         self.price_plot.addItem(self.watermark_item)
+
+        self.status_overlay_item = TextItem(
+            html="",
+            anchor=(0.5, 0.5),
+            border=mkPen((76, 92, 115, 220)),
+            fill=pg.mkBrush(10, 15, 23, 236),
+        )
+        self.status_overlay_item.setZValue(16)
+        self.status_overlay_item.setVisible(False)
+        self.price_plot.addItem(self.status_overlay_item)
+
+        self.overlay_header_item = TextItem(
+            html="",
+            anchor=(0.0, 0.0),
+            border=mkPen((55, 70, 92, 185)),
+            fill=pg.mkBrush(10, 15, 23, 222),
+        )
+        self.overlay_header_item.setZValue(14)
+        self.price_plot.addItem(self.overlay_header_item)
+
+        self.overlay_context_item = TextItem(
+            html="",
+            anchor=(0.0, 0.0),
+            border=mkPen((77, 93, 116, 170)),
+            fill=pg.mkBrush(14, 20, 29, 214),
+        )
+        self.overlay_context_item.setZValue(14)
+        self.price_plot.addItem(self.overlay_context_item)
+
+        self.overlay_ohlcv_item = TextItem(
+            html="",
+            anchor=(0.0, 0.0),
+            border=mkPen((55, 70, 92, 185)),
+            fill=pg.mkBrush(10, 15, 23, 226),
+        )
+        self.overlay_ohlcv_item.setZValue(14)
+        self.price_plot.addItem(self.overlay_ohlcv_item)
+
         self.price_plot.getPlotItem().vb.sigRangeChanged.connect(self._update_watermark_position)
+        self.price_plot.getPlotItem().vb.sigRangeChanged.connect(self._update_status_overlay_position)
+        self.price_plot.getPlotItem().vb.sigRangeChanged.connect(self._update_overlay_positions)
 
         self.proxy = SignalProxy(self.price_plot.scene().sigMouseMoved, rateLimit=60, slot=self._mouse_moved)
+        self.price_plot.scene().sigMouseClicked.connect(self._mouse_clicked)
+        self.price_plot.scene().sigMouseClicked.connect(self._mouse_clicked)
 
-        self.splitter.setStretchFactor(0, 8)
+        self.splitter.setStretchFactor(0, 12)
         self.splitter.setStretchFactor(1, 2)
-        self.splitter.setStretchFactor(2, 2)
-        self.splitter.setSizes([720, 170, 170])
+        self.set_volume_panel_visible(self.show_volume_panel)
 
         self._update_chart_header()
+        self._refresh_market_panels()
         self._update_watermark_html()
+        self._update_chart_overlays()
+        self._apply_visual_theme()
 
     def _style_plot(self, plot, left_label=None, right_label=None, bottom_label=None, show_bottom=False):
-        plot.setBackground(self.chart_background)
-        plot.showGrid(x=True, y=True, alpha=0.18)
+        plot.setBackground(self._normalized_color(self.chart_background, "#11161f"))
+        plot.showGrid(x=True, y=True, alpha=0.16)
         plot.setMenuEnabled(False)
         plot.hideButtons()
 
@@ -258,26 +607,552 @@ class ChartWidget(QWidget):
         axis_names = ("left", "right", "bottom", "top")
         for axis_name in axis_names:
             axis = item.getAxis(axis_name)
-            axis.setTextPen(pg.mkColor(self.axis_color))
-            axis.setPen(pg.mkPen(self.axis_color, width=1))
+            axis.setTextPen(pg.mkColor(self._normalized_color(self.axis_color, "#9aa4b2")))
+            axis.setPen(pg.mkPen(self._normalized_color(self.axis_color, "#9aa4b2"), width=1))
+            axis.setTickPen(pg.mkPen(self._normalized_color(self.grid_color, "#8290a0"), width=1))
             axis.setStyle(tickLength=-6, autoExpandTextSpace=False)
+            try:
+                axis.setGrid(54)
+            except Exception:
+                pass
 
         plot.showAxis("bottom") if show_bottom else plot.hideAxis("bottom")
         if right_label:
             plot.showAxis("right")
 
-        item.vb.setBackgroundColor(pg.mkColor(self.chart_background))
+        item.vb.setBackgroundColor(pg.mkColor(self._normalized_color(self.chart_background, "#11161f")))
+
+    def _normalized_color(self, value, fallback: str) -> str:
+        try:
+            return pg.mkColor(value).name()
+        except Exception:
+            return pg.mkColor(fallback).name()
+
+    def _rgba_css(self, value, alpha: int, fallback: str) -> str:
+        color = pg.mkColor(self._normalized_color(value, fallback))
+        return f"rgba({color.red()},{color.green()},{color.blue()},{max(0, min(255, int(alpha)))})"
+
+    def _update_market_tab_theme(self):
+        chart_background = self._normalized_color(self.chart_background, "#11161f")
+        panel_background = self._normalized_color(self.panel_background, "#171d29")
+        tab_text = self._rgba_css(self.axis_color, 188, "#9aa4b2")
+        active_text = self._normalized_color(self.axis_color, "#f6f8fb")
+        border = self._rgba_css(self.grid_color, 120, "#8290a0")
+        selected_tab = self._rgba_css(self.axis_color, 24, "#9aa4b2")
+        self.market_tabs.setStyleSheet(
+            f"""
+            QTabWidget::pane {{
+                border: 1px solid {border};
+                background-color: {chart_background};
+                border-radius: 14px;
+            }}
+            QTabBar::tab {{
+                background-color: {panel_background};
+                color: {tab_text};
+                padding: 8px 16px;
+                margin-right: 4px;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {selected_tab};
+                color: {active_text};
+            }}
+            """
+        )
+
+    def _update_chart_guide_theme(self):
+        guide_color = pg.mkColor(self._normalized_color(self.axis_color, "#9aa4b2"))
+        guide_color.setAlpha(90)
+        guide_pen = mkPen(guide_color, width=1, style=QtCore.Qt.PenStyle.DashLine)
+        self.v_line.setPen(guide_pen)
+        self.h_line.setPen(guide_pen)
+
+    def _apply_visual_theme(self):
+        self._update_market_tab_theme()
+        self._style_plot(self.price_plot, right_label="Price", show_bottom=not self.show_volume_panel)
+        self._style_plot(self.volume_plot, left_label="Volume", bottom_label="Date / Time (UTC)", show_bottom=self.show_volume_panel)
+        self._style_plot(self.depth_plot, right_label="Price", bottom_label="Depth")
+        self._style_plot(self.heatmap_plot, right_label="Price")
+        self._update_chart_guide_theme()
+        self._update_chart_bottom_axis_visibility()
+        self._update_watermark_html()
+        self._update_chart_overlays()
+        self._refresh_status_overlay()
+
+    def set_visual_theme(
+        self,
+        chart_background: str | None = None,
+        grid_color: str | None = None,
+        axis_color: str | None = None,
+    ):
+        if chart_background is not None:
+            self.chart_background = str(chart_background or "#11161f")
+        if grid_color is not None:
+            self.grid_color = str(grid_color or "#8290a0")
+        if axis_color is not None:
+            self.axis_color = str(axis_color or "#9aa4b2")
+        self._apply_visual_theme()
+        self.refresh_context_display()
+
+    def _chart_pane_widgets(self):
+        panes = []
+        for index in range(self.splitter.count()):
+            widget = self.splitter.widget(index)
+            if isinstance(widget, PlotWidget):
+                panes.append(widget)
+        return panes
+
+    def _update_chart_bottom_axis_visibility(self):
+        panes = self._chart_pane_widgets()
+        visible_panes = [pane for pane in panes if not pane.isHidden()]
+        active_bottom_pane = visible_panes[-1] if visible_panes else self.price_plot
+        for pane in panes:
+            if pane is active_bottom_pane:
+                pane.showAxis("bottom")
+                pane.setLabel("bottom", "Date / Time (UTC)")
+            else:
+                pane.hideAxis("bottom")
+
+    def _apply_chart_pane_layout(self):
+        pane_count = self.splitter.count()
+        indicator_count = max(pane_count - 2, 0)
+        if self.compact_view_mode:
+            if self.show_volume_panel:
+                self.volume_plot.show()
+                sizes = [max(340, 520 - (indicator_count * 42))]
+                if indicator_count:
+                    sizes.extend([96] * indicator_count)
+                sizes.append(82)
+            else:
+                self.volume_plot.hide()
+                sizes = [max(400, 620 - (indicator_count * 36))]
+                if indicator_count:
+                    sizes.extend([96] * indicator_count)
+                sizes.append(0)
+            self._update_chart_bottom_axis_visibility()
+            self.splitter.setSizes(sizes[:pane_count])
+            return
+        if self.show_volume_panel:
+            self.volume_plot.show()
+            sizes = [max(720, 960 - (indicator_count * 60))]
+            if indicator_count:
+                sizes.extend([130] * indicator_count)
+            sizes.append(132)
+        else:
+            self.volume_plot.hide()
+            sizes = [max(820, 1040 - (indicator_count * 45))]
+            if indicator_count:
+                sizes.extend([130] * indicator_count)
+            sizes.append(0)
+        self._update_chart_bottom_axis_visibility()
+        self.splitter.setSizes(sizes[:pane_count])
+
+    def _chart_nav_button_style(self, accent=False):
+        background = "#1b2738" if accent else "#141d2b"
+        hover = "#28405f" if accent else "#1d2a3d"
+        border = "#3e5b82" if accent else "#314156"
+        return (
+            "QPushButton {"
+            f"background-color: {background}; color: #f2f6fb; border: 1px solid {border}; "
+            "border-radius: 11px; padding: 5px 10px; font-size: 12px; font-weight: 700; min-width: 34px;"
+            "}"
+            "QPushButton:hover {"
+            f"background-color: {hover};"
+            "}"
+            "QPushButton:checked {"
+            f"background-color: {hover}; border-color: #5d7fad;"
+            "}"
+        )
+
+    def _style_color_value(self, style: str, fallback: str) -> str:
+        text = str(style or "")
+        marker = "color:"
+        if marker not in text:
+            return fallback
+        try:
+            tail = text.split(marker, 1)[1]
+            color = tail.split(";", 1)[0].strip()
+            return color or fallback
+        except Exception:
+            return fallback
+
+    def _overlay_card_html(self, title: str, lines, title_color: str, body_color: str = "#d7dfeb") -> str:
+        line_html = "".join(
+            f"<div style='color: {body_color}; font-size: 10px; margin-top: 2px; line-height: 1.2;'>{html.escape(str(line or ''))}</div>"
+            for line in lines
+            if str(line or "").strip()
+        )
+        return (
+            "<div style='padding: 5px 7px;'>"
+            f"<div style='color: {title_color}; font-size: 9px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase;'>{html.escape(title)}</div>"
+            f"{line_html}"
+            "</div>"
+        )
+
+    def _chart_status_html(self) -> str:
+        if not self._chart_status_message:
+            return ""
+
+        mode = str(self._chart_status_mode or "idle").strip().lower()
+        title = "Chart Status"
+        title_color = "#8fb2db"
+        body_color = "#ecf2f8"
+        lines = [self._chart_status_message]
+
+        if mode == "loading":
+            frame = self._chart_loading_frames[self._chart_loading_index % len(self._chart_loading_frames)]
+            title = f"Loading {frame}"
+            title_color = "#8fb2db"
+            body_color = "#ecf2f8"
+        elif mode == "error":
+            title = "No Data"
+            title_color = "#ef9a9a"
+            body_color = "#fce8e6"
+        elif mode == "notice":
+            title = "History"
+            title_color = "#f2d08b"
+            body_color = "#f6f1dd"
+
+        if self._chart_status_detail:
+            lines.append(self._chart_status_detail)
+
+        return self._overlay_card_html(title, lines, title_color, body_color)
+
+    def _refresh_status_overlay(self):
+        html_value = self._chart_status_html()
+        if not html_value:
+            self.status_overlay_item.setHtml("")
+            self.status_overlay_item.setVisible(False)
+            return
+        self.status_overlay_item.setHtml(html_value)
+        self.status_overlay_item.setVisible(True)
+        self._update_status_overlay_position()
+
+    def _set_chart_status(self, mode: str, message: str = "", detail: str = "", auto_clear_ms: int = 0):
+        self._chart_status_mode = str(mode or "idle").strip().lower()
+        self._chart_status_message = str(message or "").strip()
+        self._chart_status_detail = str(detail or "").strip()
+
+        if self._chart_status_clear_timer.isActive():
+            self._chart_status_clear_timer.stop()
+
+        if self._chart_status_mode == "loading" and self._chart_status_message:
+            if not self._chart_loading_timer.isActive():
+                self._chart_loading_timer.start()
+        else:
+            self._chart_loading_timer.stop()
+
+        self._refresh_status_overlay()
+
+        if auto_clear_ms > 0 and self._chart_status_mode not in {"idle", "loading", "error"} and self._chart_status_message:
+            self._chart_status_clear_timer.start(int(auto_clear_ms))
+
+    def _tick_loading_status(self):
+        if self._chart_status_mode != "loading":
+            self._chart_loading_timer.stop()
+            return
+        self._chart_loading_index = (self._chart_loading_index + 1) % max(len(self._chart_loading_frames), 1)
+        self._refresh_status_overlay()
+
+    def _clear_status_notice(self):
+        if self._chart_status_mode == "notice":
+            self.clear_data_status()
+
+    def clear_data_status(self):
+        self._chart_status_requested_bars = None
+        self._set_chart_status("idle")
+
+    def set_loading_state(self, loading: bool, requested_bars: int | None = None):
+        if not loading:
+            if self._chart_status_mode == "loading":
+                self.clear_data_status()
+            return
+
+        self._chart_status_requested_bars = int(requested_bars) if requested_bars not in (None, "") else None
+        if self._chart_status_requested_bars is not None and self._chart_status_requested_bars > 0:
+            detail = (
+                f"Requesting up to {self._chart_status_requested_bars} candles for "
+                f"{self.symbol.upper()} ({self.timeframe})."
+            )
+        else:
+            detail = f"Requesting candles for {self.symbol.upper()} ({self.timeframe})."
+        self._chart_loading_index = 0
+        self._set_chart_status("loading", "Loading market data...", detail)
+
+    def set_no_data_state(self, detail: str = ""):
+        status_detail = str(detail or "").strip()
+        if not status_detail:
+            status_detail = f"No candle history was returned for {self.symbol.upper()} ({self.timeframe})."
+        self._set_chart_status("error", "No data received.", status_detail)
+
+    def set_history_notice(self, received_bars: int, requested_bars: int):
+        try:
+            received = max(0, int(received_bars))
+        except Exception:
+            received = 0
+        try:
+            requested = max(0, int(requested_bars))
+        except Exception:
+            requested = 0
+
+        if received <= 0 or requested <= 0 or received >= requested:
+            if self._chart_status_mode == "notice":
+                self.clear_data_status()
+            return
+
+        self._set_chart_status(
+            "notice",
+            f"Loaded {received:,} / {requested:,} candles.",
+            "Chart is using the broker history that is currently available.",
+            auto_clear_ms=4800,
+        )
+
+    def _update_chart_overlays(self):
+        header_lines = [
+            str(self.market_meta_label.text() or "").strip(),
+            str(self.market_micro_label.text() or "").strip(),
+        ]
+        context_text = str(self.background_context_label.text() or "").strip()
+        ohlcv_text = str(self.ohlcv_label.text() or "").strip()
+        header_summary = " | ".join(line for line in header_lines if line)
+
+        header_visible = self.chart_overlays_visible and bool(header_summary)
+        self.overlay_header_item.setHtml(
+            self._overlay_card_html(
+                "Market Context",
+                [header_summary],
+                "#8fb2db",
+            )
+        )
+        self.overlay_header_item.setVisible(header_visible)
+
+        context_color = self._style_color_value(getattr(self.background_context_label, "styleSheet", lambda: "")(), "#e7c56f")
+        self.overlay_context_item.setHtml(
+            self._overlay_card_html(
+                "Background",
+                [context_text],
+                context_color,
+                "#e8eef8",
+            )
+        )
+        self.overlay_context_item.setVisible(self.chart_overlays_visible and bool(context_text))
+
+        if ohlcv_text:
+            ohlcv_segments = [segment.strip() for segment in ohlcv_text.split("  ") if segment.strip()]
+            ohlcv_summary = " | ".join(ohlcv_segments)
+            self.overlay_ohlcv_item.setHtml(
+                self._overlay_card_html(
+                    "Visible Candle",
+                    [ohlcv_summary],
+                    "#f2f6fb",
+                )
+            )
+            self.overlay_ohlcv_item.setVisible(self.chart_overlays_visible)
+        else:
+            self.overlay_ohlcv_item.setVisible(False)
+
+        self._update_overlay_positions()
+
+    def _set_chart_overlays_visible(self, visible):
+        self.chart_overlays_visible = bool(visible)
+        toggle = getattr(self, "overlay_toggle_button", None)
+        if toggle is not None and bool(toggle.isChecked()) != self.chart_overlays_visible:
+            toggle.setChecked(self.chart_overlays_visible)
+        self._update_chart_overlays()
+
+    def _overlay_height_in_data(self, item, y_units_per_pixel: float) -> float:
+        try:
+            rect = item.boundingRect()
+            return max(float(rect.height()) * max(y_units_per_pixel, 1e-9), 1e-6)
+        except Exception:
+            return max(y_units_per_pixel * 28.0, 1e-6)
+
+    def _update_overlay_positions(self, *_args):
+        if not self.chart_overlays_visible:
+            return
+        try:
+            x_range, y_range = self.price_plot.viewRange()
+        except Exception:
+            return
+        if len(x_range) < 2 or len(y_range) < 2:
+            return
+
+        x_min = float(x_range[0])
+        x_max = float(x_range[1])
+        y_min = float(y_range[0])
+        y_max = float(y_range[1])
+        x_span = max(abs(x_max - x_min), 1e-9)
+        y_span = max(abs(y_max - y_min), 1e-9)
+        step = self._time_axis_step()
+
+        try:
+            pixel_size = self.price_plot.getPlotItem().vb.viewPixelSize()
+            y_units_per_pixel = abs(float(pixel_size[1])) if len(pixel_size) > 1 else y_span * 0.002
+        except Exception:
+            y_units_per_pixel = y_span * 0.002
+
+        x_pad = max(x_span * 0.014, step * 1.35)
+        y_pad = max(y_span * 0.018, y_units_per_pixel * 16.0, 1e-6)
+        stack_gap = max(y_units_per_pixel * 7.0, y_span * 0.006)
+
+        current_y = y_max - y_pad
+        overlay_items = (
+            self.overlay_header_item,
+            self.overlay_context_item,
+            self.overlay_ohlcv_item,
+        )
+        for item in overlay_items:
+            if not item.isVisible():
+                continue
+            item.setPos(x_min + x_pad, current_y)
+            current_y -= self._overlay_height_in_data(item, y_units_per_pixel) + stack_gap
+
+    def _update_status_overlay_position(self, *_args):
+        if not self.status_overlay_item.isVisible():
+            return
+        try:
+            x_range, y_range = self.price_plot.viewRange()
+        except Exception:
+            return
+        if len(x_range) < 2 or len(y_range) < 2:
+            return
+        center_x = (float(x_range[0]) + float(x_range[1])) / 2.0
+        center_y = (float(y_range[0]) + float(y_range[1])) / 2.0
+        self.status_overlay_item.setPos(center_x, center_y)
+
+    def _time_axis_step(self):
+        if self._last_x is None or len(self._last_x) < 2:
+            return 60.0
+        diffs = np.diff(self._last_x)
+        diffs = diffs[np.isfinite(diffs)]
+        diffs = diffs[np.abs(diffs) > 0]
+        if len(diffs) == 0:
+            return 60.0
+        return max(float(np.median(np.abs(diffs))), 1e-6)
+
+    def _fit_visible_y_range(self, x_min=None, x_max=None):
+        if self._last_df is None or self._last_x is None or len(self._last_x) == 0:
+            return
+
+        mask = np.ones(len(self._last_x), dtype=bool)
+        if x_min is not None and x_max is not None:
+            mask = (self._last_x >= float(x_min)) & (self._last_x <= float(x_max))
+            if not np.any(mask):
+                mask = np.ones(len(self._last_x), dtype=bool)
+
+        indices = np.where(mask)[0]
+        visible = self._last_df.iloc[indices]
+        if visible.empty:
+            return
+
+        try:
+            high_values = visible["high"].astype(float).to_numpy()
+            low_values = visible["low"].astype(float).to_numpy()
+            volume_values = visible["volume"].astype(float).to_numpy()
+        except Exception:
+            return
+
+        finite_high = high_values[np.isfinite(high_values)]
+        finite_low = low_values[np.isfinite(low_values)]
+        if len(finite_high) == 0 or len(finite_low) == 0:
+            return
+
+        high_price = float(np.max(finite_high))
+        low_price = float(np.min(finite_low))
+        span = max(high_price - low_price, max(abs(high_price) * 0.02, 1e-9))
+        y_pad = span * 0.12
+
+        price_vb = self.price_plot.getPlotItem().vb
+        price_vb.enableAutoRange(x=False, y=False)
+        price_vb.setYRange(low_price - y_pad, high_price + y_pad, padding=0.0)
+
+        finite_volume = volume_values[np.isfinite(volume_values)]
+        max_volume = float(np.max(finite_volume)) if len(finite_volume) else 0.0
+        volume_vb = self.volume_plot.getPlotItem().vb
+        volume_vb.enableAutoRange(x=False, y=False)
+        volume_vb.setYRange(0.0, max(max_volume * 1.15, 1.0), padding=0.0)
+
+        self._update_overlay_positions()
+
+    def _set_chart_x_window(self, x_min, x_max, fit_y=True):
+        if self._last_x is None or len(self._last_x) == 0:
+            return
+
+        step = self._time_axis_step()
+        data_min = float(self._last_x[0] - (step * 2.0))
+        data_max = float(self._last_x[-1] + (step * 2.0))
+        min_span = max(step * 10.0, 1e-6)
+        max_span = max(data_max - data_min, min_span)
+
+        left = float(x_min)
+        right = float(x_max)
+        span = max(right - left, min_span)
+        span = min(span, max_span)
+        center = (left + right) / 2.0
+
+        left = center - (span / 2.0)
+        right = center + (span / 2.0)
+        if left < data_min:
+            left = data_min
+            right = left + span
+        if right > data_max:
+            right = data_max
+            left = right - span
+        if left < data_min:
+            left = data_min
+
+        price_vb = self.price_plot.getPlotItem().vb
+        price_vb.enableAutoRange(x=False, y=False)
+        price_vb.setXRange(left, right, padding=0.0)
+        if fit_y:
+            self._fit_visible_y_range(left, right)
+        else:
+            self._update_overlay_positions()
+
+    def _zoom_chart(self, scale):
+        if self._last_x is None or len(self._last_x) == 0:
+            return
+        try:
+            x_range, _ = self.price_plot.viewRange()
+        except Exception:
+            return
+        if len(x_range) < 2:
+            return
+        center = (float(x_range[0]) + float(x_range[1])) / 2.0
+        span = max(float(x_range[1]) - float(x_range[0]), self._time_axis_step() * 10.0)
+        target_span = span * float(scale)
+        self._set_chart_x_window(center - (target_span / 2.0), center + (target_span / 2.0), fit_y=True)
+
+    def _pan_chart(self, fraction):
+        if self._last_x is None or len(self._last_x) == 0:
+            return
+        try:
+            x_range, _ = self.price_plot.viewRange()
+        except Exception:
+            return
+        if len(x_range) < 2:
+            return
+        span = float(x_range[1]) - float(x_range[0])
+        shift = span * float(fraction)
+        self._set_chart_x_window(float(x_range[0]) + shift, float(x_range[1]) + shift, fit_y=True)
+
+    def _fit_recent_chart(self):
+        if self._last_x is None or len(self._last_x) == 0 or self._last_candle_stats is None:
+            return
+        self._fit_chart_view(self._last_candle_stats, self._infer_candle_width(self._last_x))
+        self._update_overlay_positions()
 
     def _create_indicator_pane(self, key: str, label: str):
         existing = self.indicator_panes.get(key)
         if existing is not None:
             return existing
 
-        axis = DateAxisItem(orientation="bottom")
+        axis = TradingDateAxisItem(orientation="bottom")
         pane = PlotWidget(axisItems={"bottom": axis})
         pane.setXLink(self.price_plot)
         pane.hideAxis("right")
-        pane.setMinimumHeight(120)
+        pane.setMinimumHeight(90)
         self._style_plot(pane, left_label=label, show_bottom=False)
         self.splitter.insertWidget(max(self.splitter.count() - 1, 1), pane)
         self.indicator_panes[key] = pane
@@ -286,6 +1161,7 @@ class ChartWidget(QWidget):
         if len(current_sizes) >= self.splitter.count():
             current_sizes.insert(max(len(current_sizes) - 1, 1), 130)
             self.splitter.setSizes(current_sizes[: self.splitter.count()])
+        self._apply_chart_pane_layout()
         return pane
 
     def _create_curve(self, plot, color: str, width: float = 1.4, style=None):
@@ -315,6 +1191,85 @@ class ChartWidget(QWidget):
         plot.addItem(line, ignoreBounds=True)
         return line
 
+    def _create_trade_overlay_line(self, color: str, label: str, level: str):
+        line = InfiniteLine(
+            angle=0,
+            movable=True,
+            pen=mkPen(color, width=1.35, style=QtCore.Qt.PenStyle.DashLine),
+            label=label,
+            labelOpts={"position": 0.98, "color": color, "fill": (11, 18, 32, 185)},
+        )
+        line.setVisible(False)
+        line._trade_level = level
+        line.sigPositionChangeFinished.connect(lambda item=line: self._handle_trade_line_moved(item))
+        self.price_plot.addItem(line, ignoreBounds=True)
+        return line
+
+    def _handle_trade_line_moved(self, line):
+        if self._trade_overlay_updating:
+            return
+        try:
+            price = float(line.value())
+        except Exception:
+            return
+        if not np.isfinite(price) or price <= 0:
+            return
+        level = getattr(line, "_trade_level", "")
+        if not level:
+            return
+        self._trade_overlay_state[level] = price
+        self.sigTradeLevelChanged.emit(
+            {
+                "symbol": self.symbol,
+                "timeframe": self.timeframe,
+                "level": level,
+                "price": price,
+            }
+        )
+
+    def set_trade_overlay(self, entry=None, stop_loss=None, take_profit=None, side="buy"):
+        self._trade_overlay_updating = True
+        try:
+            normalized_side = str(side or "buy").strip().lower() or "buy"
+            self._trade_overlay_state = {
+                "side": normalized_side,
+                "entry": entry,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+            }
+
+            entry_color = "#32d296" if normalized_side == "buy" else "#ef5350"
+            self.trade_entry_line.setPen(mkPen(entry_color, width=1.4, style=QtCore.Qt.PenStyle.DashLine))
+            self.trade_entry_line.label.fill = pg.mkBrush(pg.mkColor(entry_color))
+            self.trade_entry_line.label.setColor(pg.mkColor("#ffffff"))
+
+            for line, value in (
+                (self.trade_entry_line, entry),
+                (self.trade_stop_line, stop_loss),
+                (self.trade_take_line, take_profit),
+            ):
+                numeric = None
+                try:
+                    if value not in (None, ""):
+                        numeric = float(value)
+                except Exception:
+                    numeric = None
+                if numeric is not None and np.isfinite(numeric) and numeric > 0:
+                    line.setPos(numeric)
+                    line.setVisible(True)
+                else:
+                    line.setVisible(False)
+        finally:
+            self._trade_overlay_updating = False
+
+    def clear_trade_overlay(self):
+        self.set_trade_overlay(
+            entry=None,
+            stop_loss=None,
+            take_profit=None,
+            side=self._trade_overlay_state.get("side", "buy"),
+        )
+
     def _sync_view_context(self):
         context = (self.symbol, self.timeframe)
         if context != self._last_view_context:
@@ -323,6 +1278,11 @@ class ChartWidget(QWidget):
             self.heatmap_buffer.clear()
             self._last_heatmap_price_range = None
             self.heatmap_image.clear()
+            self._last_orderbook_bids = []
+            self._last_orderbook_asks = []
+            self.depth_bid_curve.setData([], [])
+            self.depth_ask_curve.setData([], [])
+            self.depth_summary_label.setText("Depth chart will populate when live order book data arrives.")
 
     def _should_fit_chart_view(self, x):
         if self._auto_fit_pending:
@@ -431,6 +1391,7 @@ class ChartWidget(QWidget):
     def _mouse_moved(self, evt):
         pos = evt[0]
         if not self.price_plot.sceneBoundingRect().contains(pos):
+            self.news_hover_item.setVisible(False)
             return
 
         mouse_point = self.price_plot.getPlotItem().vb.mapSceneToView(pos)
@@ -439,9 +1400,158 @@ class ChartWidget(QWidget):
 
         self.v_line.setPos(x)
         self.h_line.setPos(y)
-        self.text_item.setHtml(f"<span style='color:#e3f2fd'>Price: {y:.6f}</span>")
+        row = self._row_for_x(x)
+        self.text_item.setHtml(self._hover_html(row, y))
         self.text_item.setPos(x, y)
         self._update_ohlcv_for_x(x)
+        self._update_news_hover(x, y)
+
+    def _update_news_hover(self, x_value, y_value):
+        event = self._nearest_news_event(x_value, y_value)
+        if event is None:
+            self.news_hover_item.setVisible(False)
+            return
+
+        self.news_hover_item.setHtml(self._news_hover_html(event))
+        self.news_hover_item.setPos(float(event["x"]), float(event["y"]))
+        self.news_hover_item.setVisible(True)
+
+    def _nearest_news_event(self, x_value, y_value):
+        events = list(self._visible_news_events or [])
+        if not events:
+            return None
+
+        try:
+            x_range, y_range = self.price_plot.viewRange()
+        except Exception:
+            return None
+
+        x_span = abs(float(x_range[1]) - float(x_range[0])) if len(x_range) >= 2 else 0.0
+        y_span = abs(float(y_range[1]) - float(y_range[0])) if len(y_range) >= 2 else 0.0
+        x_threshold = max(x_span * 0.02, 60.0)
+        y_threshold = max(y_span * 0.06, 1e-6)
+
+        closest = None
+        closest_score = None
+        for event in events:
+            dx = abs(float(event.get("x", 0.0)) - float(x_value))
+            dy = abs(float(event.get("y", 0.0)) - float(y_value))
+            if dx > x_threshold or dy > y_threshold:
+                continue
+            score = dx + (dy * 0.5)
+            if closest is None or score < closest_score:
+                closest = event
+                closest_score = score
+        return closest
+
+    def _news_hover_html(self, event):
+        headline = str(event.get("headline") or "News event")
+        source = str(event.get("source") or "News Feed")
+        summary = str(event.get("summary") or "").strip()
+        impact = str(event.get("impact") or "-")
+        sentiment = str(event.get("sentiment") or "-")
+        time_text = str(event.get("time") or "")
+        summary_html = ""
+        if summary:
+            trimmed = summary[:180] + ("..." if len(summary) > 180 else "")
+            summary_html = (
+                f"<div style='color: #d7e8ff; font-size: 10px; margin-top: 3px;'>"
+                f"{html.escape(trimmed)}</div>"
+            )
+        return (
+            "<div style='padding: 6px 8px;'>"
+            f"<div style='color: #ffd166; font-size: 10px; font-weight: 700;'>{html.escape(source)} | {html.escape(time_text)}</div>"
+            f"<div style='color: #f8fbff; font-size: 11px; font-weight: 700; margin-top: 2px;'>{html.escape(headline)}</div>"
+            f"{summary_html}"
+            f"<div style='color: #9ec1ff; font-size: 10px; margin-top: 3px;'>Impact {html.escape(impact)} | Sentiment {html.escape(sentiment)}</div>"
+            "</div>"
+        )
+
+    def _mouse_clicked(self, event):
+        try:
+            self.sigActivated.emit(self)
+        except Exception:
+            pass
+        if event.button() == QtCore.Qt.MouseButton.RightButton:
+            self._show_trade_context_menu(event)
+            return
+        try:
+            is_double = bool(event.double())
+        except Exception:
+            is_double = False
+        if not is_double:
+            return
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        pos = event.scenePos()
+        if not self.price_plot.sceneBoundingRect().contains(pos):
+            return
+
+        mouse_point = self.price_plot.getPlotItem().vb.mapSceneToView(pos)
+        price = float(mouse_point.y())
+        if not np.isfinite(price) or price <= 0:
+            return
+
+        self.sigTradeLevelRequested.emit(
+            {
+                "symbol": self.symbol,
+                "timeframe": self.timeframe,
+                "price": price,
+                "x": float(mouse_point.x()),
+            }
+        )
+        try:
+            event.accept()
+        except Exception:
+            pass
+
+    def _show_trade_context_menu(self, event):
+        pos = event.scenePos()
+        if not self.price_plot.sceneBoundingRect().contains(pos):
+            return
+
+        mouse_point = self.price_plot.getPlotItem().vb.mapSceneToView(pos)
+        price = float(mouse_point.y())
+        if not np.isfinite(price) or price <= 0:
+            return
+
+        menu = QMenu(self)
+        buy_limit = menu.addAction("Buy Limit Here")
+        sell_limit = menu.addAction("Sell Limit Here")
+        menu.addSeparator()
+        set_entry = menu.addAction("Set Entry Here")
+        set_stop = menu.addAction("Set Stop Loss Here")
+        set_take = menu.addAction("Set Take Profit Here")
+        menu.addSeparator()
+        clear_levels = menu.addAction("Clear Trade Levels")
+        chosen = menu.exec(event.screenPos().toPoint())
+        if chosen is None:
+            return
+
+        mapping = {
+            buy_limit: "buy_limit",
+            sell_limit: "sell_limit",
+            set_entry: "set_entry",
+            set_stop: "set_stop_loss",
+            set_take: "set_take_profit",
+            clear_levels: "clear_levels",
+        }
+        action_name = mapping.get(chosen)
+        if not action_name:
+            return
+
+        self.sigTradeContextAction.emit(
+            {
+                "action": action_name,
+                "symbol": self.symbol,
+                "timeframe": self.timeframe,
+                "price": price,
+            }
+        )
+        try:
+            event.accept()
+        except Exception:
+            pass
 
     def _active_broker_name(self):
         broker = getattr(self.controller, "broker", None)
@@ -479,59 +1589,234 @@ class ChartWidget(QWidget):
         }
         return mapping.get(str(self.timeframe).lower(), f"{self.timeframe} chart")
 
+    def _handle_timeframe_picker_changed(self, value):
+        if self._timeframe_picker_updating:
+            return
+        self.set_timeframe(value, emit_signal=True)
+
+    def set_timeframe(self, timeframe, emit_signal=False):
+        normalized = str(timeframe or self.timeframe or "1h").strip().lower() or "1h"
+        previous = str(getattr(self, "timeframe", "") or "").strip().lower()
+        self.timeframe = normalized
+
+        picker = getattr(self, "timeframe_picker", None)
+        if picker is not None:
+            if picker.findText(normalized) < 0:
+                picker.addItem(normalized)
+            self._timeframe_picker_updating = True
+            try:
+                picker.setCurrentText(normalized)
+            finally:
+                self._timeframe_picker_updating = False
+
+        if previous != normalized:
+            self.refresh_context_display()
+            if emit_signal:
+                self.sigTimeframeSelected.emit(normalized)
+
     def _update_chart_header(self):
         base, quote = self._symbol_parts()
         broker_name = self._active_broker_name().upper()
+        self.instrument_label.setText(f"{self.symbol.upper()}  {self.timeframe.upper()}")
 
         stats = self._last_candle_stats or {}
         if quote:
-            description = f"{base} priced in {quote}"
+            description = f"{broker_name}  |  {base} quoted in {quote}"
         else:
-            description = self._timeframe_description()
-        meta_prefix = f"{self.timeframe.upper()}  |  {broker_name}"
+            description = f"{broker_name}  |  {self._timeframe_description()}"
+
+        bid = self._format_numeric_value(self._last_bid)
+        ask = self._format_numeric_value(self._last_ask)
+        spread = None
+        if bid is not None and ask is not None and ask >= bid:
+            spread = ask - bid
 
         if stats:
             last_price = self._format_metric(stats.get("last_price", 0.0))
             variation = float(stats.get("variation_pct", 0.0))
             cumulative_volume = self._format_volume(stats.get("cumulative_volume", 0.0))
             positive = variation >= 0
-            change_color = "#32d296" if positive else "#ff5b7f"
+            change_color = "#2db784" if positive else "#d75462"
             prefix = "+" if positive else ""
-            self.market_stats_label.setText(f"{last_price}  {prefix}{variation:.2f}%  Vol {cumulative_volume}")
+            self.market_stats_label.setText(f"{last_price}  {prefix}{variation:.2f}%")
             self.market_stats_label.setStyleSheet(
-                f"color: {change_color}; font-weight: 800; font-size: 12px;"
+                f"color: {change_color}; font-weight: 800; font-size: 15px;"
             )
             self.market_meta_label.setText(
-                f"{meta_prefix}  |  {description}  |  Avg {self._format_metric(stats.get('average_close', 0.0))}  |  "
+                f"{description}  |  Avg {self._format_metric(stats.get('average_close', 0.0))}  |  "
                 f"Range {self._format_metric(stats.get('min_price', 0.0), 4)} - {self._format_metric(stats.get('max_price', 0.0), 4)}"
+            )
+            self.market_micro_label.setText(
+                f"Bid {self._format_metric(bid, 8)}  |  Ask {self._format_metric(ask, 8)}  |  "
+                f"Spread {self._format_metric(spread, 8)}  |  Visible Vol {cumulative_volume}"
             )
         else:
             self.market_stats_label.setText(self._timeframe_description())
-            self.market_stats_label.setStyleSheet("color: #8fa7c6; font-weight: 700; font-size: 12px;")
-            if quote:
-                self.market_meta_label.setText(
-                    f"{meta_prefix}  |  {description}  |  Quote asset {quote} against base asset {base}"
-                )
-            else:
-                self.market_meta_label.setText(f"{meta_prefix}  |  {self._timeframe_description()}")
+            self.market_stats_label.setStyleSheet("color: #8e9bab; font-weight: 700; font-size: 14px;")
+            self.market_meta_label.setText(description)
+            self.market_micro_label.setText(
+                f"Bid {self._format_metric(bid, 8)}  |  Ask {self._format_metric(ask, 8)}  |  Spread {self._format_metric(spread, 8)}"
+            )
 
     def _update_watermark_html(self):
         base, quote = self._symbol_parts()
         description = f"{base} / {quote}" if quote else base
+        symbol_color = self._rgba_css(self.axis_color, 22, "#f6f8fb")
+        timeframe_color = self._rgba_css(self.axis_color, 32, "#9aa4b2")
+        detail_color = self._rgba_css(self.grid_color, 40, "#728198")
         self.watermark_item.setHtml(
             (
                 "<div style='text-align:center;'>"
-                f"<div style='color: rgba(200,216,255,0.10); font-size: 42px; font-weight: 800; letter-spacing: 1px;'>{self.symbol.upper()}</div>"
-                f"<div style='color: rgba(148,171,214,0.10); font-size: 24px; font-weight: 700;'>{self.timeframe.upper()}</div>"
-                f"<div style='color: rgba(148,171,214,0.08); font-size: 12px; text-transform: uppercase;'>{description}</div>"
+                f"<div style='color: {symbol_color}; font-size: 40px; font-weight: 800; letter-spacing: 1px;'>{self.symbol.upper()}</div>"
+                f"<div style='color: {timeframe_color}; font-size: 22px; font-weight: 700;'>{self.timeframe.upper()}</div>"
+                f"<div style='color: {detail_color}; font-size: 11px; text-transform: uppercase;'>{description}</div>"
                 "</div>"
             )
         )
 
     def refresh_context_display(self):
         self._update_chart_header()
+        self._refresh_market_panels()
         self._update_watermark_html()
         self._update_watermark_position()
+        self._update_status_overlay_position()
+        self._update_chart_overlays()
+
+    def _refresh_market_panels(self):
+        self._update_depth_chart()
+        self._update_market_info()
+
+    def _update_depth_chart(self):
+        bids = []
+        asks = []
+        for level in self._last_orderbook_bids or []:
+            if isinstance(level, (list, tuple)) and len(level) >= 2:
+                price = self._format_numeric_value(level[0])
+                size = self._format_numeric_value(level[1])
+                if price is not None and size is not None and price > 0 and size > 0:
+                    bids.append((price, size))
+        for level in self._last_orderbook_asks or []:
+            if isinstance(level, (list, tuple)) and len(level) >= 2:
+                price = self._format_numeric_value(level[0])
+                size = self._format_numeric_value(level[1])
+                if price is not None and size is not None and price > 0 and size > 0:
+                    asks.append((price, size))
+
+        if not bids and not asks:
+            self.depth_bid_curve.setData([], [])
+            self.depth_ask_curve.setData([], [])
+            return
+
+        if bids:
+            bids = sorted(bids, key=lambda item: item[0], reverse=True)
+            bid_prices = np.array([price for price, _size in bids], dtype=float)
+            bid_sizes = np.cumsum(np.array([size for _price, size in bids], dtype=float))
+            self.depth_bid_curve.setData(bid_prices, bid_sizes)
+        else:
+            self.depth_bid_curve.setData([], [])
+
+        if asks:
+            asks = sorted(asks, key=lambda item: item[0])
+            ask_prices = np.array([price for price, _size in asks], dtype=float)
+            ask_sizes = np.cumsum(np.array([size for _price, size in asks], dtype=float))
+            self.depth_ask_curve.setData(ask_prices, ask_sizes)
+        else:
+            self.depth_ask_curve.setData([], [])
+
+        best_bid = bids[0][0] if bids else None
+        best_ask = asks[0][0] if asks else None
+        spread_text = "-"
+        if best_bid is not None and best_ask is not None and best_ask >= best_bid:
+            spread_text = self._format_metric(best_ask - best_bid, 8)
+        self.depth_summary_label.setText(
+            f"Best bid {self._format_metric(best_bid, 8)} | Best ask {self._format_metric(best_ask, 8)} | Spread {spread_text}"
+        )
+
+    def _update_market_info(self):
+        stats = self._last_candle_stats or {}
+        bid = self._format_numeric_value(self._last_bid)
+        ask = self._format_numeric_value(self._last_ask)
+        last_price = self._format_numeric_value(stats.get("last_price")) if stats else None
+        if last_price is None:
+            if bid is not None and ask is not None:
+                last_price = (bid + ask) / 2.0
+            else:
+                last_price = bid or ask
+
+        mid = None
+        if bid is not None and ask is not None:
+            mid = (bid + ask) / 2.0
+        spread = None
+        if bid is not None and ask is not None and ask >= bid:
+            spread = ask - bid
+
+        bid_depth = sum(max(0.0, self._format_numeric_value(level[1]) or 0.0) for level in self._last_orderbook_bids or [] if isinstance(level, (list, tuple)) and len(level) >= 2)
+        ask_depth = sum(max(0.0, self._format_numeric_value(level[1]) or 0.0) for level in self._last_orderbook_asks or [] if isinstance(level, (list, tuple)) and len(level) >= 2)
+        depth_bias = None
+        total_depth = bid_depth + ask_depth
+        if total_depth > 0:
+            depth_bias = ((bid_depth - ask_depth) / total_depth) * 100.0
+
+        range_text = "-"
+        if stats:
+            range_text = (
+                f"{self._format_metric(stats.get('min_price'), 6)} - "
+                f"{self._format_metric(stats.get('max_price'), 6)}"
+            )
+
+        card_values = {
+            "Last": self._format_metric(last_price, 8),
+            "Mid": self._format_metric(mid, 8),
+            "Spread": self._format_metric(spread, 8),
+            "Best Bid": self._format_metric(bid, 8),
+            "Best Ask": self._format_metric(ask, 8),
+            "Range": range_text,
+            "Visible Vol": self._format_volume(stats.get("cumulative_volume", 0.0)) if stats else "-",
+            "Depth Bias": "-" if depth_bias is None else f"{depth_bias:+.2f}%",
+        }
+        for key, value_label in self.market_info_cards.items():
+            value_label.setText(card_values.get(key, "-"))
+
+        base, quote = self._symbol_parts()
+        headline = f"{self.symbol.upper()} on {self._active_broker_name().upper()} | {self.timeframe.upper()} context"
+        if stats and stats.get("variation_pct") is not None:
+            headline += f" | Visible move {float(stats.get('variation_pct') or 0.0):+.2f}%"
+        self.market_info_summary.setText(headline)
+
+        detail_lines = [
+            f"<h3>{self.symbol.upper()}</h3>",
+            (
+                f"<p><b>Market structure:</b> {base} / {quote if quote else 'quote unavailable'} | "
+                f"<b>Broker:</b> {self._active_broker_name().upper()} | "
+                f"<b>Timeframe:</b> {self.timeframe.upper()}</p>"
+            ),
+            (
+                f"<p><b>Visible range:</b> {range_text} | "
+                f"<b>Average close:</b> {self._format_metric(stats.get('average_close'), 8) if stats else '-'} | "
+                f"<b>Visible volume:</b> {self._format_volume(stats.get('cumulative_volume', 0.0)) if stats else '-'}</p>"
+            ),
+            (
+                f"<p><b>Order book:</b> bid depth {self._format_volume(bid_depth)} | "
+                f"ask depth {self._format_volume(ask_depth)} | "
+                f"spread {self._format_metric(spread, 8)} | "
+                f"mid {self._format_metric(mid, 8)}</p>"
+            ),
+        ]
+        if depth_bias is not None:
+            tilt = "buyers" if depth_bias > 0 else "sellers" if depth_bias < 0 else "balanced flow"
+            detail_lines.append(
+                f"<p><b>Depth tilt:</b> {tilt} with a {depth_bias:+.2f}% balance versus the opposing side.</p>"
+            )
+        self.market_info_details.setHtml("".join(detail_lines))
+
+    def _format_numeric_value(self, value):
+        try:
+            numeric = float(value)
+        except Exception:
+            return None
+        if not np.isfinite(numeric):
+            return None
+        return numeric
 
     def _update_watermark_position(self, *_args):
         try:
@@ -539,6 +1824,7 @@ class ChartWidget(QWidget):
             center_x = (float(x_range[0]) + float(x_range[1])) / 2.0
             center_y = (float(y_range[0]) + float(y_range[1])) / 2.0
             self.watermark_item.setPos(center_x, center_y)
+            self._update_status_overlay_position()
             self._watermark_initialized = True
         except Exception:
             return
@@ -567,27 +1853,63 @@ class ChartWidget(QWidget):
             return f"{numeric / 1_000:.2f}K"
         return f"{numeric:.2f}"
 
+    def _format_time_label(self, value):
+        if value in (None, ""):
+            return "-"
+
+        try:
+            if hasattr(value, "to_pydatetime"):
+                dt = value.to_pydatetime()
+            elif isinstance(value, datetime):
+                dt = value
+            elif isinstance(value, (int, float, np.integer, np.floating)):
+                numeric = float(value)
+                if abs(numeric) > 1e11:
+                    numeric = numeric / 1000.0
+                dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+            else:
+                text = str(value).strip()
+                if not text:
+                    return "-"
+                dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt.strftime("%Y-%m-%d %H:%M UTC")
+        except Exception:
+            return str(value)
+
     def _set_ohlcv_from_row(self, row):
         if row is None:
-            self.ohlcv_label.setText("O -  H -  L -  C -  V -")
+            self.ohlcv_label.setText("Time -  O -  H -  L -  C -  Chg -  V -")
+            self._update_chart_overlays()
             return
 
+        open_price = self._format_numeric_value(row.get("open", 0.0))
+        close_price = self._format_numeric_value(row.get("close", 0.0))
+        delta = None
+        if open_price is not None and close_price is not None:
+            delta = close_price - open_price
+        prefix = "+" if delta is not None and delta >= 0 else ""
         self.ohlcv_label.setText(
             "  ".join(
                 [
+                    f"T {self._format_time_label(row.get('timestamp'))}",
                     f"O {self._format_metric(row.get('open', 0.0))}",
                     f"H {self._format_metric(row.get('high', 0.0))}",
                     f"L {self._format_metric(row.get('low', 0.0))}",
                     f"C {self._format_metric(row.get('close', 0.0))}",
+                    f"Chg {prefix}{self._format_metric(delta, 6)}",
                     f"V {self._format_volume(row.get('volume', 0.0))}",
                 ]
             )
         )
+        self._update_chart_overlays()
 
-    def _update_ohlcv_for_x(self, x_value):
+    def _row_for_x(self, x_value):
         if self._last_df is None or self._last_x is None or len(self._last_x) == 0:
-            self._set_ohlcv_from_row(None)
-            return
+            return None
 
         try:
             index = int(np.nanargmin(np.abs(self._last_x - float(x_value))))
@@ -595,10 +1917,36 @@ class ChartWidget(QWidget):
             index = len(self._last_df) - 1
 
         if index < 0 or index >= len(self._last_df):
-            return
+            return None
+        return self._last_df.iloc[index]
 
-        row = self._last_df.iloc[index]
-        self._set_ohlcv_from_row(row)
+    def _hover_html(self, row, y_value):
+        if row is None:
+            return f"<span style='color:#f6f8fb'>Price {y_value:.6f}</span>"
+
+        open_price = self._format_numeric_value(row.get("open", 0.0))
+        close_price = self._format_numeric_value(row.get("close", 0.0))
+        delta = None
+        if open_price is not None and close_price is not None:
+            delta = close_price - open_price
+        delta_color = "#2db784" if (delta or 0.0) >= 0 else "#d75462"
+        delta_prefix = "+" if delta is not None and delta >= 0 else ""
+        return (
+            "<div style='padding: 6px 8px;'>"
+            f"<div style='color: #9aa4b2; font-size: 10px; font-weight: 700;'>{html.escape(self._format_time_label(row.get('timestamp')))}</div>"
+            f"<div style='color: #f6f8fb; font-size: 11px; margin-top: 2px;'>Cursor {y_value:.6f}</div>"
+            f"<div style='color: #dde5ef; font-size: 10px; margin-top: 3px;'>"
+            f"O {self._format_metric(row.get('open', 0.0))}  "
+            f"H {self._format_metric(row.get('high', 0.0))}  "
+            f"L {self._format_metric(row.get('low', 0.0))}  "
+            f"C {self._format_metric(row.get('close', 0.0))}</div>"
+            f"<div style='color: {delta_color}; font-size: 10px; font-weight: 700; margin-top: 3px;'>"
+            f"Bar change {delta_prefix}{self._format_metric(delta, 6)}  |  Volume {self._format_volume(row.get('volume', 0.0))}</div>"
+            "</div>"
+        )
+
+    def _update_ohlcv_for_x(self, x_value):
+        self._set_ohlcv_from_row(self._row_for_x(x_value))
 
     def _extract_time_axis(self, df):
         if "timestamp" not in df.columns:
@@ -626,20 +1974,119 @@ class ChartWidget(QWidget):
         except Exception:
             return np.arange(len(df), dtype=float)
 
-    def _infer_candle_width(self, x):
+    def _timeframe_seconds(self, timeframe=None):
+        normalized = str(timeframe or self.timeframe or "").strip().lower()
+        mapping = {
+            "tick": 1.0,
+            "1m": 60.0,
+            "5m": 300.0,
+            "15m": 900.0,
+            "30m": 1800.0,
+            "1h": 3600.0,
+            "4h": 14400.0,
+            "1d": 86400.0,
+            "1w": 604800.0,
+        }
+        if normalized in mapping:
+            return mapping[normalized]
+        match = re.fullmatch(r"(\d+)([mhdw])", normalized)
+        if not match:
+            return None
+        size = float(match.group(1))
+        unit = match.group(2)
+        multiplier = {"m": 60.0, "h": 3600.0, "d": 86400.0, "w": 604800.0}.get(unit)
+        if multiplier is None:
+            return None
+        return size * multiplier
+
+    def _normalize_chart_time_axis(self, x_values):
+        x = np.asarray(x_values, dtype=float)
         if len(x) < 2:
+            return x
+
+        finite_mask = np.isfinite(x)
+        if not finite_mask.all():
+            x = x[finite_mask]
+        if len(x) < 2:
+            return x
+
+        expected_step = self._timeframe_seconds()
+        if expected_step is None or expected_step <= 0:
+            return x
+
+        diffs = np.diff(x)
+        diffs = diffs[np.isfinite(diffs)]
+        diffs = diffs[diffs > 0]
+        if len(diffs) == 0:
+            return x
+
+        median_step = float(np.median(diffs))
+        max_gap = float(np.max(diffs))
+        min_gap = float(np.min(diffs))
+        irregular_spacing = (
+            median_step > (expected_step * 1.5)
+            or median_step < (expected_step * 0.5)
+            or max_gap > (expected_step * 4.0)
+            or (max_gap / max(min_gap, 1e-9)) > 6.0
+        )
+        if not irregular_spacing:
+            return x
+
+        anchor = float(x[-1])
+        start = anchor - (expected_step * (len(x) - 1))
+        return np.linspace(start, anchor, num=len(x), dtype=float)
+
+    def _infer_candle_width(self, x):
+        expected_step = self._timeframe_seconds()
+        if len(x) < 2:
+            if expected_step is not None and expected_step > 0:
+                return max(expected_step * 0.64, 1e-6)
             return 60.0
 
         diffs = np.diff(x)
         diffs = diffs[np.isfinite(diffs)]
         diffs = diffs[np.abs(diffs) > 0]
         if len(diffs) == 0:
+            if expected_step is not None and expected_step > 0:
+                return max(expected_step * 0.64, 1e-6)
             return 60.0
 
         step = float(np.median(np.abs(diffs)))
+        if expected_step is not None and expected_step > 0:
+            step = min(step, float(expected_step))
         return max(min(step * 0.64, step * 0.8), 1e-6)
 
+    def _resolve_signal_x(self, index):
+        try:
+            numeric = float(index)
+        except Exception:
+            numeric = None
+
+        if numeric is not None and np.isfinite(numeric):
+            if self._last_x is not None and len(self._last_x) > 0:
+                rounded = int(round(numeric))
+                if abs(numeric - rounded) <= 1e-6 and 0 <= rounded < len(self._last_x):
+                    return float(self._last_x[rounded])
+            return numeric
+
+        timestamp_text = str(index or "").strip()
+        if not timestamp_text:
+            return None
+
+        try:
+            import pandas as pd
+
+            parsed = pd.to_datetime(timestamp_text, errors="coerce", utc=True)
+            if pd.isna(parsed):
+                return None
+            return float(parsed.timestamp())
+        except Exception:
+            return None
+
     def update_orderbook_heatmap(self, bids, asks):
+        self._last_orderbook_bids = list(bids or [])
+        self._last_orderbook_asks = list(asks or [])
+        self._refresh_market_panels()
         if not bids and not asks:
             return
 
@@ -745,10 +2192,147 @@ class ChartWidget(QWidget):
         self.heatmap_plot.setYRange(grid_min, grid_max, padding=0.02)
 
     def add_strategy_signal(self, index, price, signal):
-        if signal == "BUY":
-            self.signal_markers.addPoints(x=[index], y=[price], symbol="t1", brush="#26a69a", size=12)
-        elif signal == "SELL":
-            self.signal_markers.addPoints(x=[index], y=[price], symbol="t", brush="#ef5350", size=12)
+        x_value = self._resolve_signal_x(index)
+        try:
+            y_value = float(price)
+        except Exception:
+            return
+
+        if x_value is None or not np.isfinite(y_value):
+            return
+
+        normalized_signal = str(signal or "").strip().upper()
+        if normalized_signal == "BUY":
+            self.signal_markers.addPoints(x=[x_value], y=[y_value], symbol="t1", brush="#26a69a", size=12)
+        elif normalized_signal == "SELL":
+            self.signal_markers.addPoints(x=[x_value], y=[y_value], symbol="t", brush="#ef5350", size=12)
+
+    def clear_news_events(self):
+        self._news_events = []
+        self._visible_news_events = []
+        self.news_markers.setData([], [])
+        self.news_hover_item.setVisible(False)
+        for item in list(self._news_items):
+            try:
+                self.price_plot.removeItem(item)
+            except Exception:
+                pass
+        self._news_items = []
+
+    def set_news_events(self, events):
+        self._news_events = list(events or [])
+        self._render_news_events()
+
+    def _render_news_events(self):
+        self.news_markers.setData([], [])
+        self.news_hover_item.setVisible(False)
+        self._visible_news_events = []
+        for item in list(self._news_items):
+            try:
+                self.price_plot.removeItem(item)
+            except Exception:
+                pass
+        self._news_items = []
+
+        if self._last_x is None or self._last_df is None or len(self._last_x) == 0 or not self._news_events:
+            return
+
+        try:
+            high_values = self._last_df["high"].astype(float).to_numpy()
+            price_anchor = float(np.nanmax(high_values))
+            low_anchor = float(np.nanmin(self._last_df["low"].astype(float).to_numpy()))
+        except Exception:
+            return
+
+        visible_min = float(np.nanmin(self._last_x))
+        visible_max = float(np.nanmax(self._last_x))
+        price_span = max(price_anchor - low_anchor, 1e-6)
+        marker_y = price_anchor + (price_span * 0.03)
+
+        xs = []
+        ys = []
+        tooltips = []
+        visible_events = []
+
+        for event in self._news_events[:12]:
+            timestamp_text = str(event.get("timestamp", "") or "")
+            try:
+                event_dt = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if event_dt.tzinfo is None:
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+            x_value = float(event_dt.timestamp())
+            if x_value < visible_min or x_value > visible_max:
+                continue
+            xs.append(x_value)
+            ys.append(marker_y)
+            headline = str(event.get("title", "") or "News event")
+            source = str(event.get("source", "") or "News Feed")
+            summary = str(event.get("summary", "") or "").strip()
+            impact = event.get("impact", "")
+            sentiment = event.get("sentiment_score", "")
+            timestamp_label = event_dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            tooltip_parts = [f"{source} | {timestamp_label}", headline]
+            if summary:
+                tooltip_parts.append(summary)
+            if impact not in ("", None) or sentiment not in ("", None):
+                tooltip_parts.append(f"Impact {impact} | Sentiment {sentiment}")
+            tooltips.append("\n".join(str(part) for part in tooltip_parts if str(part).strip()))
+            visible_events.append(
+                {
+                    "x": x_value,
+                    "y": marker_y,
+                    "headline": headline,
+                    "source": source,
+                    "time": timestamp_label,
+                    "summary": summary,
+                    "impact": impact,
+                    "sentiment": sentiment,
+                }
+            )
+
+        if not xs:
+            return
+
+        self.news_markers.setData(
+            x=xs,
+            y=ys,
+            symbol="d",
+            size=9,
+            brush=pg.mkBrush("#ffd166"),
+            pen=mkPen("#f4a261", width=1.1),
+            data=tooltips,
+        )
+        self._visible_news_events = visible_events
+
+        for event in visible_events[:5]:
+            x_value = float(event["x"])
+            line = InfiniteLine(
+                pos=x_value,
+                angle=90,
+                movable=False,
+                pen=mkPen((244, 162, 97, 70), width=1, style=QtCore.Qt.PenStyle.DotLine),
+            )
+            self.price_plot.addItem(line, ignoreBounds=True)
+            self._news_items.append(line)
+
+            label = TextItem(
+                html=(
+                    "<div style='background-color: rgba(11,18,32,0.92); color: #f8fbff; "
+                    "padding: 4px 7px; border: 1px solid rgba(244,162,97,0.55); border-radius: 6px;'>"
+                    f"<div style='color: #ffd166; font-size: 10px; font-weight: 700;'>{event['source']} | {event['time']}</div>"
+                    f"<div style='color: #f8fbff; font-size: 11px; font-weight: 600;'>{event['headline'][:68]}{'...' if len(event['headline']) > 68 else ''}</div>"
+                    f"<div style='color: #9ec1ff; font-size: 10px;'>Impact {event['impact']} | Sentiment {event['sentiment']}</div>"
+                    "</div>"
+                ),
+                anchor=(0.0, 1.0),
+                border=None,
+                fill=None,
+            )
+            label.setPos(x_value, marker_y)
+            self.price_plot.addItem(label)
+            self._news_items.append(label)
 
     def _pivot_window(self, period: int) -> int:
         return max(2, int(period) // 2)
@@ -862,6 +2446,92 @@ class ChartWidget(QWidget):
             curves.append(curve)
             labels.append(label)
         return {"curves": curves, "labels": labels, "levels": levels}
+
+    def set_compact_view_mode(self, enabled: bool):
+        self.compact_view_mode = bool(enabled)
+        self.default_visible_bars = 60 if self.compact_view_mode else 96
+
+        try:
+            self.info_bar.setVisible(not self.compact_view_mode)
+        except Exception:
+            pass
+
+        try:
+            self.market_tabs.setCurrentWidget(self.candlestick_page)
+            self.market_tabs.tabBar().setVisible(not self.compact_view_mode)
+        except Exception:
+            pass
+
+        self.splitter.setHandleWidth(6 if self.compact_view_mode else 10)
+        self.price_plot.setMinimumHeight(280 if self.compact_view_mode else 460)
+        self.volume_plot.setMinimumHeight(64 if self.compact_view_mode else 88)
+        self.volume_plot.setMaximumHeight(96 if self.compact_view_mode else 150)
+        self.heatmap_plot.setMinimumHeight(60 if self.compact_view_mode else 80)
+        self.heatmap_plot.setMaximumHeight(96 if self.compact_view_mode else 135)
+        self.depth_plot.setMinimumHeight(220 if self.compact_view_mode else 360)
+
+        self._apply_chart_pane_layout()
+        if self._last_candle_stats is not None and self._last_x is not None and len(self._last_x) > 0:
+            self._fit_chart_view(self._last_candle_stats, self._infer_candle_width(self._last_x))
+            self._update_overlay_positions()
+        self.updateGeometry()
+        self.repaint()
+
+    def _remove_plot_artifact(self, plot, item):
+        if item is None:
+            return
+        try:
+            plot.removeItem(item)
+        except Exception:
+            pass
+
+    def remove_indicator(self, key: str):
+        indicator_key = str(key or "").strip()
+        if not indicator_key:
+            return False
+
+        indicator_present = any(
+            str(spec.get("key") or "").strip() == indicator_key
+            for spec in list(self.indicators or [])
+            if isinstance(spec, dict)
+        )
+        pane = self.indicator_panes.pop(indicator_key, None)
+        items = self.indicator_items.pop(indicator_key, None)
+        if not indicator_present and pane is None and items is None:
+            return False
+
+        self.indicators = [
+            spec
+            for spec in list(self.indicators or [])
+            if not isinstance(spec, dict) or str(spec.get("key") or "").strip() != indicator_key
+        ]
+
+        if pane is not None:
+            try:
+                pane.hide()
+            except Exception:
+                pass
+            try:
+                pane.setParent(None)
+            except Exception:
+                pass
+            try:
+                pane.deleteLater()
+            except Exception:
+                pass
+        elif isinstance(items, dict):
+            for artifact in list(items.get("curves", []) or []):
+                self._remove_plot_artifact(self.price_plot, artifact)
+            for artifact in list(items.get("labels", []) or []):
+                self._remove_plot_artifact(self.price_plot, artifact)
+        else:
+            for artifact in list(items or []):
+                self._remove_plot_artifact(self.price_plot, artifact)
+
+        self._apply_chart_pane_layout()
+        self.updateGeometry()
+        self.repaint()
+        return True
 
     def add_indicator(self, name: str, period: int = 20):
         indicator = (name or "").strip().upper()
@@ -1371,20 +3041,57 @@ class ChartWidget(QWidget):
         if not required.issubset(set(df.columns)):
             return
 
-        x = self._extract_time_axis(df)
+        frame = df.copy()
+        if "timestamp" in frame.columns:
+            timestamp_series = frame["timestamp"]
+            numeric_timestamps = pd.to_numeric(timestamp_series, errors="coerce")
+            if int(numeric_timestamps.notna().sum()) >= max(1, len(frame.index) // 2):
+                normalized_seconds = numeric_timestamps.where(
+                    numeric_timestamps.abs() <= 1e11,
+                    numeric_timestamps / 1000.0,
+                )
+                frame["timestamp"] = pd.to_datetime(normalized_seconds, unit="s", errors="coerce", utc=True)
+            else:
+                frame["timestamp"] = pd.to_datetime(timestamp_series, errors="coerce", utc=True)
+        for column in ["open", "high", "low", "close", "volume"]:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame.replace([np.inf, -np.inf], np.nan, inplace=True)
+        drop_columns = ["open", "high", "low", "close"]
+        if "timestamp" in frame.columns:
+            drop_columns.append("timestamp")
+        frame.dropna(subset=drop_columns, inplace=True)
+        if frame.empty:
+            return
+
+        frame = frame[(frame["open"] > 0) & (frame["high"] > 0) & (frame["low"] > 0) & (frame["close"] > 0)]
+        if frame.empty:
+            return
+
+        price_bounds = frame[["open", "high", "low", "close"]]
+        frame["high"] = price_bounds.max(axis=1)
+        frame["low"] = price_bounds.min(axis=1)
+        frame["volume"] = frame["volume"].fillna(0.0).clip(lower=0.0)
+        if "timestamp" in frame.columns:
+            frame.sort_values("timestamp", inplace=True)
+            frame.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+            frame.reset_index(drop=True, inplace=True)
+
+        x = self._normalize_chart_time_axis(self._extract_time_axis(frame))
         width = self._infer_candle_width(x)
         self._sync_view_context()
-        self._last_df = df.copy()
+        self._last_df = frame.copy()
         self._last_x = np.array(x, dtype=float)
         self._last_candle_stats = self._build_candle_stats(self._last_df, self._last_x)
+        if self._chart_status_mode == "loading":
+            self.clear_data_status()
 
         candles = np.column_stack(
             [
                 x,
-                df["open"].astype(float).to_numpy(),
-                df["close"].astype(float).to_numpy(),
-                df["low"].astype(float).to_numpy(),
-                df["high"].astype(float).to_numpy(),
+                frame["open"].astype(float).to_numpy(),
+                frame["close"].astype(float).to_numpy(),
+                frame["low"].astype(float).to_numpy(),
+                frame["high"].astype(float).to_numpy(),
             ]
         )
 
@@ -1393,21 +3100,22 @@ class ChartWidget(QWidget):
         self.candle_item.setData(candles)
         self.ema_curve.setData([], [])
 
-        volume = df["volume"].astype(float).to_numpy()
-        colors = [self.candle_up_color if c >= o else self.candle_down_color for o, c in zip(df["open"], df["close"])]
+        volume = frame["volume"].astype(float).to_numpy()
+        colors = [self.candle_up_color if c >= o else self.candle_down_color for o, c in zip(frame["open"], frame["close"])]
         brushes = [pg.mkBrush(c) for c in colors]
         self.volume_bars.setOpts(x=x, height=volume, width=width, brushes=brushes)
 
-        self._update_indicators(df, x, width)
+        self._update_indicators(frame, x, width)
 
         if self._should_fit_chart_view(self._last_x):
             self._fit_chart_view(self._last_candle_stats, width)
         self.refresh_context_display()
         self._update_ohlcv_for_x(self._last_x[-1] if len(self._last_x) else 0.0)
+        self._render_news_events()
 
         try:
-            last_close = float(df["close"].iloc[-1])
-            prev_close = float(df["close"].iloc[-2]) if len(df) > 1 else last_close
+            last_close = float(frame["close"].iloc[-1])
+            prev_close = float(frame["close"].iloc[-2]) if len(frame) > 1 else last_close
             line_color = self.candle_up_color if last_close >= prev_close else self.candle_down_color
             self.last_line.setPen(mkPen(line_color, width=1.15))
             self.last_line.label.fill = pg.mkBrush(pg.mkColor(line_color))
@@ -1446,11 +3154,17 @@ class ChartWidget(QWidget):
         if last_f > 0:
             self.last_line.setPos(last_f)
             self.last_line.setVisible(True)
+        self._update_chart_header()
+        self._refresh_market_panels()
 
     def set_bid_ask_lines_visible(self, visible: bool):
         self.show_bid_ask_lines = bool(visible)
         self.bid_line.setVisible(self.show_bid_ask_lines and self._last_bid is not None and self._last_bid > 0)
         self.ask_line.setVisible(self.show_bid_ask_lines and self._last_ask is not None and self._last_ask > 0)
+
+    def set_volume_panel_visible(self, visible: bool):
+        self.show_volume_panel = bool(visible)
+        self._apply_chart_pane_layout()
 
     def set_candle_colors(self, up_color: str, down_color: str):
         self.candle_up_color = up_color
@@ -1461,3 +3175,9 @@ class ChartWidget(QWidget):
 
     def link_all_charts(self, _count):
         return
+
+from frontend.ui.chart.chart_market_context import install_chart_market_context
+from frontend.ui.chart.chart_trade_features import install_chart_trade_features
+
+install_chart_market_context(ChartWidget)
+install_chart_trade_features(ChartWidget)

@@ -1,6 +1,18 @@
 {
     "python.analysis.extraPaths": [
+        "./src",
         "./out/production/sopotek-trading-ai"
+    ],
+    "pylint.args": [
+        "--extension-pkg-allow-list=PySide6"
+    ],
+    "cSpell.words": [
+        "clientconnectordnserror",
+        "gaierror",
+        "getpid",
+        "qasync",
+        "sopotek",
+        "timerid"
     ],
     "python-envs.defaultEnvManager": "ms-python.python:system"
 }
