@@ -8618,6 +8618,11 @@ class Terminal(QMainWindow):
             "regime": str(data.get("regime", "") or ""),
             "volatility": data.get("volatility", ""),
             "reason": str(data.get("reason", "") or ""),
+            "decision": str(data.get("decision", "") or ""),
+            "risk": str(data.get("risk", "") or ""),
+            "warnings": list(data.get("warnings") or []),
+            "provider": str(data.get("provider", "") or ""),
+            "mode": str(data.get("mode", "") or ""),
             "timestamp": str(data.get("timestamp", "") or ""),
         }
         self._ai_signal_records[symbol] = record

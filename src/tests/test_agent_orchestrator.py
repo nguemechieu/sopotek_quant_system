@@ -7,6 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from agents.signal_agent import SignalAgent
 from core.sopotek_trading import SopotekTrading
 from engines.risk_engine import RiskEngine
 from event_bus.event_bus import EventBus
@@ -509,3 +510,109 @@ def test_adaptive_trade_feedback_biases_candidate_selection_and_execution_metada
     assert latest["payload"]["strategy_name"] == "EMA Cross"
     assert float(latest["payload"]["adaptive_weight"]) > 1.0
     assert int(latest["payload"]["adaptive_sample_size"]) == 4
+
+
+def test_adaptive_trade_feedback_uses_active_exchange_only():
+    paper_history = [
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=14.0, exchange="paper"),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=11.0, exchange="paper"),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=8.0, exchange="paper"),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="Trend Following", timeframe="15m", pnl=6.0, exchange="paper"),
+    ]
+    coinbase_history = [
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=18.0, exchange="coinbase"),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=16.0, exchange="coinbase"),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=12.0, exchange="coinbase"),
+        SimpleNamespace(symbol="BTC/USDT", strategy_name="EMA Cross", timeframe="15m", pnl=9.0, exchange="coinbase"),
+    ]
+    mixed_history = paper_history + coinbase_history
+
+    controller = _controller()
+    controller.max_signal_agents = 2
+    controller._active_exchange_code = lambda: "paper"
+    controller.trade_repository = SimpleNamespace(
+        get_trades=lambda limit=200, exchange=None: (
+            paper_history[:limit]
+            if exchange == "paper"
+            else mixed_history[:limit]
+        )
+    )
+    controller.assigned_strategies_for_symbol = lambda symbol: [
+        {"strategy_name": "Trend Following", "weight": 0.45, "score": 9.0, "rank": 1, "timeframe": "15m"},
+        {"strategy_name": "EMA Cross", "weight": 0.55, "score": 8.0, "rank": 2, "timeframe": "15m"},
+    ]
+    trading = SopotekTrading(controller=controller)
+    trading.risk_engine = RiskEngine(account_equity=10000, max_position_size_pct=0.10)
+    trading.portfolio_allocator = None
+    trading.portfolio_risk_engine = None
+    dataset = FakeDataset(_sample_frame())
+    captured = {}
+
+    async def fake_get_symbol_dataset(**kwargs):
+        return dataset
+
+    async def fake_execute(**kwargs):
+        captured.update(kwargs)
+        return {"status": "filled", "reason": "submitted", "strategy_name": kwargs.get("strategy_name")}
+
+    def fake_generate_signal(**kwargs):
+        strategy_name = kwargs["strategy_name"]
+        if strategy_name == "Trend Following":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.25,
+                "confidence": 0.80,
+                "reason": "paper venue winner",
+                "strategy_name": strategy_name,
+            }
+        if strategy_name == "EMA Cross":
+            return {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.25,
+                "confidence": 0.70,
+                "reason": "other venue winner",
+                "strategy_name": strategy_name,
+            }
+        return None
+
+    trading.data_hub.get_symbol_dataset = fake_get_symbol_dataset
+    trading.execution_manager.execute = fake_execute
+    trading.signal_engine.generate_signal = fake_generate_signal
+
+    result = asyncio.run(trading.process_symbol("BTC/USDT", timeframe="15m", limit=50))
+
+    assert result["status"] == "filled"
+    assert captured["strategy_name"] == "Trend Following"
+    latest = trading.agent_memory.latest("SignalAggregationAgent")
+    assert latest is not None
+    assert latest["payload"]["strategy_name"] == "Trend Following"
+    assert latest["payload"]["adaptive_sample_size"] == 4
+
+
+def test_signal_agent_process_supports_async_selectors():
+    async def selector(symbol, candles, dataset):
+        await asyncio.sleep(0)
+        return (
+            {
+                "symbol": symbol,
+                "side": "buy",
+                "amount": 0.25,
+                "confidence": 0.81,
+                "reason": "async selector",
+                "strategy_name": "Trend Following",
+            },
+            [{"strategy_name": "Trend Following", "timeframe": "1h"}],
+        )
+
+    agent = SignalAgent(selector=selector)
+
+    async def scenario():
+        return await agent.process({"symbol": "BTC/USDT", "candles": [], "dataset": None, "decision_id": "d-1"})
+
+    result = asyncio.run(scenario())
+
+    assert result["signal"]["side"] == "buy"
+    assert result["signal"]["strategy_name"] == "Trend Following"
+    assert result["assigned_strategies"] == [{"strategy_name": "Trend Following", "timeframe": "1h"}]

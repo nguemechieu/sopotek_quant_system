@@ -82,6 +82,35 @@ def test_load_persisted_runtime_data_replays_recent_trades():
     assert loaded == [{"order_id": "ord-1"}, {"order_id": "ord-2"}]
 
 
+def test_load_persisted_runtime_data_yields_between_batches(monkeypatch):
+    import frontend.ui.panels.runtime_updates as runtime_mod
+
+    loaded = []
+    sleep_calls = []
+
+    async def load_recent_trades(limit=None):
+        return [{"order_id": f"ord-{index}"} for index in range(1, 6)]
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+
+    fake = SimpleNamespace(
+        _ui_shutting_down=False,
+        controller=SimpleNamespace(_load_recent_trades=load_recent_trades),
+        MAX_LOG_ROWS=200,
+        STARTUP_TRADE_REPLAY_BATCH_SIZE=2,
+        logger=SimpleNamespace(exception=lambda *_args, **_kwargs: None),
+        _update_trade_log=lambda trade: loaded.append(trade),
+    )
+
+    monkeypatch.setattr(runtime_mod.asyncio, "sleep", fake_sleep)
+
+    asyncio.run(load_persisted_runtime_data(fake))
+
+    assert len(loaded) == 5
+    assert sleep_calls == [0, 0]
+
+
 def test_schedule_positions_refresh_throttles_coinbase(monkeypatch):
     import frontend.ui.panels.runtime_updates as runtime_mod
 

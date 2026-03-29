@@ -71,3 +71,30 @@ def test_run_startup_health_check_pushes_notification_once_for_same_result():
     assert "pass" in controller.health_check_summary
     assert len(notifications) == 1
     assert notifications[0][0][0] == "Startup health check"
+
+
+def test_shutdown_for_exit_waits_for_background_workers():
+    calls = {"cleanup": [], "ranking": [], "signal": [], "emitted": []}
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.app_controller.shutdown")
+    controller.connected = True
+    controller.connection_signal = SimpleNamespace(
+        emit=lambda state: calls["emitted"].append(state)
+    )
+
+    async def cleanup_session(stop_trading=True, close_broker=False):
+        calls["cleanup"].append((stop_trading, close_broker))
+        controller.trading_system = None
+
+    controller._cleanup_session = cleanup_session
+    controller._shutdown_strategy_ranking_executor = lambda wait=False: calls["ranking"].append(wait)
+    controller.trading_system = SimpleNamespace(
+        _shutdown_signal_selection_executor=lambda wait=False: calls["signal"].append(wait)
+    )
+
+    asyncio.run(controller.shutdown_for_exit())
+
+    assert calls["cleanup"] == [(True, True)]
+    assert calls["ranking"] == [True]
+    assert calls["signal"] == [True]
+    assert calls["emitted"] == ["disconnected"]

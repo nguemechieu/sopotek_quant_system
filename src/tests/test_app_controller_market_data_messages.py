@@ -63,8 +63,6 @@ def _make_controller(candles):
     return controller, logs
 
 
-
-
 def test_bounded_window_extent_clamps_to_small_screen():
     size, minimum = _bounded_window_extent(1600, 900, margin=24, minimum=960)
 
@@ -77,6 +75,7 @@ def test_bounded_window_extent_preserves_requested_size_when_it_fits():
 
     assert size == 1200
     assert minimum == 960
+
 
 def test_request_candle_data_warns_when_history_is_short():
     base_timestamp_ms = 1710000000000
@@ -410,6 +409,7 @@ def test_extract_balance_equity_ignores_single_non_cash_asset_quantity():
 
     assert equity is None
 
+
 def test_performance_history_persists_timestamp_payload():
     controller = AppController.__new__(AppController)
     controller.settings = _SettingsRecorder()
@@ -527,7 +527,6 @@ def test_request_candle_data_backtest_scope_uses_extended_history_limit():
     assert len(df) == 2
     assert observed["history_scope"] == "backtest"
     assert observed["limit"] == 200000
-
 
 
 def test_request_candle_data_does_not_warn_when_only_one_bar_is_missing():

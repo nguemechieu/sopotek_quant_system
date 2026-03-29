@@ -95,6 +95,37 @@ def test_restore_performance_state_prefers_repository_equity_history():
     assert captured["trades"] == []
 
 
+def test_restore_performance_state_filters_trades_by_active_exchange():
+    captured = {}
+    controller = AppController.__new__(AppController)
+    controller.logger = logging.getLogger("test.performance.ledger.exchange_scope")
+    controller.equity_repository = None
+    controller.trade_repository = SimpleNamespace(
+        get_trades=lambda limit=500, exchange=None: (
+            [SimpleNamespace(order_id="paper-1", exchange="paper", symbol="BTC/USDT")]
+            if exchange == "paper"
+            else [
+                SimpleNamespace(order_id="paper-1", exchange="paper", symbol="BTC/USDT"),
+                SimpleNamespace(order_id="coinbase-1", exchange="coinbase", symbol="BTC/USDT"),
+            ]
+        )
+    )
+    controller.performance_engine = SimpleNamespace(
+        load_equity_history=lambda history: captured.setdefault("history", list(history)),
+        load_trades=lambda trades: captured.setdefault("trades", list(trades)),
+    )
+    controller._load_persisted_performance_history = lambda: []
+    controller._active_exchange_code = lambda: "paper"
+    controller.current_account_label = lambda: "Demo"
+
+    controller._restore_performance_state()
+
+    assert captured["history"] == []
+    assert len(captured["trades"]) == 1
+    assert captured["trades"][0]["exchange"] == "paper"
+    assert captured["trades"][0]["order_id"] == "paper-1"
+
+
 def test_update_performance_equity_persists_snapshot_to_repository():
     repo = EquitySnapshotRepository()
     recorded = []

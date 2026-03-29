@@ -124,5 +124,12 @@ async def load_persisted_runtime_data(terminal):
         terminal.logger.exception("Failed to load persisted trade history")
         return
 
-    for trade in trades:
+    batch_size = max(1, int(getattr(terminal, "STARTUP_TRADE_REPLAY_BATCH_SIZE", 25) or 25))
+    total = len(trades or [])
+
+    for index, trade in enumerate(trades, start=1):
+        if getattr(terminal, "_ui_shutting_down", False):
+            break
         terminal._update_trade_log(trade)
+        if index < total and (index % batch_size) == 0:
+            await asyncio.sleep(0)

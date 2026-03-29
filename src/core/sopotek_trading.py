@@ -1,7 +1,9 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from uuid import uuid4
 
 from agents.memory import AgentMemory
@@ -20,12 +22,15 @@ from execution.execution_manager import ExecutionManager
 from strategy.strategy_registry import StrategyRegistry
 from engines.risk_engine import RiskEngine
 from execution.order_router import OrderRouter
+from event_bus.event import Event
 from event_bus.event_bus import EventBus
+from event_bus.event_types import EventType
 from core.multi_symbol_orchestrator import MultiSymbolOrchestrator
 from quant.data_hub import QuantDataHub
 from quant.portfolio_allocator import PortfolioAllocator
 from quant.portfolio_risk_engine import PortfolioRiskEngine
 from quant.signal_engine import SignalEngine
+from reasoning import HeuristicReasoningProvider, OpenAIReasoningProvider, ReasoningEngine
 from risk.trader_behavior_guard import TraderBehaviorGuard
 
 
@@ -105,6 +110,7 @@ class SopotekTrading:
         self.agent_decision_repository = None
         self.agent_memory = AgentMemory(max_events=2000)
         self.agent_memory.add_sink(self._persist_agent_memory_event)
+        self.reasoning_engine = self._build_reasoning_engine()
         self.signal_agent_slots = max(1, int(getattr(controller, "max_signal_agents", 3) or 3))
         self.signal_agents = []
         for slot_index in range(self.signal_agent_slots):
@@ -179,6 +185,7 @@ class SopotekTrading:
             "limit": 0,
             "rows": [],
         }
+        self._signal_selection_executor = None
 
         if self.controller is not None:
             self.controller.agent_memory = self.agent_memory
@@ -188,6 +195,7 @@ class SopotekTrading:
             self.controller.signal_agents = self.signal_agents
             self.controller.signal_consensus_agent = self.signal_consensus_agent
             self.controller.signal_aggregation_agent = self.signal_aggregation_agent
+            self.controller.reasoning_engine = self.reasoning_engine
 
         self.bind_agent_decision_repository(getattr(self.controller, "agent_decision_repository", None))
         self.logger.info("Sopotek Trading System initialized")
@@ -235,6 +243,13 @@ class SopotekTrading:
         except Exception:
             return float(fallback)
 
+    def _flag_enabled(self, value, default=False):
+        if value in (None, ""):
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
     def _resolve_starting_equity(self, balance=None):
         default_equity = self._safe_numeric_value(
             getattr(self.controller, "initial_capital", 10000),
@@ -255,6 +270,36 @@ class SopotekTrading:
                 if numeric > 0:
                     return numeric
         return default_equity
+
+    def _build_reasoning_engine(self):
+        controller = self.controller
+        enabled = self._flag_enabled(getattr(controller, "reasoning_enabled", True), default=True)
+        mode = str(getattr(controller, "reasoning_mode", "assistive") or "assistive").strip().lower() or "assistive"
+        minimum_confidence = self._safe_numeric_value(getattr(controller, "reasoning_min_confidence", 0.75), 0.75)
+        timeout_seconds = self._safe_numeric_value(getattr(controller, "reasoning_timeout_seconds", 8.0), 8.0)
+        provider_name = str(getattr(controller, "reasoning_provider", "auto") or "auto").strip().lower() or "auto"
+        api_key = str(getattr(controller, "openai_api_key", "") or "").strip()
+        model_name = str(getattr(controller, "openai_model", "gpt-5-mini") or "gpt-5-mini").strip() or "gpt-5-mini"
+
+        provider = None
+        if provider_name in {"auto", "openai"} and api_key:
+            provider = OpenAIReasoningProvider(
+                api_key=api_key,
+                model=model_name,
+                timeout_seconds=timeout_seconds,
+                logger=self.logger,
+            )
+        elif provider_name == "heuristic":
+            provider = HeuristicReasoningProvider()
+
+        return ReasoningEngine(
+            provider=provider,
+            fallback_provider=HeuristicReasoningProvider(),
+            enabled=enabled,
+            mode=mode,
+            minimum_confidence=minimum_confidence,
+            timeout_seconds=timeout_seconds,
+        )
 
     def _assigned_strategies_for_symbol(self, symbol):
         resolver = getattr(self.controller, "assigned_strategies_for_symbol", None) if self.controller is not None else None
@@ -336,11 +381,19 @@ class SopotekTrading:
             aliases.add(normalized.replace("_", "/"))
         return aliases
 
+    def _row_exchange_value(self, trade):
+        if isinstance(trade, dict):
+            exchange = trade.get("exchange")
+        else:
+            exchange = getattr(trade, "exchange", None)
+        return str(exchange or "").strip().lower() or None
+
     def _recent_trade_history(self, limit=None):
         requested_limit = max(10, int(limit or self.ADAPTIVE_TRADE_HISTORY_LIMIT))
         repository = getattr(self.controller, "trade_repository", None) if self.controller is not None else None
         if repository is None or not hasattr(repository, "get_trades"):
             return []
+        exchange_code = self._active_exchange_code()
 
         now = time.monotonic()
         cache = dict(self._adaptive_trade_cache or {})
@@ -349,17 +402,32 @@ class SopotekTrading:
             cached_rows
             and now < float(cache.get("expires_at", 0.0) or 0.0)
             and int(cache.get("limit", 0) or 0) >= requested_limit
+            and str(cache.get("exchange") or "").strip().lower() == str(exchange_code or "").strip().lower()
         ):
             return cached_rows[:requested_limit]
 
         try:
-            rows = list(repository.get_trades(limit=requested_limit) or [])
+            rows = list(repository.get_trades(limit=requested_limit, exchange=exchange_code) or [])
+        except TypeError:
+            try:
+                rows = list(repository.get_trades(limit=requested_limit) or [])
+            except Exception:
+                self.logger.debug("Unable to load recent trade history for adaptive scoring", exc_info=True)
+                rows = []
+            row_exchanges = [self._row_exchange_value(row) for row in rows]
+            if exchange_code and any(value for value in row_exchanges):
+                rows = [
+                    row
+                    for row, row_exchange in zip(rows, row_exchanges)
+                    if row_exchange == exchange_code
+                ]
         except Exception:
             self.logger.debug("Unable to load recent trade history for adaptive scoring", exc_info=True)
             rows = []
         self._adaptive_trade_cache = {
             "expires_at": now + self.ADAPTIVE_TRADE_CACHE_TTL_SECONDS,
             "limit": requested_limit,
+            "exchange": exchange_code,
             "rows": list(rows),
         }
         return rows
@@ -482,6 +550,7 @@ class SopotekTrading:
         profile["symbol"] = normalized_symbol
         profile["strategy_name"] = str(strategy_name or "").strip()
         profile["timeframe"] = timeframe_value
+        profile["exchange"] = self._active_exchange_code()
         return profile
 
     def adaptive_trade_samples_for_strategy(self, symbol, strategy_name, timeframe=None, limit=8):
@@ -540,6 +609,7 @@ class SopotekTrading:
             "symbol": normalized_symbol,
             "strategy_name": strategy_text,
             "timeframe": timeframe_value,
+            "exchange": self._active_exchange_code(),
             "scope": "timeframe" if exact_matches else "strategy",
             "samples": samples,
             "profile": self.adaptive_profile_for_strategy(normalized_symbol, strategy_text, timeframe=timeframe_value),
@@ -602,7 +672,7 @@ class SopotekTrading:
         }
 
     def _select_strategy_signal_for_slot(self, slot_index):
-        def selector(normalized_symbol, candles, dataset):
+        def selector_sync(normalized_symbol, candles, dataset):
             assigned = self._assigned_strategies_for_symbol(normalized_symbol)
             scoped_assignments = list(assigned[slot_index : slot_index + 1])
             candidates = self._strategy_signal_candidates(normalized_symbol, candles, dataset, scoped_assignments)
@@ -611,7 +681,33 @@ class SopotekTrading:
             candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
             return candidates[0][2], scoped_assignments
 
+        async def selector(normalized_symbol, candles, dataset):
+            return await self._run_signal_selection(selector_sync, normalized_symbol, candles, dataset)
+
         return selector
+
+    def _get_signal_selection_executor(self):
+        executor = getattr(self, "_signal_selection_executor", None)
+        if executor is None:
+            # Keep CPU-heavy feature and signal selection work off the event loop.
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="signal-selection")
+            self._signal_selection_executor = executor
+        return executor
+
+    async def _run_signal_selection(self, selector, normalized_symbol, candles, dataset):
+        loop = asyncio.get_running_loop()
+        selection_call = partial(selector, normalized_symbol, candles, dataset)
+        return await loop.run_in_executor(self._get_signal_selection_executor(), selection_call)
+
+    def _shutdown_signal_selection_executor(self, wait=False):
+        executor = getattr(self, "_signal_selection_executor", None)
+        if executor is None:
+            return
+        self._signal_selection_executor = None
+        try:
+            executor.shutdown(wait=bool(wait), cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=bool(wait))
 
     def _resolve_execution_strategy(self, symbol, side, amount, price, signal):
         requested = str(signal.get("execution_strategy") or "").strip().lower()
@@ -670,11 +766,33 @@ class SopotekTrading:
         return repository
 
     def _active_exchange_code(self):
+        controller = self.controller
+        resolver = getattr(controller, "_active_exchange_code", None) if controller is not None else None
+        if callable(resolver):
+            try:
+                exchange_name = resolver()
+            except Exception:
+                exchange_name = None
+            normalized = str(exchange_name or "").strip().lower()
+            if normalized:
+                return normalized
+
         broker = getattr(self, "broker", None)
         exchange_name = getattr(broker, "exchange_name", None) if broker is not None else None
-        if not exchange_name and self.controller is not None:
-            exchange_name = getattr(self.controller, "exchange", None)
-        return str(exchange_name or "").strip().lower() or None
+        normalized = str(exchange_name or "").strip().lower()
+        if normalized:
+            return normalized
+
+        if controller is not None:
+            exchange_name = getattr(controller, "exchange", None)
+            normalized = str(exchange_name or "").strip().lower()
+            if normalized:
+                return normalized
+            broker_config = getattr(getattr(controller, "config", None), "broker", None)
+            normalized = str(getattr(broker_config, "exchange", None) or "").strip().lower()
+            if normalized:
+                return normalized
+        return None
 
     def _current_account_label(self):
         resolver = getattr(self.controller, "current_account_label", None) if self.controller is not None else None
@@ -714,6 +832,139 @@ class SopotekTrading:
         except Exception:
             self.logger.debug("Unable to persist agent decision ledger entry", exc_info=True)
             return None
+
+    def _reasoning_risk_limits(self):
+        controller = self.controller
+        return {
+            "max_risk_per_trade": self._safe_numeric_value(getattr(controller, "max_risk_per_trade", 0.02), 0.02),
+            "max_portfolio_risk": self._safe_numeric_value(getattr(controller, "max_portfolio_risk", 0.10), 0.10),
+            "max_position_size_pct": self._safe_numeric_value(getattr(controller, "max_position_size_pct", 0.10), 0.10),
+            "max_gross_exposure_pct": self._safe_numeric_value(getattr(controller, "max_gross_exposure_pct", 2.0), 2.0),
+        }
+
+    async def _publish_reasoning_event(self, review, reasoning):
+        if self.event_bus is None or not isinstance(review, dict) or not isinstance(reasoning, dict):
+            return
+        payload = {
+            "symbol": review.get("symbol"),
+            "decision_id": review.get("decision_id"),
+            "strategy_name": review.get("strategy_name"),
+            "timeframe": review.get("timeframe"),
+            "side": review.get("side"),
+            "amount": review.get("amount"),
+            "price": review.get("price"),
+            "reason": reasoning.get("reasoning"),
+            "decision": reasoning.get("decision"),
+            "confidence": reasoning.get("confidence"),
+            "risk": reasoning.get("risk"),
+            "warnings": list(reasoning.get("warnings") or []),
+            "provider": reasoning.get("provider"),
+            "mode": reasoning.get("mode"),
+        }
+        await self.event_bus.publish(Event(EventType.REASONING_DECISION, payload))
+
+    def _remember_reasoning(self, review, reasoning):
+        if self.agent_memory is None or not isinstance(review, dict) or not isinstance(reasoning, dict):
+            return None
+        stage = "assistive"
+        if not review.get("approved") and str(review.get("stage") or "").strip().lower() == "reasoning_engine":
+            stage = "rejected"
+        elif str(reasoning.get("mode") or "").strip().lower() != "assistive":
+            stage = "approved"
+        payload = {
+            "strategy_name": review.get("strategy_name"),
+            "timeframe": review.get("timeframe"),
+            "side": review.get("side"),
+            "approved": review.get("approved"),
+            "confidence": reasoning.get("confidence"),
+            "reason": reasoning.get("reasoning"),
+            "decision": reasoning.get("decision"),
+            "risk": reasoning.get("risk"),
+            "warnings": list(reasoning.get("warnings") or []),
+            "provider": reasoning.get("provider"),
+            "mode": reasoning.get("mode"),
+            "latency_ms": reasoning.get("latency_ms"),
+        }
+        return self.agent_memory.store(
+            agent="ReasoningEngine",
+            stage=stage,
+            payload=payload,
+            symbol=review.get("symbol"),
+            decision_id=review.get("decision_id"),
+        )
+
+    def _publish_reasoning_signal(self, review):
+        if self.controller is None or not hasattr(self.controller, "publish_ai_signal") or not isinstance(review, dict):
+            return
+        signal = dict(review.get("signal") or {})
+        reasoning = dict(review.get("reasoning") or {})
+        if not signal or not reasoning:
+            return
+        dataset = review.get("dataset")
+        candles = dataset.to_candles() if dataset is not None and hasattr(dataset, "to_candles") else []
+        summary = str(reasoning.get("reasoning") or signal.get("reason") or "").strip()
+        warnings = [str(item).strip() for item in list(reasoning.get("warnings") or []) if str(item).strip()]
+        if warnings:
+            warning_text = "Warnings: " + " | ".join(warnings[:3])
+            summary = f"{summary} {warning_text}".strip()
+
+        enriched = dict(signal)
+        enriched["reason"] = summary or signal.get("reason")
+        enriched["confidence"] = reasoning.get("confidence", signal.get("confidence"))
+        enriched["reasoning"] = dict(reasoning)
+        enriched["risk"] = reasoning.get("risk")
+        enriched["warnings"] = warnings
+        enriched["reasoning_decision"] = reasoning.get("decision")
+        self.controller.publish_ai_signal(review.get("symbol"), enriched, candles=candles)
+
+    async def _apply_reasoning_review(self, review):
+        if not isinstance(review, dict) or not review.get("approved"):
+            return review
+        reasoning_engine = getattr(self, "reasoning_engine", None)
+        if reasoning_engine is None or not getattr(reasoning_engine, "enabled", False):
+            return review
+
+        result, context = await reasoning_engine.evaluate(
+            symbol=review.get("symbol"),
+            signal=review.get("signal") or {},
+            dataset=review.get("dataset"),
+            timeframe=review.get("timeframe"),
+            regime_snapshot=review.get("regime_snapshot"),
+            portfolio_snapshot=review.get("portfolio_snapshot"),
+            risk_limits=self._reasoning_risk_limits(),
+        )
+        if result is None:
+            return review
+
+        reasoning = result.to_dict()
+        review["reasoning"] = reasoning
+        review["reasoning_context"] = context
+        review["reasoning_decision"] = reasoning.get("decision")
+        review["reasoning_confidence"] = reasoning.get("confidence")
+        review["reasoning_provider"] = reasoning.get("provider")
+        review["reasoning_mode"] = reasoning.get("mode")
+
+        if not result.should_execute:
+            reason = str(reasoning.get("reasoning") or "Reasoning engine rejected the trade.").strip()
+            review["approved"] = False
+            review["stage"] = "reasoning_engine"
+            review["reason"] = reason
+            self._record_pipeline_status(review.get("symbol"), "reasoning_engine", "rejected", reason, signal=review.get("signal"))
+        else:
+            mode = str(reasoning.get("mode") or "").strip().lower()
+            if mode != "assistive":
+                self._record_pipeline_status(
+                    review.get("symbol"),
+                    "reasoning_engine",
+                    "approved",
+                    reasoning.get("reasoning"),
+                    signal=review.get("signal"),
+                )
+
+        self._remember_reasoning(review, reasoning)
+        await self._publish_reasoning_event(review, reasoning)
+        self._publish_reasoning_signal(review)
+        return review
 
     def _custom_process_signal_handler(self):
         handler = self.__dict__.get("process_signal")
@@ -1112,6 +1363,8 @@ class SopotekTrading:
         if custom_handler is not None:
             context = await self._run_signal_agents(context)
             signal = context.get("signal")
+            if isinstance(signal, dict):
+                signal.setdefault("decision_id", context.get("decision_id"))
             display_signal = context.get("display_signal") or self._build_display_signal(context, signal, context.get("assigned_strategies") or [])
             if signal:
                 self._record_pipeline_status(normalized_symbol, "signal_engine", "signal", signal.get("reason"), signal=signal)
@@ -1137,6 +1390,8 @@ class SopotekTrading:
         else:
             context = await self.event_driven_runtime.process_market_data(context)
             signal = context.get("signal")
+            if isinstance(signal, dict):
+                signal.setdefault("decision_id", context.get("decision_id"))
             display_signal = context.get("display_signal") or self._build_display_signal(context, signal, context.get("assigned_strategies") or [])
             latest_stage = str((self._pipeline_status.get(normalized_symbol) or {}).get("stage") or "").strip()
             if signal:
@@ -1295,6 +1550,7 @@ class SopotekTrading:
         normalized_symbol = str(symbol or "").strip().upper()
         normalized_signal = dict(signal or {})
         review_timeframe = str(timeframe or self.time_frame or "1h").strip() or "1h"
+        decision_id = str(normalized_signal.get("decision_id") or "").strip() or None
         side = normalized_signal.get("side")
         price = normalized_signal.get("price")
         amount = normalized_signal.get("amount")
@@ -1310,6 +1566,7 @@ class SopotekTrading:
             "consensus_status": str(normalized_signal.get("consensus_status") or "").strip() or None,
             "adaptive_weight": normalized_signal.get("adaptive_weight"),
             "adaptive_score": normalized_signal.get("adaptive_score"),
+            "decision_id": decision_id,
             "stage": "review",
             "reason": "",
             "portfolio_snapshot": dict(portfolio_snapshot or self._build_portfolio_snapshot(normalized_symbol)),
@@ -1490,7 +1747,7 @@ class SopotekTrading:
                 "execution_params": execution_params,
             }
         )
-        return review
+        return await self._apply_reasoning_review(review)
 
     def _review_quantity_mode(self, review, signal):
         for payload in (review, signal):
@@ -1610,12 +1867,21 @@ class SopotekTrading:
             "expected_price": signal.get("price"),
             "pnl": signal.get("pnl"),
             "execution_strategy": review.get("execution_strategy"),
+            "reasoning_decision": review.get("reasoning_decision"),
+            "reasoning_confidence": review.get("reasoning_confidence"),
+            "reasoning_provider": review.get("reasoning_provider"),
+            "reasoning_mode": review.get("reasoning_mode"),
             "type": review.get("type", "market"),
             "stop_price": review.get("stop_price"),
             "stop_loss": review.get("stop_loss"),
             "take_profit": review.get("take_profit"),
             "params": review.get("execution_params"),
         }
+        reasoning = dict(review.get("reasoning") or {})
+        if reasoning:
+            order_payload["reasoning_risk"] = reasoning.get("risk")
+            order_payload["reasoning_summary"] = reasoning.get("reasoning")
+            order_payload["reasoning_warnings"] = list(reasoning.get("warnings") or [])
 
         try:
             preflight = await self._preflight_execution_review(review, signal)
@@ -1705,3 +1971,5 @@ class SopotekTrading:
                 await execution_manager.stop()
             except Exception:
                 self.logger.exception("Execution manager stop failed")
+
+        self._shutdown_signal_selection_executor()

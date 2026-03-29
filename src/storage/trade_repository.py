@@ -208,17 +208,26 @@ class TradeRepository:
         text = str(value).strip()
         return text or None
 
-    def get_trades(self, limit=200):
+    def _normalize_exchange(self, value):
+        normalized = self._normalize_text(value)
+        if normalized is None:
+            return None
+        return normalized.lower()
+
+    def get_trades(self, limit=200, exchange=None):
+        normalized_exchange = self._normalize_exchange(exchange)
         with storage_db.SessionLocal() as session:
-            stmt = select(Trade).order_by(Trade.timestamp.desc(), Trade.id.desc()).limit(int(limit))
+            stmt = select(Trade)
+            if normalized_exchange:
+                stmt = stmt.where(Trade.exchange == normalized_exchange)
+            stmt = stmt.order_by(Trade.timestamp.desc(), Trade.id.desc()).limit(int(limit))
             return list(session.execute(stmt).scalars().all())
 
-    def get_by_symbol(self, symbol, limit=200):
+    def get_by_symbol(self, symbol, limit=200, exchange=None):
+        normalized_exchange = self._normalize_exchange(exchange)
         with storage_db.SessionLocal() as session:
-            stmt = (
-                select(Trade)
-                .where(Trade.symbol == str(symbol))
-                .order_by(Trade.timestamp.desc(), Trade.id.desc())
-                .limit(int(limit))
-            )
+            stmt = select(Trade).where(Trade.symbol == str(symbol))
+            if normalized_exchange:
+                stmt = stmt.where(Trade.exchange == normalized_exchange)
+            stmt = stmt.order_by(Trade.timestamp.desc(), Trade.id.desc()).limit(int(limit))
             return list(session.execute(stmt).scalars().all())

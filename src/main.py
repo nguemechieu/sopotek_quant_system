@@ -243,11 +243,36 @@ def main(argv: list[str] | None = None) -> int:
         connect(_stop_loop)  # pylint: disable=not-callable
     window.show()
 
-    try:
-        with loop:
+    with loop:
+        try:
             loop.run_forever()
-    except KeyboardInterrupt:
-        pass
+        except KeyboardInterrupt:
+            pass
+        finally:
+            shutdown_coro = getattr(window, "shutdown_for_exit", None)
+            if callable(shutdown_coro):
+                try:
+                    loop.run_until_complete(shutdown_coro())
+                except KeyboardInterrupt:
+                    pass
+                except RuntimeError:
+                    pass
+            shutdown_asyncgens = getattr(loop, "shutdown_asyncgens", None)
+            if callable(shutdown_asyncgens):
+                try:
+                    loop.run_until_complete(shutdown_asyncgens())
+                except KeyboardInterrupt:
+                    pass
+                except RuntimeError:
+                    pass
+            shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+            if callable(shutdown_default_executor):
+                try:
+                    loop.run_until_complete(shutdown_default_executor())
+                except KeyboardInterrupt:
+                    pass
+                except RuntimeError:
+                    pass
 
     return 0
 

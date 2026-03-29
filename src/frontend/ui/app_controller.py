@@ -1,4 +1,6 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import inspect
 import json
 import logging
@@ -363,6 +365,8 @@ class AppController(QMainWindow):
         }
         self._strategy_auto_assignment_task = None
         self._strategy_auto_assignment_deferred_task = None
+        self._strategy_ranking_executor = None
+        self._terminal_runtime_restore_task = None
 
         self.portfolio = None
         self.ai_signal = None
@@ -636,6 +640,7 @@ class AppController(QMainWindow):
 
     def _performance_trade_payload_from_record(self, trade):
         return {
+            "exchange": getattr(trade, "exchange", ""),
             "symbol": getattr(trade, "symbol", ""),
             "side": getattr(trade, "side", ""),
             "source": getattr(trade, "source", ""),
@@ -655,42 +660,109 @@ class AppController(QMainWindow):
             "fee": getattr(trade, "fee", ""),
         }
 
+    def _performance_scope(self):
+        exchange = self._active_exchange_code() if hasattr(self, "_active_exchange_code") else None
+        normalized_exchange = str(exchange or "").strip().lower() or None
+        account_label = self.current_account_label() if hasattr(self, "current_account_label") else None
+        account_text = str(account_label or "").strip()
+        if account_text.lower() == "not set":
+            account_text = ""
+        return normalized_exchange, (account_text or None)
+
+    def _performance_history_settings_key(self):
+        exchange, account_label = self._performance_scope()
+        if not exchange:
+            return "performance/equity_history"
+        account_segment = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(account_label or "default")).strip("._") or "default"
+        return f"performance/equity_history/{exchange}/{account_segment}"
+
+    def _trade_row_exchange_value(self, trade):
+        if isinstance(trade, dict):
+            exchange = trade.get("exchange")
+        else:
+            exchange = getattr(trade, "exchange", None)
+        return str(exchange or "").strip().lower() or None
+
+    def _repository_trade_rows_for_active_exchange(self, limit=200):
+        repository = getattr(self, "trade_repository", None)
+        if repository is None or not hasattr(repository, "get_trades"):
+            return []
+
+        exchange, _account_label = self._performance_scope()
+        if not exchange:
+            return []
+
+        try:
+            return list(repository.get_trades(limit=limit, exchange=exchange) or [])
+        except TypeError:
+            try:
+                rows = list(repository.get_trades(limit=limit) or [])
+            except Exception:
+                self.logger.debug("Trade DB load failed for exchange-scoped performance history", exc_info=True)
+                return []
+            row_exchanges = [self._trade_row_exchange_value(row) for row in rows]
+            if any(row_exchanges):
+                rows = [
+                    row
+                    for row, row_exchange in zip(rows, row_exchanges)
+                    if row_exchange == exchange
+                ]
+            return rows
+        except Exception:
+            self.logger.debug("Trade DB load failed for exchange-scoped performance history", exc_info=True)
+            return []
+
     def _load_persisted_performance_history(self):
         settings = getattr(self, "settings", None)
         if settings is None:
             return []
 
-        raw_value = settings.value("performance/equity_history", "[]")
-        try:
-            payload = json.loads(raw_value or "[]")
-        except Exception:
-            payload = raw_value if isinstance(raw_value, list) else []
+        settings_key = self._performance_history_settings_key()
+        if not settings_key:
+            return []
 
-        history = []
-        for item in list(payload or [])[-2000:]:
-            timestamp = None
-            value = item
-            if isinstance(item, dict):
-                timestamp = item.get("timestamp")
-                value = item.get("equity", item.get("value"))
+        settings_keys = [settings_key]
+        legacy_key = "performance/equity_history"
+        if legacy_key not in settings_keys:
+            settings_keys.append(legacy_key)
 
+        for key in settings_keys:
+            raw_value = settings.value(key, "[]")
             try:
-                numeric = float(value)
+                payload = json.loads(raw_value or "[]")
             except Exception:
-                continue
-            if not pd.notna(numeric):
-                continue
+                payload = raw_value if isinstance(raw_value, list) else []
 
-            if timestamp in (None, ""):
-                history.append(numeric)
-            else:
-                history.append({"equity": numeric, "timestamp": timestamp})
-        return history
+            history = []
+            for item in list(payload or [])[-2000:]:
+                timestamp = None
+                value = item
+                if isinstance(item, dict):
+                    timestamp = item.get("timestamp")
+                    value = item.get("equity", item.get("value"))
+
+                try:
+                    numeric = float(value)
+                except Exception:
+                    continue
+                if not pd.notna(numeric):
+                    continue
+
+                if timestamp in (None, ""):
+                    history.append(numeric)
+                else:
+                    history.append({"equity": numeric, "timestamp": timestamp})
+            if history:
+                return history
+        return []
 
     def _persist_performance_history(self):
         perf = getattr(self, "performance_engine", None)
         settings = getattr(self, "settings", None)
         if perf is None or settings is None:
+            return
+        settings_key = self._performance_history_settings_key()
+        if not settings_key:
             return
 
         equity_values = list(getattr(perf, "equity_curve", []) or [])[-2000:]
@@ -713,7 +785,7 @@ class AppController(QMainWindow):
                     history.append({"equity": numeric, "timestamp": float(timestamp)})
                 except Exception:
                     history.append({"equity": numeric, "timestamp": timestamp})
-        settings.setValue("performance/equity_history", json.dumps(history))
+        settings.setValue(settings_key, json.dumps(history))
 
     def _load_persisted_equity_history_from_repository(self, limit=2000):
         repository = getattr(self, "equity_repository", None)
@@ -721,6 +793,8 @@ class AppController(QMainWindow):
             return []
 
         exchange = self._active_exchange_code() if hasattr(self, "_active_exchange_code") else None
+        if not str(exchange or "").strip():
+            return []
         account_label = self.current_account_label() if hasattr(self, "current_account_label") else None
         if str(account_label or "").strip().lower() == "not set":
             account_label = None
@@ -793,15 +867,7 @@ class AppController(QMainWindow):
         if hasattr(perf, "load_equity_history"):
             perf.load_equity_history(equity_history)
 
-        repository = getattr(self, "trade_repository", None)
-        if repository is None or not hasattr(repository, "get_trades"):
-            return
-
-        try:
-            stored = list(reversed(repository.get_trades(limit=500) or []))
-        except Exception:
-            self.logger.debug("Unable to restore persisted trade activity for performance analysis", exc_info=True)
-            return
+        stored = list(reversed(self._repository_trade_rows_for_active_exchange(limit=500)))
 
         trades = [self._performance_trade_payload_from_record(item) for item in stored]
         if hasattr(perf, "load_trades"):
@@ -1013,6 +1079,15 @@ class AppController(QMainWindow):
             if timeframe:
                 detail = f"{detail} ({timeframe})"
             return f"Signal selected for {symbol}: {detail}."
+        if event_type == EventType.REASONING_DECISION:
+            decision = str(payload.get("decision") or "NEUTRAL").strip().upper() or "NEUTRAL"
+            confidence = payload.get("confidence")
+            confidence_text = ""
+            try:
+                confidence_text = f" at {float(confidence):.2f} confidence"
+            except Exception:
+                confidence_text = ""
+            return f"Reasoning engine marked {symbol} as {decision}{confidence_text}."
         if event_type == EventType.RISK_APPROVED:
             return f"Risk approved {side or 'trade'} for {symbol}."
         if event_type == EventType.EXECUTION_PLAN:
@@ -1058,6 +1133,7 @@ class AppController(QMainWindow):
         if event_bus is not None and hasattr(event_bus, "subscribe"):
             for event_type in (
                 EventType.SIGNAL,
+                EventType.REASONING_DECISION,
                 EventType.RISK_APPROVED,
                 EventType.RISK_ALERT,
                 EventType.EXECUTION_PLAN,
@@ -1138,11 +1214,12 @@ class AppController(QMainWindow):
             return {}
 
         signal_row = next((row for row in chain if row.get("agent_name") == "SignalAgent"), {})
+        reasoning_row = next((row for row in reversed(chain) if row.get("agent_name") == "ReasoningEngine"), {})
         risk_row = next((row for row in reversed(chain) if row.get("agent_name") == "RiskAgent"), {})
         execution_row = next((row for row in reversed(chain) if row.get("agent_name") == "ExecutionAgent"), {})
         latest = dict(chain[-1])
-        strategy_name = str(signal_row.get("strategy_name") or risk_row.get("strategy_name") or execution_row.get("strategy_name") or "").strip()
-        timeframe = str(signal_row.get("timeframe") or risk_row.get("timeframe") or execution_row.get("timeframe") or "").strip()
+        strategy_name = str(signal_row.get("strategy_name") or reasoning_row.get("strategy_name") or risk_row.get("strategy_name") or execution_row.get("strategy_name") or "").strip()
+        timeframe = str(signal_row.get("timeframe") or reasoning_row.get("timeframe") or risk_row.get("timeframe") or execution_row.get("timeframe") or "").strip()
         approved = execution_row.get("approved")
         if approved is None:
             approved = risk_row.get("approved")
@@ -1155,7 +1232,10 @@ class AppController(QMainWindow):
             "approved": approved,
             "final_stage": latest.get("stage"),
             "final_agent": latest.get("agent_name"),
-            "reason": str(latest.get("reason") or risk_row.get("reason") or signal_row.get("reason") or "").strip(),
+            "reason": str(latest.get("reason") or reasoning_row.get("reason") or risk_row.get("reason") or signal_row.get("reason") or "").strip(),
+            "reasoning_decision": (reasoning_row.get("payload") or {}).get("decision"),
+            "reasoning_confidence": (reasoning_row.get("payload") or {}).get("confidence"),
+            "reasoning_provider": (reasoning_row.get("payload") or {}).get("provider"),
             "steps": len(chain),
             "timestamp_label": latest.get("timestamp_label"),
         }
@@ -1355,6 +1435,7 @@ class AppController(QMainWindow):
                 else:
                     await self.broker.connect()
 
+                self._restore_performance_state()
                 self.balances = await self._fetch_balances(self.broker)
                 self.balance = self.balances
                 self._update_performance_equity(self.balances)
@@ -2055,6 +2136,11 @@ class AppController(QMainWindow):
             if self.terminal:
                 await self._cleanup_session(stop_trading=False, close_broker=False)
 
+            restore_task = getattr(self, "_terminal_runtime_restore_task", None)
+            if restore_task is not None and not restore_task.done():
+                restore_task.cancel()
+            self._terminal_runtime_restore_task = None
+
             self.terminal = Terminal(self)
             self.stack.addWidget(self.terminal)
             self.stack.setCurrentWidget(self.terminal)
@@ -2062,7 +2148,10 @@ class AppController(QMainWindow):
             QTimer.singleShot(0, self._fit_window_to_available_screen)
             self.terminal.logout_requested.connect(self._on_logout_requested)
             if hasattr(self.terminal, "load_persisted_runtime_data"):
-                await self.terminal.load_persisted_runtime_data()
+                self._terminal_runtime_restore_task = self._create_task(
+                    self._restore_terminal_runtime_data(self.terminal),
+                    "terminal_runtime_restore",
+                )
             equity = self._extract_balance_equity_value(getattr(self, "balances", {}))
             if equity is not None:
                 self.equity_signal.emit(equity)
@@ -2071,6 +2160,20 @@ class AppController(QMainWindow):
         except Exception as e:
             self.logger.exception("Terminal initialization failed")
             QMessageBox.critical(self, "Initialization Failed", str(e))
+
+    async def _restore_terminal_runtime_data(self, terminal):
+        current_task = asyncio.current_task()
+        try:
+            await asyncio.sleep(0)
+            if terminal is None or terminal is not getattr(self, "terminal", None):
+                return
+            if getattr(terminal, "_ui_shutting_down", False):
+                return
+            if hasattr(terminal, "load_persisted_runtime_data"):
+                await terminal.load_persisted_runtime_data()
+        finally:
+            if getattr(self, "_terminal_runtime_restore_task", None) is current_task:
+                self._terminal_runtime_restore_task = None
 
     def update_integration_settings(
         self,
@@ -3532,6 +3635,35 @@ class AppController(QMainWindow):
             initial_balance=getattr(self, "initial_capital", 10000),
         )
 
+    def _get_strategy_ranking_executor(self):
+        executor = getattr(self, "_strategy_ranking_executor", None)
+        if executor is None:
+            # Keep heavy pandas/ta ranking work off qasync's QThread executor.
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="strategy-ranker")
+            self._strategy_ranking_executor = executor
+        return executor
+
+    async def _run_strategy_ranking(self, ranker, frame, symbol, timeframe, strategy_names):
+        loop = asyncio.get_running_loop()
+        ranking_call = partial(
+            ranker.rank,
+            frame.copy(),
+            symbol,
+            timeframe,
+            strategy_names,
+        )
+        return await loop.run_in_executor(self._get_strategy_ranking_executor(), ranking_call)
+
+    def _shutdown_strategy_ranking_executor(self, wait=False):
+        executor = getattr(self, "_strategy_ranking_executor", None)
+        if executor is None:
+            return
+        self._strategy_ranking_executor = None
+        try:
+            executor.shutdown(wait=bool(wait), cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=bool(wait))
+
     def _normalize_strategy_ranking_frame(self, dataset):
         if dataset is None:
             return None
@@ -3889,9 +4021,9 @@ class AppController(QMainWindow):
                     if frame is None or len(frame) < max(20, int(min_candles or 20)):
                         continue
 
-                    results = await asyncio.to_thread(
-                        ranker.rank,
-                        frame.copy(),
+                    results = await self._run_strategy_ranking(
+                        ranker,
+                        frame,
                         symbol,
                         candidate_timeframe,
                         strategy_names,
@@ -6481,7 +6613,7 @@ class AppController(QMainWindow):
             return []
 
         try:
-            trades = await asyncio.to_thread(repository.get_trades, limit)
+            trades = await asyncio.to_thread(self._repository_trade_rows_for_active_exchange, limit)
         except Exception as exc:
             self.logger.debug("Trade DB load failed: %s", exc)
             return []
@@ -6513,6 +6645,9 @@ class AppController(QMainWindow):
     def handle_trade_execution(self, trade):
         if not isinstance(trade, dict):
             return
+        trade = dict(trade)
+        if not str(trade.get("exchange") or "").strip():
+            trade["exchange"] = self._active_exchange_code()
 
         status = str(trade.get("status") or "").strip().lower().replace("-", "_")
         order_id = str(trade.get("order_id") or "").strip()
@@ -6997,13 +7132,14 @@ class AppController(QMainWindow):
     async def fetch_closed_trade_journal(self, limit=150):
         rows = []
         seen = set()
-        repository = getattr(self, "trade_repository", None)
         repo_rows = []
-        if repository is not None:
-            try:
-                repo_rows = await asyncio.to_thread(repository.get_trades, max(int(limit) * 2, 100))
-            except Exception as exc:
-                self.logger.debug("Trade DB journal load failed: %s", exc)
+        try:
+            repo_rows = await asyncio.to_thread(
+                self._repository_trade_rows_for_active_exchange,
+                max(int(limit) * 2, 100),
+            )
+        except Exception as exc:
+            self.logger.debug("Trade DB journal load failed: %s", exc)
 
         source_map = {}
         for trade in repo_rows or []:
@@ -8801,7 +8937,12 @@ class AppController(QMainWindow):
             return
 
         side = str(signal.get("side", "hold")).upper()
-        confidence = float(signal.get("confidence", 0.0) or 0.0)
+        reasoning = dict(signal.get("reasoning") or {})
+        decision = str(reasoning.get("decision") or signal.get("reasoning_decision") or "").strip().upper()
+        monitor_signal = side
+        if decision and decision not in {"APPROVE", "NEUTRAL"}:
+            monitor_signal = decision
+        confidence = float(reasoning.get("confidence", signal.get("confidence", 0.0)) or 0.0)
 
         closes = []
         for row in candles or []:
@@ -8830,13 +8971,24 @@ class AppController(QMainWindow):
         elif side == "SELL":
             regime = "TREND_DOWN"
 
+        reason_text = str(reasoning.get("reasoning") or signal.get("reason", "") or "").strip()
+        warnings = [str(item).strip() for item in list(reasoning.get("warnings") or signal.get("warnings") or []) if str(item).strip()]
+        if warnings:
+            warning_text = "Warnings: " + " | ".join(warnings[:3])
+            reason_text = f"{reason_text} {warning_text}".strip()
+
         payload = {
             "symbol": symbol,
-            "signal": side,
+            "signal": monitor_signal,
             "confidence": confidence,
             "regime": regime,
             "volatility": round(float(volatility), 6),
-            "reason": str(signal.get("reason", "") or ""),
+            "reason": reason_text,
+            "decision": decision or side,
+            "risk": str(reasoning.get("risk") or signal.get("risk") or "").strip(),
+            "warnings": warnings,
+            "provider": str(reasoning.get("provider") or signal.get("reasoning_provider") or "").strip(),
+            "mode": str(reasoning.get("mode") or signal.get("reasoning_mode") or "").strip(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -9050,6 +9202,11 @@ class AppController(QMainWindow):
             if deferred_assignment_task is not None and not deferred_assignment_task.done():
                 deferred_assignment_task.cancel()
             self._strategy_auto_assignment_deferred_task = None
+            self._shutdown_strategy_ranking_executor()
+            terminal_restore_task = getattr(self, "_terminal_runtime_restore_task", None)
+            if terminal_restore_task is not None and not terminal_restore_task.done():
+                terminal_restore_task.cancel()
+            self._terminal_runtime_restore_task = None
             self.strategy_auto_assignment_in_progress = False
             self.strategy_auto_assignment_ready = not bool(getattr(self, "strategy_auto_assignment_enabled", True))
             self._update_strategy_auto_assignment_progress(
@@ -9123,6 +9280,27 @@ class AppController(QMainWindow):
             self.stack.setCurrentWidget(self.dashboard)
             self.dashboard.setEnabled(True)
             self.dashboard.connect_button.setText("CONNECT")
+
+    async def shutdown_for_exit(self):
+        trading_system = getattr(self, "trading_system", None)
+        try:
+            await self._cleanup_session(stop_trading=True, close_broker=True)
+        except Exception:
+            self.logger.exception("Exit cleanup failed")
+        finally:
+            self.connected = False
+            try:
+                self.connection_signal.emit("disconnected")
+            except Exception:
+                pass
+            self._shutdown_strategy_ranking_executor(wait=True)
+            if trading_system is not None:
+                shutdown_signal_executor = getattr(trading_system, "_shutdown_signal_selection_executor", None)
+                if callable(shutdown_signal_executor):
+                    try:
+                        shutdown_signal_executor(wait=True)
+                    except Exception:
+                        self.logger.debug("Signal selection executor shutdown failed during exit", exc_info=True)
 
     async def get_price(self, symbol):
         tick = await self._safe_fetch_ticker(symbol)

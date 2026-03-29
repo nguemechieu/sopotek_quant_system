@@ -359,6 +359,37 @@ def test_trade_repository_round_trips_trade_journal_fields():
     assert stored.lessons == "Wait for retest instead of chasing first impulse."
 
 
+def test_trade_repository_filters_trade_history_by_exchange():
+    repo = TradeRepository()
+
+    repo.save_trade(
+        symbol="BTC/USDT",
+        side="BUY",
+        quantity=0.1,
+        price=100.0,
+        exchange="paper",
+        order_id="paper-1",
+        status="filled",
+    )
+    repo.save_trade(
+        symbol="BTC/USDT",
+        side="BUY",
+        quantity=0.2,
+        price=101.0,
+        exchange="coinbase",
+        order_id="coinbase-1",
+        status="filled",
+    )
+
+    paper_rows = repo.get_trades(limit=10, exchange="paper")
+    coinbase_rows = repo.get_trades(limit=10, exchange="coinbase")
+
+    assert len(paper_rows) == 1
+    assert paper_rows[0].order_id == "paper-1"
+    assert len(coinbase_rows) == 1
+    assert coinbase_rows[0].order_id == "coinbase-1"
+
+
 def test_database_runtime_reconfiguration_switches_repository_backend():
     local_repo = MarketDataRepository()
     remote_repo = MarketDataRepository()

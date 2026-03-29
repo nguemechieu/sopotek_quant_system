@@ -318,6 +318,24 @@ def test_auto_rank_and_assign_strategies_selects_best_timeframe_for_symbol():
     assert ranked[0]["timeframe"] == "4h"
     assert result["scan_timeframes"] == ["1h", "4h"]
 
+
+def test_auto_rank_and_assign_strategies_uses_dedicated_ranking_helper():
+    controller = _make_controller()
+    controller.symbols = ["EUR/USD"]
+    ranking_calls = []
+
+    async def fake_run_strategy_ranking(ranker, frame, symbol, timeframe, strategy_names):
+        ranking_calls.append((symbol, timeframe, tuple(strategy_names or []), len(frame)))
+        return ranker.rank(frame, symbol, timeframe, strategy_names)
+
+    controller._run_strategy_ranking = fake_run_strategy_ranking
+
+    result = asyncio.run(controller.auto_rank_and_assign_strategies(timeframe="1h"))
+
+    assert result["assigned_symbols"] == ["EUR/USD"]
+    assert ranking_calls == [("EUR/USD", "1h", ("Trend Following", "EMA Cross", "MACD Trend"), 160)]
+
+
 def test_strategy_auto_assignment_status_reports_ready_after_scan():
     controller = _make_controller()
 

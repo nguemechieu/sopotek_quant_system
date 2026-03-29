@@ -1,3 +1,5 @@
+import inspect
+
 from agents.base_agent import BaseAgent
 
 
@@ -27,7 +29,10 @@ class SignalAgent(BaseAgent):
         candles = working.get("candles") or []
         dataset = working.get("dataset")
 
-        signal, assigned_strategies = self.selector(symbol, candles, dataset)
+        selection = self.selector(symbol, candles, dataset)
+        if inspect.isawaitable(selection):
+            selection = await selection
+        signal, assigned_strategies = selection
         if self.candidate_mode:
             merged_assignments = list(working.get("assigned_strategies") or [])
             known_assignments = {
