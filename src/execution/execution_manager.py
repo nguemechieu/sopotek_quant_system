@@ -179,6 +179,30 @@ class ExecutionManager:
 
         return float(amount)
 
+    def _minimum_order_amount(self, market, price):
+        limits = market.get("limits", {}) if isinstance(market, dict) else {}
+        min_amount = self._safe_float(((limits.get("amount") or {}).get("min")), 0.0)
+        min_cost = self._safe_float(((limits.get("cost") or {}).get("min")), 0.0)
+
+        candidates = []
+        if min_amount > 0:
+            candidates.append(min_amount)
+        if price and price > 0 and min_cost > 0:
+            candidates.append(min_cost / price)
+
+        return (max(candidates) if candidates else 0.0), min_amount, min_cost
+
+    def _minimum_order_reason(self, symbol, amount, minimum_amount, base_currency=None, quote_currency=None, min_cost=0.0):
+        unit_label = base_currency or "units"
+        reason = (
+            f"Computed order size for {symbol} ({amount:.8f} {unit_label}) is below the venue minimum "
+            f"({minimum_amount:.8f} {unit_label})."
+        )
+        if min_cost > 0:
+            quote_label = quote_currency or "quote"
+            reason += f" Minimum notional is {min_cost:.8f} {quote_label}."
+        return reason
+
     def _normalize_order_status(self, status):
         normalized = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
         mapping = {
@@ -645,21 +669,40 @@ class ExecutionManager:
                 return None
             amount = min(amount, liquid_base)
 
-        limits = market.get("limits", {}) if isinstance(market, dict) else {}
-        min_amount = ((limits.get("amount") or {}).get("min"))
-        min_cost = ((limits.get("cost") or {}).get("min"))
-
-        if price and min_cost:
-            min_cost_amount = float(min_cost) / price
-            amount = max(amount, min_cost_amount)
-
-        if min_amount:
-            amount = max(amount, float(min_amount))
+        minimum_amount, min_amount, min_cost = self._minimum_order_amount(market, price)
+        if minimum_amount > 0 and amount + 1e-12 < minimum_amount:
+            self._set_cooldown(
+                symbol,
+                120,
+                self._minimum_order_reason(
+                    symbol,
+                    amount,
+                    minimum_amount,
+                    base_currency=base_currency,
+                    quote_currency=quote_currency,
+                    min_cost=min_cost,
+                ),
+            )
+            return None
 
         amount = self._apply_amount_precision(symbol, amount)
 
         if amount <= 0:
             self._set_cooldown(symbol, 120, "computed order amount is zero")
+            return None
+        if minimum_amount > 0 and amount + 1e-12 < minimum_amount:
+            self._set_cooldown(
+                symbol,
+                120,
+                self._minimum_order_reason(
+                    symbol,
+                    amount,
+                    minimum_amount,
+                    base_currency=base_currency,
+                    quote_currency=quote_currency,
+                    min_cost=min_cost,
+                ),
+            )
             return None
 
         if (

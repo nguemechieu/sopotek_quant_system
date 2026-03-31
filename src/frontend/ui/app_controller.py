@@ -8218,12 +8218,30 @@ class AppController(QMainWindow):
             self.performance_engine.record_trade(trade)
 
         self.trade_signal.emit(trade)
-        if trade.get("blocked_by_guard") and self.terminal is not None:
+        if self.terminal is not None:
             system_console = getattr(self.terminal, "system_console", None)
             if system_console is not None:
                 source = str(trade.get("source") or "bot").strip().lower() or "bot"
-                reason = str(trade.get("reason") or "Behavior guard blocked the trade.").strip()
-                system_console.log(f"{source.title()} trade blocked: {reason}", "WARN")
+                symbol = str(trade.get("symbol") or "-").strip().upper() or "-"
+                reason = str(
+                    trade.get("reason")
+                    or trade.get("message")
+                    or (
+                        ((trade.get("raw") or {}) if isinstance(trade.get("raw"), dict) else {}).get("error")
+                    )
+                    or ""
+                ).strip()
+                if trade.get("blocked_by_guard"):
+                    system_console.log(
+                        f"{source.title()} trade blocked for {symbol}: {reason or 'Behavior guard blocked the trade.'}",
+                        "WARN",
+                    )
+                elif status in {"rejected", "skipped", "failed", "error"}:
+                    system_console.log(
+                        f"{source.title()} trade {status.replace('_', ' ')} for {symbol}: "
+                        f"{reason or 'No rejection reason was supplied by the broker or safety checks.'}",
+                        "ERROR" if status in {"rejected", "failed", "error"} else "WARN",
+                    )
         telegram_service = getattr(self, "telegram_service", None)
         if telegram_service is not None:
             self._create_task(telegram_service.notify_trade(trade), "telegram_trade_notify")

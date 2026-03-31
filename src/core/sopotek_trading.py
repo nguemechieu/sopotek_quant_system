@@ -1,3 +1,12 @@
+"""Core orchestration and runtime integration for the Sopotek Trading AI engine.
+
+This module contains the primary application class that wires together broker
+connectivity, strategy registration, signal generation, execution management,
+and portfolio/risk control. It is intended for use by the desktop trading
+application runtime that drives trading loops, event processing, and learning
+pipelines.
+"""
+
 import asyncio
 import inspect
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +47,15 @@ from storage.paper_trade_learning_repository import PaperTradeLearningRepository
 
 
 class SopotekTrading:
+    """Main runtime orchestrator for live trading and simulated execution.
+
+    SopotekTrading is responsible for bootstrapping the trading runtime, validating
+    broker capabilities, registering strategies, initializing market data feeds,
+    and configuring execution/risk controls. It is designed to be instantiated
+    with an external controller object that provides broker, repositories, and
+    optional notification hooks.
+    """
+
     MAX_RUNTIME_ANALYSIS_BARS = 500
     ADAPTIVE_TRADE_HISTORY_LIMIT = 300
     ADAPTIVE_TRADE_CACHE_TTL_SECONDS = 15.0
@@ -533,8 +551,8 @@ class SopotekTrading:
             return {
                 "adaptive_weight": 1.0,
                 "sample_size": 0,
-                "win_rate": None,
-                "average_pnl": None,
+                "win_rate": 0,
+                "average_pnl":0,
                 "scope": "timeframe" if matched_exact else "strategy",
             }
 

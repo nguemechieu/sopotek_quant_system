@@ -414,9 +414,10 @@ class Terminal(QMainWindow):
         self.setMinimumSize(1024, 680)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setDockOptions(
+            # GroupedDragging has been unstable on Windows when hidden/tabbed docks
+            # are dragged together, so keep tabs but drag only the active dock.
             QMainWindow.DockOption.AllowNestedDocks
             | QMainWindow.DockOption.AllowTabbedDocks
-            | QMainWindow.DockOption.GroupedDragging
             | QMainWindow.DockOption.AnimatedDocks
         )
 
@@ -514,6 +515,22 @@ class Terminal(QMainWindow):
     def _is_stellar_market_watch(self):
         """Return whether the current market watch should include Stellar column behavior."""
         return self._active_exchange_name() == "stellar"
+
+    def _sync_exchange_scoped_actions(self):
+        """Show venue-specific actions only when the active broker supports them."""
+        is_stellar = Terminal._active_exchange_name(self) == "stellar"
+
+        stellar_action = getattr(self, "action_stellar_asset_explorer", None)
+        if stellar_action is not None:
+            stellar_action.setVisible(is_stellar)
+
+        stellar_separator = getattr(self, "_research_stellar_separator_action", None)
+        if stellar_separator is not None:
+            stellar_separator.setVisible(is_stellar)
+
+        explorer_window = (getattr(self, "detached_tool_windows", {}) or {}).get("stellar_asset_explorer")
+        if not is_stellar and Terminal._is_qt_object_alive(self, explorer_window):
+            explorer_window.hide()
 
     def _market_watch_headers(self):
         """Return headers for the market watch table based on exchange type."""
@@ -1913,7 +1930,7 @@ class Terminal(QMainWindow):
         self.research_menu.addAction(self.action_quant_pm)
         self.research_menu.addAction(self.action_ml_monitor)
         self.research_menu.addAction(self.action_ml_research)
-        self.research_menu.addSeparator()
+        self._research_stellar_separator_action = self.research_menu.addSeparator()
         self.research_menu.addAction(self.action_stellar_asset_explorer)
 
         self.tools_menu.addAction(self.action_logs)
@@ -1935,6 +1952,7 @@ class Terminal(QMainWindow):
         self.action_about.triggered.connect(self._show_about)
         self.help_menu.addAction(self.action_about)
 
+        Terminal._sync_exchange_scoped_actions(self)
         self.apply_language()
 
     def update_connection_status(self, status: str):
@@ -2069,6 +2087,7 @@ class Terminal(QMainWindow):
             previous_language=previous_language,
         )
         self._applied_language_code = getattr(self.controller, "language_code", "en")
+        Terminal._sync_exchange_scoped_actions(self)
 
     # ==========================================================
     # TOOLBAR
@@ -4920,20 +4939,21 @@ class Terminal(QMainWindow):
 
     def _apply_terminal_table_sizing(self):
         market_watch = getattr(self, "symbols_table", None)
-        if market_watch is not None:
+        if self._is_qt_object_alive(market_watch):
             market_watch.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             market_watch.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             market_watch.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             header = market_watch.horizontalHeader()
-            header.setMinimumSectionSize(40)
-            header.setSectionResizeMode(self._market_watch_watch_column(), QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(self._market_watch_symbol_column(), QHeaderView.ResizeMode.Stretch)
-            header.setSectionResizeMode(self._market_watch_bid_column(), QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(self._market_watch_ask_column(), QHeaderView.ResizeMode.ResizeToContents)
-            usd_column = self._market_watch_usd_column()
-            if usd_column is not None:
-                header.setSectionResizeMode(usd_column, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(self._market_watch_status_column(), QHeaderView.ResizeMode.ResizeToContents)
+            if self._is_qt_object_alive(header):
+                header.setMinimumSectionSize(40)
+                header.setSectionResizeMode(self._market_watch_watch_column(), QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(self._market_watch_symbol_column(), QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(self._market_watch_bid_column(), QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(self._market_watch_ask_column(), QHeaderView.ResizeMode.ResizeToContents)
+                usd_column = self._market_watch_usd_column()
+                if usd_column is not None:
+                    header.setSectionResizeMode(usd_column, QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(self._market_watch_status_column(), QHeaderView.ResizeMode.ResizeToContents)
 
         for table_name in (
             "positions_table",
@@ -4944,13 +4964,15 @@ class Terminal(QMainWindow):
             "ai_table",
         ):
             table = getattr(self, table_name, None)
-            if table is None:
+            if not self._is_qt_object_alive(table):
                 continue
             table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             table.setWordWrap(False)
-            table.horizontalHeader().setStretchLastSection(True)
+            header = table.horizontalHeader()
+            if self._is_qt_object_alive(header):
+                header.setStretchLastSection(True)
 
     def _safe_tabify_docks(self, primary, secondary):
         if primary is None or secondary is None or primary is secondary:
@@ -5494,6 +5516,7 @@ class Terminal(QMainWindow):
         blocked = self.symbols_table.blockSignals(True)
         self.symbols_table.setRowCount(0)
         self.symbols_table.setAccessibleName(exchange)
+        Terminal._sync_exchange_scoped_actions(self)
         self._configure_market_watch_table()
         if self.symbol_picker is not None:
             current_symbol = str(self.symbol_picker.currentText() or "").strip().upper()
@@ -8395,7 +8418,12 @@ class Terminal(QMainWindow):
 
     def _set_status_value(self, field, value, tooltip=None):
         label = self.status_labels.get(field)
-        if label is None:
+        if label is None or not self._is_qt_object_alive(label):
+            if label is not None:
+                try:
+                    self.status_labels.pop(field, None)
+                except Exception:
+                    pass
             return
 
         display = self._elide_text(value)
@@ -11408,6 +11436,9 @@ def _hotfix_open_stellar_asset_trustline(self, window=None):
 
 
 def _hotfix_open_stellar_asset_explorer_window(self):
+    if Terminal._active_exchange_name(self) != "stellar":
+        return
+
     window = self._get_or_create_tool_window(
         "stellar_asset_explorer",
         "Stellar Asset Explorer",

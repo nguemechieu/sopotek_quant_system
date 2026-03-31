@@ -85,3 +85,14 @@ def test_adjust_trade_uses_stop_loss_risk_for_forex_pairs():
     assert adjusted_quantity == pytest.approx(40000.0)
     assert "max risk" in reason.lower()
     assert "pip" in reason.lower()
+
+
+def test_position_size_uses_actual_tiny_account_equity():
+    risk = RiskEngine(account_equity=0.25, max_risk_per_trade=1.0, max_position_size_pct=0.10)
+
+    size = risk.position_size(
+        entry_price=100.0,
+        stop_price=99.0,
+    )
+
+    assert size == pytest.approx(0.00025)

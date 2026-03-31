@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import os
 from datetime import datetime
@@ -32,6 +33,29 @@ class TelegramService:
     def can_send(self):
         return bool(self.bot_token and self.chat_id)
 
+    @staticmethod
+    def _trade_notification_reason(trade):
+        if not isinstance(trade, dict):
+            return ""
+
+        candidates = [
+            trade.get("reason"),
+            trade.get("message"),
+        ]
+        raw = trade.get("raw")
+        if isinstance(raw, dict):
+            candidates.extend([raw.get("error"), raw.get("reason"), raw.get("message")])
+
+        for candidate in candidates:
+            text = str(candidate or "").strip()
+            if text:
+                return text
+
+        status = str(trade.get("status") or "").strip().lower().replace("-", "_")
+        if status in {"rejected", "blocked", "skipped", "failed", "error"}:
+            return "No rejection reason was supplied by the broker or safety checks."
+        return ""
+
     async def start(self):
         if not self.enabled or not self.bot_token:
             return
@@ -64,6 +88,7 @@ class TelegramService:
         symbol = str(trade.get("symbol") or "-")
         side = str(trade.get("side") or "-").upper()
         status = str(trade.get("status") or "-").upper()
+        reason = self._trade_notification_reason(trade)
         price = trade.get("price", "-")
         raw_size = trade.get("size", trade.get("amount", "-"))
         display_size = trade.get("applied_requested_mode_amount")
@@ -85,6 +110,7 @@ class TelegramService:
             f"Price: <code>{price}</code>\n"
             f"Size: <code>{size}</code>\n"
             f"PnL: <code>{pnl}</code>\n"
+            f"{f'Reason: <code>{html.escape(reason)}</code>\\n' if reason else ''}"
             f"Order ID: <code>{order_id}</code>\n"
             f"Time: <code>{timestamp}</code>"
         )

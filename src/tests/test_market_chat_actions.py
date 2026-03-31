@@ -1458,6 +1458,33 @@ def test_get_market_stream_status_recovers_oanda_polling_when_task_is_missing():
     assert scheduled == ["ticker_poll_recovery"]
 
 
+def test_handle_trade_execution_logs_rejection_reason_to_console():
+    controller = _make_controller()
+    emitted = []
+    console_rows = []
+    controller.trade_signal = SimpleNamespace(emit=lambda trade: emitted.append(dict(trade)))
+    controller.terminal = SimpleNamespace(
+        system_console=SimpleNamespace(log=lambda message, level: console_rows.append((message, level)))
+    )
+    controller.telegram_service = None
+    controller.performance_engine = None
+
+    controller.handle_trade_execution(
+        {
+            "symbol": "EUR/PLN",
+            "source": "bot",
+            "status": "rejected",
+            "reason": "Live trade blocked: candle data for EUR/PLN 1h is stale (unknown old).",
+        }
+    )
+
+    assert emitted[-1]["status"] == "rejected"
+    assert console_rows[-1][1] == "ERROR"
+    assert console_rows[-1][0] == (
+        "Bot trade rejected for EUR/PLN: Live trade blocked: candle data for EUR/PLN 1h is stale (unknown old)."
+    )
+
+
 def test_handle_market_chat_action_surfaces_chatgpt_size_note():
     controller = _make_controller()
 

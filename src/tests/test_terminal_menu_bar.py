@@ -19,9 +19,10 @@ def _app():
 
 
 class _FakeTerminal(QMainWindow):
-    def __init__(self):
+    def __init__(self, exchange_name=""):
         super().__init__()
-        self.controller = SimpleNamespace(language_code="en", set_language=lambda _code: None)
+        broker = SimpleNamespace(exchange_name=exchange_name) if exchange_name else None
+        self.controller = SimpleNamespace(language_code="en", set_language=lambda _code: None, broker=broker, config=None)
         self.show_bid_ask_lines = True
         self.current_connection_status = "connecting"
         self.language_actions = {}
@@ -36,12 +37,19 @@ class _FakeTerminal(QMainWindow):
         self.session_mode_badge = None
         self.license_badge = None
         self.trading_activity_label = None
+        self.detached_tool_windows = {}
 
     def _tr(self, key, **kwargs):
         return key
 
     def apply_language(self):
         return Terminal.apply_language(self)
+
+    def _active_exchange_name(self):
+        return Terminal._active_exchange_name(self)
+
+    def _is_qt_object_alive(self, obj):
+        return Terminal._is_qt_object_alive(self, obj)
 
     def _update_autotrade_button(self):
         return None
@@ -118,4 +126,44 @@ def test_create_menu_bar_groups_actions_into_single_clear_menus():
     assert terminal.action_market_chat not in tools_actions
     assert terminal.action_performance not in tools_actions
     assert menu_titles[-1] == terminal.help_menu.title()
+
+
+def test_create_menu_bar_hides_stellar_explorer_when_exchange_is_not_stellar():
+    _app()
+    terminal = _FakeTerminal(exchange_name="coinbase")
+
+    Terminal._create_menu_bar(terminal)
+
+    assert terminal.action_stellar_asset_explorer.isVisible() is False
+    assert terminal._research_stellar_separator_action.isVisible() is False
+
+
+def test_create_menu_bar_shows_stellar_explorer_when_exchange_is_stellar():
+    _app()
+    terminal = _FakeTerminal(exchange_name="stellar")
+
+    Terminal._create_menu_bar(terminal)
+
+    assert terminal.action_stellar_asset_explorer.isVisible() is True
+    assert terminal._research_stellar_separator_action.isVisible() is True
+
+
+def test_set_status_value_ignores_deleted_qt_labels():
+    terminal = _FakeTerminal()
+
+    class _DeadLabel:
+        def setText(self, _value):
+            raise AssertionError("deleted label should not be touched")
+
+        def setToolTip(self, _value):
+            raise AssertionError("deleted label should not be touched")
+
+    dead_label = _DeadLabel()
+    terminal.status_labels = {"Websocket": dead_label}
+    terminal._is_qt_object_alive = lambda obj: obj is not dead_label
+    terminal._elide_text = lambda value, max_length=42: str(value)
+
+    Terminal._set_status_value(terminal, "Websocket", "Restarting", "Restarting market data")
+
+    assert terminal.status_labels == {}
     assert menu_titles[-2] == terminal.workspace_menu.title()

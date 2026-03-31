@@ -1,3 +1,10 @@
+"""Repository layer for equity snapshot persistence and retrieval.
+
+This module defines the SQLAlchemy model for equity snapshot records and
+provides repository helpers to save snapshots, query recent records, and
+load the latest snapshot for an exchange/account combination.
+"""
+
 import json
 from datetime import datetime, timezone
 
@@ -7,6 +14,8 @@ from storage import database as storage_db
 
 
 class EquitySnapshot(storage_db.Base):
+    """SQLAlchemy model for a single equity snapshot record."""
+
     __tablename__ = "equity_snapshots"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -21,6 +30,13 @@ class EquitySnapshot(storage_db.Base):
 
 
 class EquitySnapshotRepository:
+    """Repository for persisting and querying equity snapshot history.
+
+    The repository normalizes incoming values, serializes optional payloads, and
+    exposes helper methods to fetch recent snapshots or the latest snapshot for
+    a given exchange/account label.
+    """
+
     def save_snapshot(
         self,
         equity,
@@ -32,6 +48,7 @@ class EquitySnapshotRepository:
         used_margin=None,
         payload=None,
     ):
+        """Persist an equity snapshot and return the saved database row."""
         snapshot = EquitySnapshot(
             exchange=str(exchange or "").lower() or None,
             account_label=str(account_label or "").strip() or None,
@@ -50,6 +67,7 @@ class EquitySnapshotRepository:
             return snapshot
 
     def get_snapshots(self, limit=2000, exchange=None, account_label=None):
+        """Return recent equity snapshots optionally filtered by exchange and account."""
         with storage_db.SessionLocal() as session:
             stmt = select(EquitySnapshot)
             normalized_exchange = str(exchange or "").lower() or None
@@ -62,10 +80,12 @@ class EquitySnapshotRepository:
             return list(session.execute(stmt).scalars().all())
 
     def latest_snapshot(self, exchange=None, account_label=None):
+        """Return the most recent equity snapshot for an optional exchange/account."""
         rows = self.get_snapshots(limit=1, exchange=exchange, account_label=account_label)
         return rows[0] if rows else None
 
     def _normalize_timestamp(self, value):
+        """Normalize input into a UTC-naive datetime for storage."""
         if value is None:
             return datetime.now(timezone.utc).replace(tzinfo=None)
         if isinstance(value, datetime):
@@ -91,6 +111,7 @@ class EquitySnapshotRepository:
         return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
     def _normalize_float(self, value):
+        """Convert a value to float, returning None for invalid inputs."""
         if value in (None, ""):
             return None
         try:
@@ -99,6 +120,7 @@ class EquitySnapshotRepository:
             return None
 
     def _normalize_payload(self, payload):
+        """Serialize payloads as JSON text or return None for empty values."""
         if payload in (None, ""):
             return None
         try:

@@ -225,6 +225,31 @@ def test_settings_command_returns_rich_settings_response():
     assert service.messages[-1] == ("settings:True", False, None)
 
 
+def test_notify_trade_includes_rejection_reason():
+    controller = DummyController()
+    service = RecordingTelegramService(controller)
+
+    asyncio.run(
+        service.notify_trade(
+            {
+                "symbol": "EUR/PLN",
+                "side": "sell",
+                "status": "rejected",
+                "price": 4.29385,
+                "amount": 1.35,
+                "pnl": None,
+                "order_id": None,
+                "timestamp": "2026-03-31T11:56:49.767530+00:00",
+                "reason": "Live trade blocked: candle data for EUR/PLN 1h is stale (unknown old).",
+            }
+        )
+    )
+
+    text, _include_keyboard, _reply_markup = service.messages[-1]
+    assert "Status: <b>REJECTED</b>" in text
+    assert "Reason: <code>Live trade blocked: candle data for EUR/PLN 1h is stale (unknown old).</code>" in text
+
+
 def test_health_command_returns_rich_health_response():
     controller = DummyController()
     service = RecordingTelegramService(controller)

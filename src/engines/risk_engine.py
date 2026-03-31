@@ -9,12 +9,12 @@ class RiskEngine:
             max_gross_exposure_pct=2.0
     ):
 
-        self.account_equity = max(1.0, self._safe_float(account_equity, 10000.0))
+        self.account_equity = max(0.0, self._safe_float(account_equity, 10000.0))
 
-        self.max_portfolio_risk = max(0.001, self._safe_float(max_portfolio_risk, 0.1))
-        self.max_risk_per_trade = max(0.001, self._safe_float(max_risk_per_trade, 0.02))
-        self.max_position_size_pct = max(0.001, self._safe_float(max_position_size_pct, 0.1))
-        self.max_gross_exposure_pct = max(0.01, self._safe_float(max_gross_exposure_pct, 2.0))
+        self.max_portfolio_risk = max(0.0, self._safe_float(max_portfolio_risk, 0.1))
+        self.max_risk_per_trade = max(0.0, self._safe_float(max_risk_per_trade, 0.02))
+        self.max_position_size_pct = max(0.0, self._safe_float(max_position_size_pct, 0.1))
+        self.max_gross_exposure_pct = max(0.0, self._safe_float(max_gross_exposure_pct, 2.0))
 
     @staticmethod
     def _safe_float(value, default=0.0):
@@ -25,7 +25,7 @@ class RiskEngine:
 
     def sync_equity(self, equity):
         value = self._safe_float(equity, self.account_equity)
-        if value > 0:
+        if value >= 0:
             self.account_equity = value
 
     def max_position_notional(self):
@@ -50,6 +50,8 @@ class RiskEngine:
 
     def max_risk_quantity(self, entry_price, stop_price, quote_to_account_rate=1.0):
         risk_amount = self.account_equity * self.max_risk_per_trade
+        if risk_amount <= 0:
+            return 0.0
         risk_per_unit = self.risk_per_unit(
             entry_price,
             stop_price,

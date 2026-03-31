@@ -21,7 +21,7 @@ def main():
     df = pd.read_csv(data_path)
 
     strategy = MomentumStrategy(None)
-    simulator = Simulator(initial_balance=10000)
+    simulator = Simulator(initial_balance=500)
     engine = BacktestEngine(strategy, simulator)
 
     results = engine.run(df)

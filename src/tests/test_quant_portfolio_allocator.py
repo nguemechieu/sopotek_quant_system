@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from quant.allocation_models import equal_weight_allocation, inverse_volatility_allocation, normalize_weights
 from quant.portfolio_allocator import PortfolioAllocator
@@ -166,3 +167,29 @@ def test_portfolio_allocator_uses_small_remaining_budget_instead_of_rejecting():
     assert 0 < decision.adjusted_amount < 2
     assert "remaining available allocation" in decision.reason.lower()
     assert decision.metrics["below_minimum_useful_allocation"] is True
+
+
+def test_portfolio_allocator_uses_actual_tiny_equity_for_budgeting():
+    allocator = PortfolioAllocator(
+        account_equity=0.25,
+        strategy_weights={"Trend Following": 1.0},
+        max_strategy_allocation_pct=1.0,
+    )
+
+    decision = asyncio.run(
+        allocator.allocate_trade(
+            symbol="BTC/USDT",
+            strategy_name="Trend Following",
+            side="buy",
+            amount=1.0,
+            price=100.0,
+            portfolio=SimpleNamespace(positions={}),
+            market_prices={"BTC/USDT": 100.0},
+            dataset=FakeDataset(_frame_from_closes([100, 100.2, 100.4, 100.3, 100.5, 100.6])),
+            confidence=1.0,
+            active_strategies=["Trend Following"],
+        )
+    )
+
+    assert decision.approved is True
+    assert decision.adjusted_amount == pytest.approx(0.0025)
