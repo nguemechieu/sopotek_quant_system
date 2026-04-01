@@ -24,20 +24,42 @@ class SmartExecution:
     async def _submit_child(self, order, amount, price=None, order_type=None):
         child_type = order_type or order.get("type", "market")
         params = dict(order.get("params") or {})
-        create_kwargs = {
+        payload = {
             "symbol": order["symbol"],
             "side": order["side"],
             "amount": amount,
+            "quantity": amount,
             "price": price,
             "type": child_type,
+            "order_type": child_type,
             "params": params,
             "stop_loss": order.get("stop_loss"),
             "take_profit": order.get("take_profit"),
+            "instrument": order.get("instrument"),
+            "instrument_type": order.get("instrument_type"),
+            "legs": list(order.get("legs") or []),
+            "broker": order.get("broker"),
+            "time_in_force": order.get("time_in_force"),
+            "client_order_id": order.get("client_order_id"),
+            "account_id": order.get("account_id"),
+            "strategy_name": order.get("strategy_name"),
+            "execution_strategy": order.get("execution_strategy"),
+            "metadata": dict(order.get("metadata") or {}),
         }
         if order.get("stop_price") is not None:
-            create_kwargs["stop_price"] = order.get("stop_price")
+            payload["stop_price"] = order.get("stop_price")
+        if hasattr(self.broker, "place_order"):
+            return await self.broker.place_order(payload)
         return await self.broker.create_order(
-            **create_kwargs,
+            symbol=payload["symbol"],
+            side=payload["side"],
+            amount=payload["amount"],
+            price=payload.get("price"),
+            type=payload["type"],
+            params=payload.get("params"),
+            stop_loss=payload.get("stop_loss"),
+            take_profit=payload.get("take_profit"),
+            stop_price=payload.get("stop_price"),
         )
 
     def _extract_realized_price(self, execution, fallback_price=None):
@@ -125,6 +147,7 @@ class SmartExecution:
             algo_id = f"{algorithm}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
         return {
             "id": algo_id,
+            "broker": order.get("broker") or getattr(self.broker, "exchange_name", None),
             "symbol": order["symbol"],
             "side": normalized_side,
             "amount": total_filled or self._safe_float(order.get("amount"), 0.0),

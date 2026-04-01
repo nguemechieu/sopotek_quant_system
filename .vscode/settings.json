@@ -3,14 +3,31 @@
         "./src",
         "./out/production/sopotek-trading-ai"
     ],
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.exclude": [
+        "**/.mypy_cache/**",
+        "**/.pytest_cache/**",
+        "**/dist/**",
+        "**/logs/**",
+        "**/output/**",
+        "**/reports/**",
+        "**/tmp/**"
+    ],
+    "python.analysis.ignore": [
+        "**/site-packages/**"
+    ],
     "pylint.args": [
         "--extension-pkg-allow-list=PySide6"
     ],
     "cSpell.words": [
+        "ccxt",
         "clientconnectordnserror",
+        "dropna",
         "gaierror",
         "getpid",
+        "ndim",
         "qasync",
+        "qeventloop",
         "sopotek",
         "timerid"
     ],

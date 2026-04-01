@@ -3,6 +3,12 @@ from event_bus.event_types import EventType
 
 
 class BaseStrategy:
+    """Initialize a base strategy with an event bus for emitting trading events.
+        This sets up core infrastructure for derived strategies to publish orders.
+
+        Args:
+            event_bus: An event bus instance used to publish trading-related events.
+        """
 
     def __init__(self, event_bus):
         self.bus = event_bus

@@ -1,22 +1,21 @@
-import pandas as pd
+"""Train an ML model from the project's feature dataset."""
 
-from sopotek_trading_ai.models.model_manager import ModelManager
-from sopotek_trading_ai.src.sopotek_trading_ai.quant.ml.training_pipeline import TrainingPipeline
+import sys
+from pathlib import Path
+
+from src.quant.ml.training_pipeline import TrainingPipeline
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def main():
-
-    df = pd.read_csv("data/features/features.csv")
+    """Run the model training pipeline and persist the resulting model."""
+    data_path = REPO_ROOT / "data" / "features" / "features.csv"
 
     pipeline = TrainingPipeline()
-
-    X, y = pipeline.prepare(df)
-
-    model_manager = ModelManager()
-
-    model = model_manager.train(X, y)
-
-    model_manager.save(model, "models/trained/model.pkl")
+    pipeline.train(str(data_path))
 
     print("Model training complete")
 

@@ -108,11 +108,23 @@ class VoiceService:
                 timeout_seconds,
                 sample_rate,
             )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "message": self._describe_google_recording_error(exc, sounddevice_module=sd),
+                "text": "",
+            }
+
+        try:
             recognizer = sr.Recognizer()
             audio_data = sr.AudioData(audio.tobytes(), sample_rate, 2)
             text = await asyncio.to_thread(recognizer.recognize_google, audio_data)
         except Exception as exc:
-            return {"ok": False, "message": f"Google voice recognition failed: {exc}", "text": ""}
+            return {
+                "ok": False,
+                "message": self._describe_google_transcription_error(exc, speech_recognition_module=sr),
+                "text": "",
+            }
 
         text = str(text or "").strip()
         if not text:
@@ -136,6 +148,54 @@ class VoiceService:
         except Exception:
             return False
         return True
+
+    def _describe_google_recording_error(self, exc, sounddevice_module=None):
+        detail = str(exc or "").strip()
+        portaudio_error = getattr(sounddevice_module, "PortAudioError", None) if sounddevice_module is not None else None
+        lowered = detail.lower()
+        if (portaudio_error is not None and isinstance(exc, portaudio_error)) or isinstance(exc, OSError):
+            return self._format_google_failure("Google voice recognition could not access the microphone.", detail)
+        if "input device" in lowered or "device unavailable" in lowered or "invalid number of channels" in lowered:
+            return self._format_google_failure(
+                "Google voice recognition could not access a usable microphone input device.",
+                detail,
+            )
+        return self._format_google_failure("Google voice recognition failed while recording audio.", detail)
+
+    def _describe_google_transcription_error(self, exc, speech_recognition_module=None):
+        detail = str(exc or "").strip()
+        unknown_value_error = (
+            getattr(speech_recognition_module, "UnknownValueError", None)
+            if speech_recognition_module is not None
+            else None
+        )
+        request_error = (
+            getattr(speech_recognition_module, "RequestError", None)
+            if speech_recognition_module is not None
+            else None
+        )
+        lowered = detail.lower()
+        if unknown_value_error is not None and isinstance(exc, unknown_value_error):
+            return "Google voice recognition could not understand the audio. Please speak clearly and try again."
+        if request_error is not None and isinstance(exc, request_error):
+            return self._format_google_failure(
+                "Google voice recognition could not reach the Google speech service. Check your internet connection and try again.",
+                detail,
+            )
+        if "timed out" in lowered or "timeout" in lowered:
+            return self._format_google_failure(
+                "Google voice recognition timed out while waiting for transcription.",
+                detail,
+            )
+        return self._format_google_failure("Google voice recognition failed during transcription.", detail)
+
+    def _format_google_failure(self, summary, detail):
+        cleaned_detail = str(detail or "").strip()
+        if not cleaned_detail:
+            return summary
+        if cleaned_detail.lower() in summary.lower():
+            return summary
+        return f"{summary} Details: {cleaned_detail}"
 
     async def _run_powershell(self, script, success_message="OK"):
         try:

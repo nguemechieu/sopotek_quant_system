@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from quant.portfolio_risk_engine import PortfolioRiskEngine
 
@@ -112,3 +113,31 @@ def test_portfolio_risk_engine_scales_trade_down_when_requested_size_is_too_larg
     assert approval.approved is True
     assert approval.adjusted_amount < 50
     assert "reduced" in approval.reason.lower()
+
+
+def test_portfolio_risk_engine_uses_actual_tiny_equity_for_trade_caps():
+    engine = PortfolioRiskEngine(
+        account_equity=0.25,
+        max_portfolio_risk=1.0,
+        max_risk_per_trade=1.0,
+        max_position_size_pct=0.10,
+        max_symbol_exposure_pct=1.0,
+    )
+    frame = _frame_from_closes([100, 100.1, 100.2, 100.25, 100.3, 100.35, 100.4, 100.45, 100.5, 100.55])
+    data_hub = FakeDataHub({"BTC/USDT": frame})
+
+    approval = asyncio.run(
+        engine.approve_trade(
+            symbol="BTC/USDT",
+            side="buy",
+            amount=1.0,
+            price=100.0,
+            portfolio=SimpleNamespace(positions={}),
+            market_prices={"BTC/USDT": 100.0},
+            data_hub=data_hub,
+            dataset=FakeDataset("BTC/USDT", frame),
+        )
+    )
+
+    assert approval.approved is True
+    assert approval.adjusted_amount == pytest.approx(0.00025)

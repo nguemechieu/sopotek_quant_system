@@ -19,6 +19,7 @@ from frontend.ui.actions.backtest_actions import (
     start_backtest,
     stop_backtest,
 )
+from frontend.ui.terminal import Terminal
 
 
 def _app():
@@ -57,6 +58,10 @@ def test_show_backtest_window_builds_workspace_and_wires_buttons():
     assert events["start"] == 1
     assert events["load"] == 1
     assert events["report"] == 1
+
+
+def test_terminal_exposes_load_backtest_history_handler():
+    assert callable(getattr(Terminal, "_load_backtest_history_clicked", None))
 
 
 def test_refresh_backtest_window_renders_results_and_metrics():

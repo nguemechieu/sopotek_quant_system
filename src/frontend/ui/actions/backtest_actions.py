@@ -73,12 +73,13 @@ def show_backtest_window(terminal):
         end_date_edit.setDate(QDate.currentDate())
         history_limit = QDoubleSpinBox()
         history_limit.setDecimals(0)
-        history_limit.setRange(100, 50000)
+        history_limit.setRange(100, float(getattr(terminal.controller, "MAX_BACKTEST_HISTORY_LIMIT", 1000000)))
         history_limit.setSingleStep(500)
         history_limit.setSuffix(" bars")
         history_limit.setValue(float(getattr(terminal.controller, "limit", 50000) or 50000))
         history_limit.setToolTip(
-            "Maximum number of bars to use for the backtest. The newest bars inside the selected date range are used."
+            "Maximum number of bars to use for the backtest. The newest bars inside the selected date range are used, "
+            "and deep backtests can load much more history than the live chart cache."
         )
 
         selection_layout.addWidget(QLabel("Backtest Symbol"), 0, 0)

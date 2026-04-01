@@ -6,6 +6,8 @@ from storage import database as storage_db
 
 
 class Trade(storage_db.Base):
+    """ORM model for persisted trades."""
+
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -40,20 +42,23 @@ class Trade(storage_db.Base):
 
 
 class TradeRepository:
+    """Repository for storing and querying trade records."""
+
     def save_trade(self, symbol, side, quantity, price, exchange=None, order_id=None, order_type=None, status=None, timestamp=None, source=None, pnl=None, strategy_name=None, reason=None, confidence=None, expected_price=None, spread_bps=None, slippage_bps=None, fee=None, stop_loss=None, take_profit=None, setup=None, outcome=None, lessons=None, timeframe=None, signal_source_agent=None, consensus_status=None, adaptive_weight=None, adaptive_score=None):
+        """Persist a new trade record into the database."""
         trade = Trade(
-            exchange=str(exchange or "").lower() or None,
-            order_id=str(order_id) if order_id is not None else None,
-            symbol=str(symbol),
-            side=str(side),
-            source=str(source) if source is not None else None,
-            order_type=str(order_type) if order_type is not None else None,
-            status=str(status) if status is not None else None,
-            quantity=float(quantity),
-            price=float(price),
+            exchange=self._normalize_exchange(exchange),
+            order_id=self._normalize_text(order_id),
+            symbol=self._normalize_text(symbol),
+            side=self._normalize_text(side),
+            source=self._normalize_text(source),
+            order_type=self._normalize_text(order_type),
+            status=self._normalize_text(status),
+            quantity=self._normalize_float(quantity),
+            price=self._normalize_float(price),
             pnl=self._normalize_float(pnl),
-            strategy_name=str(strategy_name) if strategy_name is not None else None,
-            reason=str(reason) if reason is not None else None,
+            strategy_name=self._normalize_text(strategy_name),
+            reason=self._normalize_text(reason),
             confidence=self._normalize_float(confidence),
             expected_price=self._normalize_float(expected_price),
             spread_bps=self._normalize_float(spread_bps),
@@ -79,8 +84,9 @@ class TradeRepository:
             return trade
 
     def save_or_update_trade(self, symbol, side, quantity, price, exchange=None, order_id=None, order_type=None, status=None, timestamp=None, source=None, pnl=None, strategy_name=None, reason=None, confidence=None, expected_price=None, spread_bps=None, slippage_bps=None, fee=None, stop_loss=None, take_profit=None, setup=None, outcome=None, lessons=None, timeframe=None, signal_source_agent=None, consensus_status=None, adaptive_weight=None, adaptive_score=None):
-        normalized_exchange = str(exchange or "").lower() or None
-        normalized_order_id = str(order_id) if order_id is not None else None
+        """Insert a trade record or update an existing trade with the same order ID."""
+        normalized_exchange = self._normalize_exchange(exchange)
+        normalized_order_id = self._normalize_text(order_id)
 
         with storage_db.SessionLocal() as session:
             trade = None
@@ -97,16 +103,16 @@ class TradeRepository:
 
             trade.exchange = normalized_exchange
             trade.order_id = normalized_order_id
-            trade.symbol = str(symbol)
-            trade.side = str(side)
-            trade.source = str(source) if source is not None else None
-            trade.order_type = str(order_type) if order_type is not None else None
-            trade.status = str(status) if status is not None else None
-            trade.quantity = float(quantity)
-            trade.price = float(price)
+            trade.symbol = self._normalize_text(symbol)
+            trade.side = self._normalize_text(side)
+            trade.source = self._normalize_text(source)
+            trade.order_type = self._normalize_text(order_type)
+            trade.status = self._normalize_text(status)
+            trade.quantity = self._normalize_float(quantity)
+            trade.price = self._normalize_float(price)
             trade.pnl = self._normalize_float(pnl)
-            trade.strategy_name = str(strategy_name) if strategy_name is not None else None
-            trade.reason = str(reason) if reason is not None else None
+            trade.strategy_name = self._normalize_text(strategy_name)
+            trade.reason = self._normalize_text(reason)
             trade.confidence = self._normalize_float(confidence)
             trade.expected_price = self._normalize_float(expected_price)
             trade.spread_bps = self._normalize_float(spread_bps)
@@ -140,8 +146,9 @@ class TradeRepository:
         outcome=None,
         lessons=None,
     ):
-        normalized_exchange = str(exchange or "").lower() or None
-        normalized_order_id = str(order_id) if order_id is not None else None
+        """Update journal fields for an existing trade record."""
+        normalized_exchange = self._normalize_exchange(exchange)
+        normalized_order_id = self._normalize_text(order_id)
 
         with storage_db.SessionLocal() as session:
             trade = None
@@ -168,6 +175,7 @@ class TradeRepository:
             return trade
 
     def _normalize_timestamp(self, value):
+        """Normalize timestamp values into UTC-naive datetime objects."""
         if value is None:
             return datetime.now(timezone.utc).replace(tzinfo=None)
         if isinstance(value, datetime):
@@ -184,7 +192,7 @@ class TradeRepository:
 
         text_value = str(value).strip()
         if text_value.endswith("Z"):
-            text_value = text_value[:-1] + "+00:00"
+            text_value = f"{text_value[:-1]}+00:00"
         try:
             parsed = datetime.fromisoformat(text_value)
         except ValueError:
@@ -195,6 +203,7 @@ class TradeRepository:
         return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
     def _normalize_float(self, value):
+        """Convert a value to float, returning None for invalid inputs."""
         if value in (None, ""):
             return None
         try:
@@ -203,22 +212,35 @@ class TradeRepository:
             return None
 
     def _normalize_text(self, value):
+        """Convert a value to trimmed text, returning None for empty strings."""
         if value is None:
             return None
         text = str(value).strip()
         return text or None
 
-    def get_trades(self, limit=200):
+    def _normalize_exchange(self, value):
+        """Normalize exchange names to lowercase text."""
+        normalized = self._normalize_text(value)
+        if normalized is None:
+            return None
+        return normalized.lower()
+
+    def get_trades(self, limit=200, exchange=None):
+        """Return recent trades, optionally filtered by exchange."""
+        normalized_exchange = self._normalize_exchange(exchange)
         with storage_db.SessionLocal() as session:
-            stmt = select(Trade).order_by(Trade.timestamp.desc(), Trade.id.desc()).limit(int(limit))
+            stmt = select(Trade)
+            if normalized_exchange:
+                stmt = stmt.where(Trade.exchange == normalized_exchange)
+            stmt = stmt.order_by(Trade.timestamp.desc(), Trade.id.desc()).limit(int(limit))
             return list(session.execute(stmt).scalars().all())
 
-    def get_by_symbol(self, symbol, limit=200):
+    def get_by_symbol(self, symbol, limit=200, exchange=None):
+        """Return recent trades for a symbol, optionally filtered by exchange."""
+        normalized_exchange = self._normalize_exchange(exchange)
         with storage_db.SessionLocal() as session:
-            stmt = (
-                select(Trade)
-                .where(Trade.symbol == str(symbol))
-                .order_by(Trade.timestamp.desc(), Trade.id.desc())
-                .limit(int(limit))
-            )
+            stmt = select(Trade).where(Trade.symbol == self._normalize_text(symbol))
+            if normalized_exchange:
+                stmt = stmt.where(Trade.exchange == normalized_exchange)
+            stmt = stmt.order_by(Trade.timestamp.desc(), Trade.id.desc()).limit(int(limit))
             return list(session.execute(stmt).scalars().all())

@@ -17,6 +17,7 @@ class PaperBroker(BaseBroker, ABC):
         self.controller = controller
         self.config = controller
         self.logger = getattr(controller, "logger", None) or logging.getLogger("PaperBroker")
+        self.exchange_name = "paper"
 
         self.balance = getattr(controller, "paper_balance", None)
         if self.balance is None:
@@ -333,15 +334,32 @@ class PaperBroker(BaseBroker, ABC):
             "asks": [[ticker["ask"], 0.0]],
         }
 
-    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100, start_time=None, end_time=None):
+        fetch_kwargs = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "limit": limit,
+        }
+        if start_time is not None or end_time is not None:
+            fetch_kwargs["start_time"] = start_time
+            fetch_kwargs["end_time"] = end_time
         rows = await self._call_market_data(
             "fetch_ohlcv",
             routing_symbol=symbol,
             empty_values=(None, []),
-            symbol=symbol,
-            timeframe=timeframe,
-            limit=limit,
+            **fetch_kwargs,
         )
+        if not rows and (start_time is not None or end_time is not None):
+            # Some lightweight test doubles and older adapters only accept the
+            # legacy fetch_ohlcv(symbol, timeframe, limit) signature.
+            rows = await self._call_market_data(
+                "fetch_ohlcv",
+                routing_symbol=symbol,
+                empty_values=(None, []),
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=limit,
+            )
         if rows:
             return rows
 
@@ -350,6 +368,9 @@ class PaperBroker(BaseBroker, ABC):
             frame = symbol_bucket.get(timeframe)
             if frame is not None and hasattr(frame, "values"):
                 rows = frame.values.tolist()
+                filter_rows = getattr(self.controller, "_filter_ohlcv_rows_by_time_range", None)
+                if callable(filter_rows) and (start_time is not None or end_time is not None):
+                    rows = filter_rows(rows, start_time=start_time, end_time=end_time)
                 return rows[-limit:]
         return []
 

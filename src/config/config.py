@@ -1,5 +1,24 @@
-from pydantic import BaseModel, Field
 from typing import Optional
+
+try:
+    from pydantic import BaseModel, Field
+except ImportError:  # pragma: no cover - lightweight fallback for stripped test environments
+    class BaseModel:
+        def __init__(self, **kwargs):
+            annotations = getattr(self.__class__, "__annotations__", {})
+            for field_name in annotations:
+                if field_name in kwargs:
+                    value = kwargs[field_name]
+                else:
+                    value = getattr(self.__class__, field_name)
+                    if isinstance(value, dict):
+                        value = dict(value)
+                setattr(self, field_name, value)
+
+    def Field(default=None, description=None, default_factory=None):
+        if default_factory is not None:
+            return default_factory()
+        return default
 
 
 # ==========================================
@@ -8,13 +27,13 @@ from typing import Optional
 
 class BrokerConfig(BaseModel):
 
-    type: str = Field(..., description="crypto / forex / stocks / paper")
+    type: str = Field(..., description="crypto / forex / stocks / options / futures / derivatives / paper")
 
 
 
     exchange: Optional[str] = Field(
         default=None,
-        description="Exchange name (binance, coinbase, stellar, alpaca, oanda)"
+        description="Exchange or broker name (binance, coinbase, stellar, alpaca, oanda, schwab, ibkr, amp, tradovate)"
     )
 
     customer_region: Optional[str] = Field(
@@ -30,6 +49,7 @@ class BrokerConfig(BaseModel):
     api_key: Optional[str] = None
     secret: Optional[str] = None
     password: Optional[str] = None
+    username: Optional[str] = None
     passphrase: Optional[str] = None
     uid: Optional[str] = None
     account_id: Optional[str] = None
@@ -37,7 +57,8 @@ class BrokerConfig(BaseModel):
     timeout: int = 30000
     options: dict = Field(default_factory=dict)
     params: dict = Field(default_factory=dict)
-    close: float = Field( default=None,
+    close: Optional[float] = Field(
+        default=None,
         description="Close broker"
     )
 
@@ -117,10 +138,9 @@ config = AppConfig(
 
     system=SystemConfig(
         limit=50000,
-        rate_limit=30
+        rate_limit=30,
+        timeframe="1h"
     ),
 
     strategy="LSTM",
-
-    time_frame="1h"
 )

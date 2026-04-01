@@ -268,7 +268,7 @@ def test_refresh_manual_trade_ticket_updates_quick_side_labels_for_stop_limit():
     assert window._manual_trade_sell_limit_btn.text() == "Sell Stop Limit"
 
 
-def test_populate_manual_trade_ticket_sets_prefill_and_hint():
+def test_populate_manual_trade_ticket_keeps_sl_tp_optional_and_sets_hint():
     window = _manual_trade_window()
     state = {"refreshed": 0}
     fake = SimpleNamespace(
@@ -287,7 +287,6 @@ def test_populate_manual_trade_ticket_sets_prefill_and_hint():
             "timeframe": "1h",
         },
         _default_entry_price_for_symbol=lambda symbol, side="buy": 1.2345,
-        _suggest_manual_trade_levels=lambda symbol, side="buy", entry_price=None: (1.2345, 1.228, 1.247),
         _refresh_manual_trade_ticket=lambda _window: state.__setitem__("refreshed", state["refreshed"] + 1),
     )
 
@@ -299,9 +298,10 @@ def test_populate_manual_trade_ticket_sets_prefill_and_hint():
     assert window._manual_trade_quantity_picker.currentText() == "Lots"
     assert window._manual_trade_amount_input.value() == 0.5
     assert window._manual_trade_price_input.text() == "1.2345"
-    assert window._manual_trade_stop_loss_input.text() == "1.228"
-    assert window._manual_trade_take_profit_input.text() == "1.247"
+    assert window._manual_trade_stop_loss_input.text() == ""
+    assert window._manual_trade_take_profit_input.text() == ""
     assert "Chart captured EUR/USD at 1.234500." in window._manual_trade_hint.text()
+    assert "Stop loss and take profit are optional." in window._manual_trade_hint.text()
     assert state["refreshed"] == 1
 
 

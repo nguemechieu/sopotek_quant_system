@@ -23,7 +23,7 @@ def timeframe_to_seconds(timeframe: str) -> int:
     """
     Convert timeframe string to seconds
     """
-    return TIMEFRAME_MAP.get(timeframe)
+    return int(TIMEFRAME_MAP.get(timeframe))
 
 
 def timeframe_to_timedelta(timeframe: str) -> timedelta:

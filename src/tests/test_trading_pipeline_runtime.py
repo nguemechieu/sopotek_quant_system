@@ -15,13 +15,15 @@ from worker.symbol_worker import SymbolWorker
 
 
 class DummyBroker:
-    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+    hedging_supported = False
+
+    async def fetch_ohlcv(self, _symbol, _timeframe="1h", _limit=100):
         return []
 
     async def fetch_balance(self):
         return {"total": {"USDT": 10000}}
 
-    async def create_order(self, *args, **kwargs):
+    async def create_order(self, *_, **__):
         return {"status": "filled"}
 
 
@@ -35,10 +37,10 @@ class CleanupBroker(DummyBroker):
         self.orders = list(orders or [])
         self.canceled = []
 
-    async def fetch_positions(self, symbols=None):
+    async def fetch_positions(self, _symbols=None):
         return list(self.positions)
 
-    async def fetch_open_orders(self, symbol=None, limit=None):
+    async def fetch_open_orders(self, _symbol=None, _limit=None):
         return list(self.orders)
 
     async def cancel_order(self, order_id, symbol=None):
@@ -62,10 +64,10 @@ class FakeDataset:
         self.empty = frame.empty
 
     def to_candles(self):
-        rows = []
-        for row in self.frame.itertuples(index=False):
-            rows.append([row.timestamp, row.open, row.high, row.low, row.close, row.volume])
-        return rows
+        return [
+            [row.timestamp, row.open, row.high, row.low, row.close, row.volume]
+            for row in self.frame.itertuples(index=False)
+        ]
 
 
 def _sample_frame():
@@ -125,10 +127,10 @@ def test_symbol_worker_fallback_uses_trading_system_process_signal(monkeypatch):
         worker.running = False
         return None
 
-    async def fake_fetch_ohlcv(_symbol, timeframe="1h", limit=100):
+    async def fake_fetch_ohlcv(_symbol, _timeframe="1h", _limit=100):
         return [[1, 100.0, 101.0, 99.0, 100.5, 10.0]]
 
-    async def fake_process_signal(symbol, signal, timeframe=None):
+    async def fake_process_signal(symbol, signal, timeframe=None, regime_snapshot=None, portfolio_snapshot=None):
         calls.append(
             {
                 "symbol": symbol,
@@ -208,29 +210,36 @@ def test_sopotek_trading_process_symbol_routes_through_central_pipeline():
     trading = SopotekTrading(controller=controller)
     dataset = FakeDataset(_sample_frame())
 
-    async def fake_get_symbol_dataset(**kwargs):
-        assert kwargs["symbol"] == "BTC/USDT"
-        assert kwargs["timeframe"] == "15m"
-        assert kwargs["limit"] == 50
+    async def fake_get_symbol_dataset(request=None, **kwargs):
+        if request:
+            captured.update(vars(request))
+        captured.update(kwargs)
+        assert captured["symbol"] == "BTC/USDT"
+        assert captured["timeframe"] == "15m"
+        assert captured["limit"] == 50
         return dataset
 
     captured = {}
 
-    async def fake_process_signal(symbol, signal, dataset=None):
+    async def fake_process_signal(symbol, signal, dataset=None, timeframe=None, regime_snapshot=None, portfolio_snapshot=None):
         captured["symbol"] = symbol
         captured["signal"] = dict(signal)
         captured["dataset"] = dataset
         return {"status": "filled", "reason": "submitted"}
 
     trading.data_hub.get_symbol_dataset = fake_get_symbol_dataset
-    trading.signal_engine.generate_signal = lambda **kwargs: {
-        "symbol": "BTC/USDT",
-        "side": "buy",
-        "amount": 0.25,
-        "confidence": 0.78,
-        "reason": "breakout detected",
-        "strategy_name": "Trend Following",
-    }
+
+    def fake_generate_signal(candles=None, dataset=None, strategy_name=None, symbol=None):
+        return {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "amount": 0.25,
+            "confidence": 0.78,
+            "reason": "breakout detected",
+            "strategy_name": "Trend Following",
+        }
+
+    trading.signal_engine.generate_signal = fake_generate_signal
     trading.process_signal = fake_process_signal
 
     result = asyncio.run(trading.process_symbol("BTC/USDT", timeframe="15m", limit=50))
@@ -275,23 +284,23 @@ def test_sopotek_trading_process_symbol_uses_symbol_assigned_strategy_variants()
 
     chosen = {}
 
-    async def fake_process_signal(symbol, signal, dataset=None):
+    async def fake_process_signal(symbol, signal, dataset=None, timeframe=None, regime_snapshot=None, portfolio_snapshot=None):
         chosen["symbol"] = symbol
         chosen["signal"] = dict(signal)
         return {"status": "filled"}
 
     calls = []
 
-    def fake_generate_signal(**kwargs):
-        calls.append(kwargs["strategy_name"])
-        if kwargs["strategy_name"] == "EMA Cross | London Session Aggressive":
+    def fake_generate_signal(candles=None, dataset=None, strategy_name=None, symbol=None):
+        calls.append(strategy_name)
+        if strategy_name == "EMA Cross | London Session Aggressive":
             return {
                 "symbol": "EUR/USD",
                 "side": "buy",
                 "amount": 0.5,
                 "confidence": 0.72,
                 "reason": "assigned strategy fired",
-                "strategy_name": kwargs["strategy_name"],
+                "strategy_name": strategy_name,
             }
         return None
 

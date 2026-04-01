@@ -15,6 +15,7 @@ from execution.execution_manager import ExecutionManager
 from execution.order_router import OrderRouter
 from storage import database as storage_db
 from storage.market_data_repository import MarketDataRepository
+from storage.trade_audit_repository import TradeAuditRepository
 from storage.trade_repository import TradeRepository
 
 
@@ -198,6 +199,50 @@ def test_market_data_repository_skips_invalid_rows_and_repairs_ohlc_bounds():
     assert candles[1][1:6] == [104.0, 108.0, 102.0, 107.0, 0.0]
 
 
+def test_trade_audit_repository_records_recent_events():
+    repo = TradeAuditRepository()
+
+    repo.record_event(
+        action="submit_attempt",
+        status="pending",
+        exchange="coinbase",
+        account_label="Primary",
+        symbol="BTC/USD:USD",
+        requested_symbol="BTC/USD",
+        side="buy",
+        order_type="limit",
+        venue="derivative",
+        source="manual",
+        message="Pre-trade review accepted.",
+        payload={"reference_price": 105.0},
+        timestamp="2026-03-17T09:30:00+00:00",
+    )
+    repo.record_event(
+        action="submit_success",
+        status="filled",
+        exchange="coinbase",
+        account_label="Primary",
+        symbol="BTC/USD:USD",
+        requested_symbol="BTC/USD",
+        side="buy",
+        order_type="limit",
+        venue="derivative",
+        source="manual",
+        order_id="order-789",
+        message="Order was accepted by the broker.",
+        payload={"order_id": "order-789", "status": "filled"},
+        timestamp="2026-03-17T09:31:00+00:00",
+    )
+
+    rows = repo.get_recent(limit=5)
+
+    assert len(rows) == 2
+    assert rows[0].action == "submit_success"
+    assert rows[0].order_id == "order-789"
+    assert rows[0].requested_symbol == "BTC/USD"
+    assert '"status": "filled"' in str(rows[0].payload_json or "")
+
+
 def test_execution_manager_persists_trade_history():
     broker = MockBroker()
     bus = EventBus()
@@ -312,6 +357,37 @@ def test_trade_repository_round_trips_trade_journal_fields():
     assert stored.setup == "Retest after breakout candle close"
     assert stored.outcome == "Strong win"
     assert stored.lessons == "Wait for retest instead of chasing first impulse."
+
+
+def test_trade_repository_filters_trade_history_by_exchange():
+    repo = TradeRepository()
+
+    repo.save_trade(
+        symbol="BTC/USDT",
+        side="BUY",
+        quantity=0.1,
+        price=100.0,
+        exchange="paper",
+        order_id="paper-1",
+        status="filled",
+    )
+    repo.save_trade(
+        symbol="BTC/USDT",
+        side="BUY",
+        quantity=0.2,
+        price=101.0,
+        exchange="coinbase",
+        order_id="coinbase-1",
+        status="filled",
+    )
+
+    paper_rows = repo.get_trades(limit=10, exchange="paper")
+    coinbase_rows = repo.get_trades(limit=10, exchange="coinbase")
+
+    assert len(paper_rows) == 1
+    assert paper_rows[0].order_id == "paper-1"
+    assert len(coinbase_rows) == 1
+    assert coinbase_rows[0].order_id == "coinbase-1"
 
 
 def test_database_runtime_reconfiguration_switches_repository_backend():

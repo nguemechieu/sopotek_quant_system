@@ -1,13 +1,16 @@
+"""Simple model training pipeline for quant ML experiments."""
+
 import pandas as pd
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
-from sopotek_trading.quant.ml.model_manager import ModelManager
+from src.quant.ml.model_manager import ModelManager
 
 
 class TrainingPipeline:
+    """Model lifecycle helper for dataset preparation, training, and persistence."""
 
     def __init__(self):
         self.model_manager = ModelManager()

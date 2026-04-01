@@ -18,6 +18,7 @@
 - market data currently uses polling in this application
 - position/account data is normalized for the position analysis window
 - rejected orders such as insufficient-margin responses are surfaced back into the app flow
+- manual FX order sizing now uses available account balance, free margin, and equity safeguards before submission instead of requiring spot-style quote inventory
 - empty latest-candle responses now retry against an explicit recent time window before the adapter gives up
 - forex candle source can be aligned to `Bid`, `Mid`, or `Ask`, with midpoint fallback used when a requested bid or ask series comes back empty
 
@@ -91,6 +92,8 @@ Manual trading now uses broker and symbol metadata where available to normalize:
 - entry price precision
 - stop-loss precision
 - take-profit precision
+- balance, margin, and equity-aware live size caps before submission
+- one smaller retry after insufficient-funds or insufficient-margin rejections on manual orders when a fresh safe size can be derived
 
 This matters especially when switching between forex, crypto, and stock-style brokers.
 
@@ -119,6 +122,7 @@ Validate these items per broker before trusting live routing:
 2. symbol format
 3. minimum size and precision
 4. available balance or margin
+   the app now uses this during preflight sizing, but broker-side limits still remain authoritative
 5. order type support
 6. open-order query support
 7. cancel-order support

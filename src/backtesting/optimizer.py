@@ -4,7 +4,6 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
-
 from backtesting.backtest_engine import BacktestEngine
 from backtesting.experiment_tracker import ExperimentTracker
 from backtesting.report_generator import ReportGenerator
@@ -12,17 +11,27 @@ from backtesting.simulator import Simulator
 
 
 class StrategyOptimizer:
+    """Hyperparameter optimizer for trading strategy backtests."""
+
     def __init__(self, strategy, initial_balance=10000):
+        """Create an optimizer for a base strategy.
+
+        Args:
+            strategy: A strategy object or strategy registry used by BacktestEngine.
+            initial_balance: Starting equity for each backtest run.
+        """
         self.strategy = strategy
-        self.initial_balance = float(initial_balance)
+        self.initial_balance: float = float(initial_balance) if initial_balance is not None else 10000.0
         self.experiment_tracker = ExperimentTracker()
 
     def _resolve_strategy(self, strategy_name=None):
+        """Resolve a concrete strategy instance for a given strategy name."""
         if hasattr(self.strategy, "_resolve_strategy"):
             return self.strategy._resolve_strategy(strategy_name)
         return self.strategy
 
     def _clone_strategy(self, base_strategy):
+        """Return a deep copy of a strategy, falling back to a constructor copy if needed."""
         try:
             return copy.deepcopy(base_strategy)
         except Exception:
@@ -36,6 +45,7 @@ class StrategyOptimizer:
             return clone
 
     def default_param_grid(self, strategy_name=None):
+        """Generate a default hyperparameter grid for optimizer search."""
         base = self._resolve_strategy(strategy_name)
 
         def around(value, offsets, minimum):
@@ -59,6 +69,7 @@ class StrategyOptimizer:
         }
 
     def _param_rows(self, param_grid):
+        """Yield valid hyperparameter combinations from a parameter grid."""
         keys = list(param_grid.keys())
         values = [list(param_grid[key]) for key in keys]
         for combo in itertools.product(*values):
@@ -68,6 +79,7 @@ class StrategyOptimizer:
             yield params
 
     def _resolve_max_workers(self, job_count, max_workers=None):
+        """Resolve the number of worker threads to use for parallel evaluation."""
         total_jobs = max(0, int(job_count or 0))
         if total_jobs <= 1:
             return 1
@@ -86,6 +98,7 @@ class StrategyOptimizer:
         commission_bps,
         slippage_bps,
     ):
+        """Evaluate a single hyperparameter combination and return the result row."""
         strategy_instance = self._clone_strategy(self._resolve_strategy(strategy_name))
         for key, value in params.items():
             setattr(strategy_instance, key, value)
@@ -130,6 +143,7 @@ class StrategyOptimizer:
         experiment_name=None,
         max_workers=None,
     ):
+        """Run a parameter search and return a ranked results DataFrame."""
         grid = param_grid or self.default_param_grid(strategy_name)
         param_rows = list(self._param_rows(grid))
         worker_count = self._resolve_max_workers(len(param_rows), max_workers=max_workers)
@@ -185,11 +199,15 @@ class StrategyOptimizer:
             return pd.DataFrame()
 
         results = pd.DataFrame(rows)
-        sort_columns = [
+        if sort_columns := [
             column
-            for column in ["total_profit", "sharpe_ratio", "final_equity", "win_rate"]
+            for column in [
+                "total_profit",
+                "sharpe_ratio",
+                "final_equity",
+                "win_rate",
+            ]
             if column in results.columns
-        ]
-        if sort_columns:
+        ]:
             results = results.sort_values(sort_columns, ascending=False).reset_index(drop=True)
         return results

@@ -49,9 +49,9 @@ DOCUMENTATION_HTML = """
             <p>The optimization table ranks results by performance metrics. Use <b>Apply Best Params</b> to push the top result into the active strategy object.</p>
             <p>Optimization depends on historical candle data being available for the active chart.</p>
 
-            <h3>9. Settings and Risk Controls</h3>
-            <p>The <b>Settings</b> menu is the main configuration area for trading defaults, chart behavior, refresh intervals, backtesting capital, and all risk limits.</p>
-            <p>Portfolio exposure is also available from <b>Settings</b> so you can keep configuration and risk context in one place.</p>
+            <h3>9. Settings and Risk Menus</h3>
+            <p>Use the <b>Settings</b> menu for trading defaults, chart behavior, refresh intervals, backtesting capital, storage, and integrations.</p>
+            <p>Use the <b>Risk</b> menu for risk settings, portfolio exposure, position analysis, and the rest of the risk-control workflow.</p>
 
             <h3>10. Tools Windows</h3>
             <p>The <b>Tools</b> menu opens detached utility windows so you can keep charts large while monitoring logs, AI signals, and performance analytics in parallel.</p>

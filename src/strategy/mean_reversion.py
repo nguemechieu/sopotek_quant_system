@@ -5,10 +5,12 @@ from event_bus.event_types import EventType
 
 
 class MeanReversionStrategy(BaseStrategy):
+    
 
     def __init__(self, event_bus):
 
         super().__init__(event_bus)
+        
 
         self.prices = []
 

@@ -1,3 +1,10 @@
+"""Repository layer for storing and querying agent decision history.
+
+This module defines the SQLAlchemy model used to persist agent decisions and
+provides repository helpers for saving decisions, filtering recent records, and
+reconstructing the latest decision chain for a symbol.
+"""
+
 import json
 from datetime import datetime, timezone
 
@@ -7,6 +14,7 @@ from storage import database as storage_db
 
 
 class AgentDecision(storage_db.Base):
+    """SQLAlchemy model representing a single agent decision record."""
     __tablename__ = "agent_decisions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -27,6 +35,13 @@ class AgentDecision(storage_db.Base):
 
 
 class AgentDecisionRepository:
+    """Repository for persisting and retrieving agent decision records.
+
+    This class normalizes input values, stores decisions in the database, and
+    exposes helper methods to query recent decisions and reconstruct the latest
+    decision chain for a symbol.
+    """
+
     def save_decision(
         self,
         agent_name,
@@ -44,6 +59,7 @@ class AgentDecisionRepository:
         payload=None,
         timestamp=None,
     ):
+        """Persist an agent decision and return the saved database row."""
         row = AgentDecision(
             decision_id=str(decision_id or "").strip() or None,
             exchange=str(exchange or "").lower() or None,
@@ -68,6 +84,7 @@ class AgentDecisionRepository:
             return row
 
     def get_decisions(self, limit=200, symbol=None, decision_id=None, exchange=None, account_label=None):
+        """Return recent agent decisions filtered by optional identifiers."""
         with storage_db.SessionLocal() as session:
             stmt = select(AgentDecision)
             normalized_symbol = str(symbol or "").strip().upper() or None
@@ -86,6 +103,12 @@ class AgentDecisionRepository:
             return list(session.execute(stmt).scalars().all())
 
     def latest_chain_for_symbol(self, symbol, limit=50, exchange=None, account_label=None):
+        """Return the most recent decision chain for the provided symbol.
+
+        If decision records include a shared `decision_id`, the chain is built using
+        that identifier. Otherwise the chain is reconstructed from the newest symbol
+        entries.
+        """
         rows = self.get_decisions(limit=max(int(limit) * 4, 100), symbol=symbol, exchange=exchange, account_label=account_label)
         if not rows:
             return []
@@ -99,6 +122,7 @@ class AgentDecisionRepository:
         return chain[-max(1, int(limit)):]
 
     def _normalize_timestamp(self, value):
+        """Normalize input into a UTC naive datetime for storage."""
         if value is None:
             return datetime.now(timezone.utc).replace(tzinfo=None)
         if isinstance(value, datetime):
@@ -124,6 +148,7 @@ class AgentDecisionRepository:
         return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
     def _normalize_float(self, value):
+        """Convert a value to float, returning None for invalid inputs."""
         if value in (None, ""):
             return None
         try:
@@ -132,17 +157,20 @@ class AgentDecisionRepository:
             return None
 
     def _normalize_bool(self, value):
+        """Normalize boolean-like values to integer storage values 1 or 0."""
         if value in (None, ""):
             return None
         return 1 if bool(value) else 0
 
     def _normalize_text(self, value):
+        """Trim text values and treat empty strings as None."""
         if value is None:
             return None
         text = str(value).strip()
         return text or None
 
     def _normalize_payload(self, payload):
+        """Serialize payload values to JSON text with a fallback for unsupported types."""
         if payload in (None, ""):
             return None
         try:

@@ -5,6 +5,7 @@ class StrategyRegistry:
 
     def __init__(self):
         self.strategies = {}
+        self._definitions = {}
         self.active_name = None
         self.default_strategy = Strategy()
         self._register_builtin_strategies()
@@ -14,21 +15,33 @@ class StrategyRegistry:
             name = str(definition.get("name") or "").strip()
             if not name:
                 continue
-            if name not in self.strategies:
-                strategy = Strategy(strategy_name=name)
-                params = dict(definition.get("params") or {})
-                if params:
-                    strategy.apply_parameters(**params)
-                self.register(name, strategy)
+            self._definitions.setdefault(name, dict(definition))
+            if self.active_name is None:
+                self.active_name = name
+
+    def _instantiate_strategy(self, name):
+        normalized = Strategy.normalize_strategy_name(name)
+        definition = self._definitions.get(normalized)
+        if definition is None:
+            return None
+
+        strategy = Strategy(strategy_name=normalized)
+        params = dict(definition.get("params") or {})
+        if params:
+            strategy.apply_parameters(**params)
+        self.strategies[normalized] = strategy
+        return strategy
 
     # ===============================
     # REGISTER
     # ===============================
 
     def register(self, name, strategy):
-        self.strategies[name] = strategy
+        normalized = Strategy.normalize_strategy_name(name)
+        self._definitions[normalized] = Strategy.strategy_definition(normalized)
+        self.strategies[normalized] = strategy
         if self.active_name is None:
-            self.active_name = name
+            self.active_name = normalized
 
     # ===============================
     # GET STRATEGY
@@ -36,18 +49,21 @@ class StrategyRegistry:
 
     def get(self, name):
         normalized = Strategy.normalize_strategy_name(name)
-        return self.strategies.get(normalized)
+        strategy = self.strategies.get(normalized)
+        if strategy:
+            return strategy
+        return self._instantiate_strategy(normalized)
 
     # ===============================
     # LIST STRATEGIES
     # ===============================
 
     def list(self):
-        return list(self.strategies.keys())
+        return list(self._definitions.keys())
 
     def set_active(self, name):
         normalized = Strategy.normalize_strategy_name(name)
-        if normalized in self.strategies:
+        if normalized in self._definitions or normalized in self.strategies:
             self.active_name = normalized
 
     def configure(self, strategy_name=None, params=None):
@@ -62,18 +78,19 @@ class StrategyRegistry:
 
     def _resolve_strategy(self, strategy_name=None):
         normalized = Strategy.normalize_strategy_name(strategy_name) if strategy_name else None
-        if normalized and normalized in self.strategies:
-            selected = self.strategies[normalized]
+        if normalized:
+            selected = self.get(normalized)
             if selected is not self:
                 return selected
 
-        if self.active_name and self.active_name in self.strategies:
-            selected = self.strategies[self.active_name]
+        if self.active_name:
+            selected = self.get(self.active_name)
             if selected is not self:
                 return selected
 
-        if self.strategies:
-            first = next(iter(self.strategies.values()))
+        if self._definitions:
+            first_name = next(iter(self._definitions.keys()))
+            first = self.get(first_name)
             if first is not self:
                 return first
 

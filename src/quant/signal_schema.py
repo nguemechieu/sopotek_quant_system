@@ -4,6 +4,18 @@ from typing import Any
 
 @dataclass
 class SignalDecision:
+    """A normalized signal decision payload for trading and scoring.
+
+    Attributes:
+        side: The trading direction, e.g. "buy" or "sell".
+        amount: The proposed trade size amount.
+        confidence: The signal confidence score.
+        reason: A human-readable explanation for the signal.
+        price: Optional execution price for the signal.
+        regime: Market regime label assigned by the signal engine.
+        feature_version: Feature pipeline version metadata.
+        metadata: Additional arbitrary metadata to include in the payload.
+    """
     side: str
     amount: float
     confidence: float
@@ -14,6 +26,7 @@ class SignalDecision:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the signal decision to a normalized dictionary."""
         payload = {
             "side": str(self.side or "").lower(),
             "amount": float(self.amount or 0.0),

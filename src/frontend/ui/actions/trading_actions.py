@@ -18,6 +18,15 @@ def close_all_positions(terminal):
     if confirm != QMessageBox.StandardButton.Yes:
         return
 
+    controller = getattr(terminal, "controller", None)
+    if controller is not None and hasattr(controller, "queue_trade_audit"):
+        controller.queue_trade_audit(
+            "close_all_positions_requested",
+            status="pending",
+            source="terminal",
+            message="Operator requested close-all positions from the terminal.",
+        )
+
     asyncio.get_event_loop().create_task(terminal._close_all_positions_async())
 
 
@@ -68,6 +77,15 @@ def cancel_all_orders(terminal):
     )
     if confirm != QMessageBox.StandardButton.Yes:
         return
+
+    controller = getattr(terminal, "controller", None)
+    if controller is not None and hasattr(controller, "queue_trade_audit"):
+        controller.queue_trade_audit(
+            "cancel_all_orders_requested",
+            status="pending",
+            source="terminal",
+            message="Operator requested cancel-all orders from the terminal.",
+        )
 
     asyncio.get_event_loop().create_task(terminal._cancel_all_orders_async())
 
@@ -125,6 +143,15 @@ async def close_all_positions_async(terminal, show_dialog=True):
             return
 
         terminal.system_console.log(f"Closed {count} position(s).", "INFO")
+        controller = getattr(terminal, "controller", None)
+        if controller is not None and hasattr(controller, "queue_trade_audit"):
+            controller.queue_trade_audit(
+                "close_positions_success",
+                status="submitted",
+                source="terminal",
+                message=f"Submitted {count} close order(s).",
+                payload={"count": count},
+            )
         if show_dialog:
             QMessageBox.information(
                 terminal,
@@ -134,6 +161,14 @@ async def close_all_positions_async(terminal, show_dialog=True):
     except Exception as exc:
         terminal.logger.exception("Close-all positions failed")
         terminal.system_console.log(f"Close positions failed: {exc}", "ERROR")
+        controller = getattr(terminal, "controller", None)
+        if controller is not None and hasattr(controller, "queue_trade_audit"):
+            controller.queue_trade_audit(
+                "close_positions_error",
+                status="error",
+                source="terminal",
+                message=str(exc),
+            )
         if show_dialog:
             QMessageBox.critical(terminal, "Close Positions Failed", str(exc))
 
@@ -155,6 +190,15 @@ async def cancel_all_orders_async(terminal, show_dialog=True):
             count = 0
 
         terminal.system_console.log(f"Canceled {count} open order(s).", "INFO")
+        controller = getattr(terminal, "controller", None)
+        if controller is not None and hasattr(controller, "queue_trade_audit"):
+            controller.queue_trade_audit(
+                "cancel_orders_success",
+                status="submitted",
+                source="terminal",
+                message="Canceled all open orders." if count else "No open orders were found.",
+                payload={"count": count},
+            )
         terminal._latest_open_orders_snapshot = []
         terminal._populate_open_orders_table(terminal._latest_open_orders_snapshot)
         terminal._schedule_open_orders_refresh()
@@ -167,5 +211,13 @@ async def cancel_all_orders_async(terminal, show_dialog=True):
     except Exception as exc:
         terminal.logger.exception("Cancel-all orders failed")
         terminal.system_console.log(f"Cancel orders failed: {exc}", "ERROR")
+        controller = getattr(terminal, "controller", None)
+        if controller is not None and hasattr(controller, "queue_trade_audit"):
+            controller.queue_trade_audit(
+                "cancel_orders_error",
+                status="error",
+                source="terminal",
+                message=str(exc),
+            )
         if show_dialog:
             QMessageBox.critical(terminal, "Cancel Orders Failed", str(exc))

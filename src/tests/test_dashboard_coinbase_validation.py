@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PySide6.QtWidgets import QApplication
 
+from broker.market_venues import supported_market_venues_for_profile
 from frontend.ui.dashboard import Dashboard
 
 
@@ -122,6 +123,10 @@ def _make_controller():
     )
 
 
+def _combo_texts(combo_box):
+    return [combo_box.itemText(index) for index in range(combo_box.count())]
+
+
 def test_dashboard_strategy_is_terminal_or_auto_managed(monkeypatch):
     _get_app()
     monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.list_accounts", lambda: [])
@@ -172,3 +177,106 @@ def test_dashboard_resolved_inputs_normalize_coinbase_json_bundle(monkeypatch):
     assert resolved["api_key"] == "2ffe3f58-d600-47a8-a147-1c55854eddc8"
     assert resolved["secret"].startswith("-----BEGIN EC PRIVATE KEY-----\n")
     assert resolved["secret"].endswith("\n-----END EC PRIVATE KEY-----\n")
+
+
+def test_dashboard_broker_type_list_includes_all_available_broker_families(monkeypatch):
+    _get_app()
+    monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.list_accounts", lambda: [])
+    dashboard = Dashboard(_make_controller())
+
+    assert _combo_texts(dashboard.exchange_type_box) == [
+        "crypto",
+        "forex",
+        "stocks",
+        "options",
+        "futures",
+        "derivatives",
+        "paper",
+    ]
+
+
+def test_dashboard_exchange_lists_include_derivative_broker_options(monkeypatch):
+    _get_app()
+    monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.list_accounts", lambda: [])
+    dashboard = Dashboard(_make_controller())
+
+    dashboard.exchange_type_box.setCurrentText("options")
+    assert _combo_texts(dashboard.exchange_box) == ["schwab"]
+
+    dashboard.exchange_type_box.setCurrentText("futures")
+    assert _combo_texts(dashboard.exchange_box) == ["ibkr", "amp", "tradovate"]
+
+    dashboard.exchange_type_box.setCurrentText("derivatives")
+    assert _combo_texts(dashboard.exchange_box) == ["ibkr", "schwab", "amp", "tradovate"]
+
+
+def test_supported_market_venues_cover_derivative_profiles():
+    assert supported_market_venues_for_profile("options", "schwab") == ["auto", "option"]
+    assert supported_market_venues_for_profile("futures", "tradovate") == ["auto", "derivative"]
+    assert supported_market_venues_for_profile("derivatives", "ibkr") == ["auto", "derivative", "option"]
+
+
+def test_dashboard_connect_emits_schwab_refresh_token_in_broker_options(monkeypatch):
+    _get_app()
+    monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.list_accounts", lambda: [])
+    controller = _make_controller()
+    emitted = []
+
+    dashboard = Dashboard(controller)
+    dashboard.login_requested.connect(emitted.append)
+    dashboard.exchange_type_box.setCurrentText("options")
+    dashboard.exchange_box.setCurrentText("schwab")
+    dashboard.mode_box.setCurrentText("paper")
+    dashboard.api_input.setText("client-id")
+    dashboard.secret_input.setText("client-secret")
+    dashboard.password_input.setText("refresh-token")
+    dashboard.account_id_input.setText("account-hash")
+
+    dashboard._on_connect()
+
+    assert len(emitted) == 1
+    broker = emitted[0].broker
+    assert broker.type == "options"
+    assert broker.exchange == "schwab"
+    assert broker.api_key == "client-id"
+    assert broker.secret == "client-secret"
+    assert broker.options["refresh_token"] == "refresh-token"
+    assert broker.options["account_hash"] == "account-hash"
+
+
+def test_dashboard_load_selected_account_maps_derivative_profile_fields(monkeypatch):
+    _get_app()
+    monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.list_accounts", lambda: [])
+    monkeypatch.setattr(
+        "frontend.ui.dashboard.CredentialManager.load_account",
+        lambda _name: {
+            "broker": {
+                "type": "futures",
+                "exchange": "tradovate",
+                "mode": "paper",
+                "password": "desk-pass",
+                "options": {
+                    "username": "desk-user",
+                    "market_type": "derivative",
+                },
+                "api_key": "company-id",
+                "secret": "security-code",
+            },
+            "risk": {"risk_percent": 1},
+        },
+    )
+    monkeypatch.setattr("frontend.ui.dashboard.CredentialManager.touch_account", lambda _name: None)
+    controller = _make_controller()
+
+    dashboard = Dashboard(controller)
+    dashboard.saved_account_box.addItem("tradovate_main")
+    dashboard.saved_account_box.setCurrentText("tradovate_main")
+
+    dashboard._load_selected_account("tradovate_main")
+
+    assert dashboard.exchange_type_box.currentText() == "futures"
+    assert dashboard.exchange_box.currentText() == "tradovate"
+    assert dashboard.api_input.text() == "desk-user"
+    assert dashboard.secret_input.text() == "desk-pass"
+    assert dashboard.password_input.text() == "company-id"
+    assert dashboard.account_id_input.text() == "security-code"

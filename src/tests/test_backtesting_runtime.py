@@ -202,11 +202,12 @@ def test_backtest_frame_range_check_detects_missing_selected_dates():
     )
 
 
-def test_backtest_required_history_limit_allows_up_to_fifty_thousand_bars():
+def test_backtest_required_history_limit_matches_selected_range_when_under_cap():
     terminal = SimpleNamespace(
         controller=SimpleNamespace(
             limit=50000,
-            _resolve_history_limit=lambda limit=None: max(100, min(int(limit or 50000), 50000)),
+            MAX_BACKTEST_HISTORY_LIMIT=1000000,
+            _resolve_backtest_history_limit=lambda limit=None: max(100, min(int(limit or 1000000), 1000000)),
         )
     )
 
@@ -217,7 +218,26 @@ def test_backtest_required_history_limit_allows_up_to_fifty_thousand_bars():
         QDate(2026, 3, 13),
     )
 
-    assert required_limit == 50000
+    assert required_limit == 103744
+
+
+def test_backtest_required_history_limit_caps_at_one_million_bars():
+    terminal = SimpleNamespace(
+        controller=SimpleNamespace(
+            limit=50000,
+            MAX_BACKTEST_HISTORY_LIMIT=1000000,
+            _resolve_backtest_history_limit=lambda limit=None: max(100, min(int(limit or 1000000), 1000000)),
+        )
+    )
+
+    required_limit = _hotfix_backtest_required_history_limit(
+        terminal,
+        "1m",
+        QDate(2020, 1, 1),
+        QDate(2026, 3, 13),
+    )
+
+    assert required_limit == 1000000
 
 
 def test_prepare_backtest_context_fetches_exchange_history_when_cache_range_is_too_small():
@@ -264,7 +284,7 @@ def test_prepare_backtest_context_fetches_exchange_history_when_cache_range_is_t
         _resolve_history_limit=lambda limit=None: int(limit or 1000),
     )
 
-    async def request_candle_data(symbol, timeframe="1h", limit=None, start_time=None, end_time=None):
+    async def request_candle_data(symbol, timeframe="1h", limit=None, start_time=None, end_time=None, history_scope="runtime"):
         fetch_calls.append(
             {
                 "symbol": symbol,
@@ -272,6 +292,7 @@ def test_prepare_backtest_context_fetches_exchange_history_when_cache_range_is_t
                 "limit": limit,
                 "start_time": start_time,
                 "end_time": end_time,
+                "history_scope": history_scope,
             }
         )
         controller.candle_buffers[symbol][timeframe] = full_frame
@@ -303,6 +324,7 @@ def test_prepare_backtest_context_fetches_exchange_history_when_cache_range_is_t
     assert fetch_calls[0]["timeframe"] == timeframe
     assert fetch_calls[0]["start_time"] == "2026-03-10T00:00:00+00:00"
     assert fetch_calls[0]["end_time"] == "2026-03-13T23:59:59.999999+00:00"
+    assert fetch_calls[0]["history_scope"] == "backtest"
     assert len(context["data"]) == 4
     assert str(context["start_date"]) == "2026-03-10"
     assert str(context["end_date"]) == "2026-03-13"

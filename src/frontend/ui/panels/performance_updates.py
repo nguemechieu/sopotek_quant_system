@@ -21,6 +21,37 @@ def performance_snapshot(terminal):
     if len(equity_timestamps) != len(equity_series):
         equity_timestamps = []
 
+    runtime_metrics = {}
+    runtime_metrics_getter = getattr(terminal, "_runtime_metrics_snapshot", None)
+    if callable(runtime_metrics_getter):
+        try:
+            runtime_metrics = runtime_metrics_getter() or {}
+        except Exception:
+            runtime_metrics = {}
+
+    current_equity = terminal._safe_float(runtime_metrics.get("equity_value"))
+    current_equity_timestamp = terminal._safe_float(runtime_metrics.get("equity_timestamp"))
+    current_open_orders = runtime_metrics.get("open_order_count")
+    if current_open_orders is None:
+        current_open_orders = len(runtime_metrics.get("open_orders", []) or [])
+    try:
+        current_open_orders = int(current_open_orders or 0)
+    except (TypeError, ValueError):
+        current_open_orders = 0
+
+    if current_equity is not None:
+        if not equity_series or equity_series[-1] != current_equity:
+            equity_series.append(current_equity)
+            if equity_timestamps:
+                if current_equity_timestamp is not None:
+                    equity_timestamps.append(current_equity_timestamp)
+                else:
+                    equity_timestamps = []
+            elif current_equity_timestamp is not None:
+                equity_timestamps = [current_equity_timestamp]
+        elif not equity_timestamps and current_equity_timestamp is not None and len(equity_series) == 1:
+            equity_timestamps = [current_equity_timestamp]
+
     perf = getattr(terminal.controller, "performance_engine", None)
     report = {}
     if perf is not None and hasattr(perf, "report"):
@@ -52,7 +83,7 @@ def performance_snapshot(terminal):
     pending_statuses = {"submitted", "open", "new", "pending", "partially_filled"}
     rejected_statuses = {"rejected", "failed", "error"}
     canceled_statuses = {"canceled", "cancelled"}
-    pending_orders = 0
+    historical_pending_orders = 0
     rejected_orders = 0
     canceled_orders = 0
     symbol_stats = {}
@@ -73,7 +104,7 @@ def performance_snapshot(terminal):
         stats["orders"] += 1
 
         if status in pending_statuses:
-            pending_orders += 1
+            historical_pending_orders += 1
         elif status in rejected_statuses:
             rejected_orders += 1
         elif status in canceled_statuses:
@@ -144,6 +175,8 @@ def performance_snapshot(terminal):
     if cumulative_return is None and initial_equity not in (None, 0) and latest_equity is not None:
         cumulative_return = (latest_equity / initial_equity) - 1.0
 
+    open_order_count = current_open_orders if runtime_metrics else historical_pending_orders
+
     if realized_trade_count == 0 and len(equity_series) < 2:
         health = "Not enough data"
     elif (sharpe_ratio is not None and sharpe_ratio >= 1.0) and (max_drawdown is not None and max_drawdown <= 0.08):
@@ -189,8 +222,8 @@ def performance_snapshot(terminal):
         )
 
     execution_notes = []
-    if pending_orders:
-        execution_notes.append(f"{pending_orders} pending/open orders")
+    if open_order_count:
+        execution_notes.append(f"{open_order_count} open orders")
     if rejected_orders:
         execution_notes.append(f"{rejected_orders} rejected orders")
     if canceled_orders:
@@ -222,7 +255,8 @@ def performance_snapshot(terminal):
         "Samples": {"text": str(len(equity_series)), "tone": "muted"},
         "Trades": {"text": str(trade_count), "tone": "muted"},
         "Realized Trades": {"text": str(realized_trade_count), "tone": "muted"},
-        "Pending Orders": {"text": str(pending_orders), "tone": "warning" if pending_orders else "muted"},
+        "Open Orders": {"text": str(open_order_count), "tone": "warning" if open_order_count else "muted"},
+        "Pending Orders": {"text": str(open_order_count), "tone": "warning" if open_order_count else "muted"},
         "Win Rate": {"text": terminal._format_percent_text(win_rate), "tone": "positive" if (win_rate or 0) >= 0.5 and win_rate is not None else "neutral"},
         "Profit Factor": {"text": "infinite" if profit_factor == float("inf") else terminal._format_ratio_text(profit_factor), "tone": "positive" if profit_factor not in (None, float("inf")) and profit_factor >= 1.2 else "neutral"},
         "Fees": {"text": terminal._format_currency(total_fees), "tone": "warning" if total_fees > 0 else "muted"},

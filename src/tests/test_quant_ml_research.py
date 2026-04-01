@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from quant.ml_dataset import MLDatasetBuilder
 from quant.ml_research import MLResearchPipeline
 from quant.model_registry import ModelRegistry
@@ -108,3 +110,38 @@ def test_ml_research_supports_tree_and_sequence_families_and_walk_forward():
     assert not walk_summary.empty
     assert not walk_predictions.empty
     assert {"accuracy", "precision", "recall"}.issubset(walk_summary.columns)
+
+
+def test_ml_research_auto_research_ranks_candidates_and_picks_best_model():
+    candles = _sample_ml_candles()
+    pipeline = MLResearchPipeline()
+    dataset = pipeline.build_dataset(
+        candles,
+        horizon=2,
+        return_threshold=0.0005,
+        symbol="SOL/USDT",
+        timeframe="1h",
+    )
+
+    summary = pipeline.auto_research(
+        dataset,
+        model_families=["linear", "tree", "sequence"],
+        sequence_length=4,
+        test_size=0.25,
+        train_size=40,
+        test_window=20,
+        model_name_prefix="auto_lab",
+        candidate_sequence_lengths=[3, 4],
+    )
+
+    assert summary.best_candidate is not None
+    assert len(summary.candidates) == 4
+    assert not summary.leaderboard.empty
+    assert summary.leaderboard.iloc[0]["model_name"] == summary.best_candidate.model_name
+    assert summary.leaderboard.iloc[0]["model_family"] == summary.best_candidate.model_family
+    assert summary.leaderboard.iloc[0]["selection_score"] == pytest.approx(summary.best_candidate.selection_score)
+    assert {"selection_score", "walk_forward_accuracy", "test_accuracy", "model_family"}.issubset(summary.leaderboard.columns)
+
+    candidate_names = {candidate.model_name for candidate in summary.candidates}
+    assert candidate_names.issubset(set(pipeline.model_registry.list()))
+    assert not summary.best_candidate.walk_summary.empty

@@ -1,80 +1,68 @@
 import asyncio
-import inspect
-from collections import defaultdict
+from typing import Any
 
-from event_bus.event import Event
+from sopotek.core.event_bus.bus import AsyncEventBus
 
 
-class EventBus:
-    SHUTDOWN_EVENT = "__event_bus_shutdown__"
+class _LegacyQueueView:
+    """Expose event objects on `.queue` like the pre-v2 bus."""
 
-    def __init__(self):
-        self.queue = asyncio.Queue()
-        self.subscribers = defaultdict(list)
-        self._dispatcher_task = None
-        self._running = False
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[Any] = asyncio.Queue()
 
-    async def publish(self, event_or_type, data=None):
-        if isinstance(event_or_type, Event) and data is None:
-            event = event_or_type
-        else:
-            event = Event(event_or_type, data)
+    async def put(self, item: Any) -> None:
+        await self._queue.put(item)
+
+    async def get(self) -> Any:
+        return await self._queue.get()
+
+    def empty(self) -> bool:
+        return self._queue.empty()
+
+    def qsize(self) -> int:
+        return self._queue.qsize()
+
+    def task_done(self) -> None:
+        self._queue.task_done()
+
+
+class EventBus(AsyncEventBus):
+    """Backward-compatible import path for the upgraded async event bus."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._dispatch_queue = self.queue
+        self.queue = _LegacyQueueView()
+
+    async def publish(self, event_or_type, data=None, **kwargs):
+        event = self._coerce_event(event_or_type, data=data, **kwargs)
+        event.sequence = self._sequence
+        self._sequence += 1
+        if self._enable_persistence and self._store is not None:
+            await self._store.append(event)
+        await self._dispatch_queue.put((int(event.priority), int(event.sequence), event))
         await self.queue.put(event)
+        self.logger.debug(
+            "Published legacy event type=%s priority=%s sequence=%s",
+            event.type,
+            event.priority,
+            event.sequence,
+        )
         return event
 
-    def subscribe(self, event_type, handler):
-        self.subscribers[event_type].append(handler)
-        return handler
-
-    @property
-    def is_running(self):
-        return bool(self._running and self._dispatcher_task is not None and not self._dispatcher_task.done())
-
     async def dispatch_once(self, event=None):
-        event = event if event is not None else await self.queue.get()
+        came_from_queue = event is None
+        if event is None:
+            _, _, event = await self._dispatch_queue.get()
         try:
             if getattr(event, "type", None) == self.SHUTDOWN_EVENT:
                 self._running = False
                 return event
-
-            handlers = list(self.subscribers.get(getattr(event, "type", None), []) or [])
-            tasks = []
-            for handler in handlers:
-                try:
-                    result = handler(event)
-                except Exception:
-                    continue
-                if inspect.isawaitable(result):
-                    tasks.append(asyncio.create_task(result))
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            await self._deliver(event)
             return event
         finally:
-            self.queue.task_done()
+            if came_from_queue:
+                self._dispatch_queue.task_done()
 
-    async def start(self):
-        self._running = True
-        try:
-            while self._running:
-                event = await self.queue.get()
-                await self.dispatch_once(event)
-        finally:
-            self._running = False
-            self._dispatcher_task = None
 
-    def run_in_background(self):
-        if self.is_running:
-            return self._dispatcher_task
-        self._dispatcher_task = asyncio.create_task(self.start(), name="event_bus_dispatcher")
-        return self._dispatcher_task
-
-    async def shutdown(self):
-        task = self._dispatcher_task if self._dispatcher_task is not None and not self._dispatcher_task.done() else None
-        if task is None:
-            self._running = False
-            self._dispatcher_task = None
-            return
-        self._running = False
-        await self.publish(self.SHUTDOWN_EVENT, {})
-        await asyncio.gather(task, return_exceptions=True)
-        self._dispatcher_task = None
+__all__ = ["EventBus"]

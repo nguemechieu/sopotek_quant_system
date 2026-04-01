@@ -43,6 +43,15 @@ VARIANT_RISK_PROFILES = (
     ("Quant", {"oversold_threshold": 33, "overbought_threshold": 67, "min_confidence": 0.57, "signal_amount": 1.15}),
 )
 
+VARIANT_MARKET_CONTEXT_PROFILES = (
+    ("FX Core", {"ema_fast": 13, "ema_slow": 34, "atr_period": 10, "breakout_lookback": 12, "min_confidence": 0.60}),
+    ("Crypto Expansion", {"ema_fast": 21, "ema_slow": 55, "atr_period": 18, "breakout_lookback": 24, "signal_amount": 1.20}),
+    ("Equities Macro", {"ema_fast": 34, "ema_slow": 89, "atr_period": 20, "breakout_lookback": 34, "min_confidence": 0.62}),
+    ("Futures Carry", {"ema_fast": 18, "ema_slow": 48, "atr_period": 16, "breakout_lookback": 20, "signal_amount": 1.10}),
+    ("Commodities Trend", {"ema_fast": 21, "ema_slow": 60, "atr_period": 22, "breakout_lookback": 28, "min_confidence": 0.61}),
+    ("Index Rotation", {"ema_fast": 26, "ema_slow": 65, "atr_period": 18, "breakout_lookback": 26, "signal_amount": 0.95}),
+)
+
 BASE_STRATEGY_ALIASES = {
     "DEFAULT": "Trend Following",
     "EMA_RSI": "Trend Following",
@@ -84,38 +93,61 @@ def _combine_strategy_params(*param_sets):
 
 def _build_strategy_catalog():
     catalog = []
+    seen_names = set()
+
+    def append_variant(name, base_name, params=None):
+        normalized_name = str(name or "").strip()
+        normalized_base_name = str(base_name or "").strip()
+        if not normalized_name or not normalized_base_name or normalized_name in seen_names:
+            return
+        seen_names.add(normalized_name)
+        catalog.append(
+            {
+                "name": normalized_name,
+                "base_name": normalized_base_name,
+                "params": dict(params or {}),
+            }
+        )
+
     for base_name in CORE_STRATEGY_NAMES:
-        catalog.append({"name": base_name, "base_name": base_name, "params": {}})
+        append_variant(base_name, base_name, {})
         for style_label, style_params in VARIANT_STYLE_PROFILES:
             for profile_label, profile_params in VARIANT_RISK_PROFILES:
-                catalog.append(
-                    {
-                        "name": f"{base_name} | {style_label} {profile_label}",
-                        "base_name": base_name,
-                        "params": _combine_strategy_params(style_params, profile_params),
-                    }
+                append_variant(
+                    f"{base_name} | {style_label} {profile_label}",
+                    base_name,
+                    _combine_strategy_params(style_params, profile_params),
                 )
+                for context_label, context_params in VARIANT_MARKET_CONTEXT_PROFILES:
+                    append_variant(
+                        f"{base_name} | {style_label} {profile_label} {context_label}",
+                        base_name,
+                        _combine_strategy_params(style_params, profile_params, context_params),
+                    )
 
-    catalog.append(
+    append_variant(
+        "AI Hybrid | Institutional Prime",
+        "AI Hybrid",
         {
-            "name": "AI Hybrid | Institutional Prime",
-            "base_name": "AI Hybrid",
-            "params": {
-                "rsi_period": 18,
-                "ema_fast": 34,
-                "ema_slow": 89,
-                "atr_period": 21,
-                "breakout_lookback": 34,
-                "oversold_threshold": 34,
-                "overbought_threshold": 66,
-                "min_confidence": 0.66,
-                "signal_amount": 0.90,
-            },
-        }
+            "rsi_period": 18,
+            "ema_fast": 34,
+            "ema_slow": 89,
+            "atr_period": 21,
+            "breakout_lookback": 34,
+            "oversold_threshold": 34,
+            "overbought_threshold": 66,
+            "min_confidence": 0.66,
+            "signal_amount": 0.90,
+        },
     )
 
-    if len(catalog) != 617:
-        raise RuntimeError(f"Expected 617 strategy catalog entries, found {len(catalog)}.")
+    expected_count = (
+        len(CORE_STRATEGY_NAMES)
+        * (1 + (len(VARIANT_STYLE_PROFILES) * len(VARIANT_RISK_PROFILES) * (1 + len(VARIANT_MARKET_CONTEXT_PROFILES))))
+        + 1
+    )
+    if len(catalog) != expected_count:
+        raise RuntimeError(f"Expected {expected_count} strategy catalog entries, found {len(catalog)}.")
     return tuple(catalog)
 
 

@@ -1,4 +1,6 @@
 import asyncio
+import copy
+from datetime import datetime, timezone
 import logging
 import re
 import socket
@@ -58,6 +60,14 @@ class _CoinbaseJWTAuthMixin:
             },
         }
 
+    async def create_order(self, symbol, type, side, amount, price=None, params=None):
+        original_id = getattr(self, "id", None)
+        try:
+            return await super().create_order(symbol, type, side, amount, price, params)
+        finally:
+            if original_id is not None:
+                self.id = original_id
+
 
 def _coinbase_exchange_class(base_class):
     if not isinstance(base_class, type):
@@ -74,9 +84,13 @@ def _coinbase_exchange_class(base_class):
 class CCXTBroker(BaseBroker):
     DEFAULT_TIMEOUT_MS = 30000
     COINBASE_MAX_OHLCV_CANDLES = 300
+    GENERIC_MAX_OHLCV_CANDLES = 1000
     COINBASE_OHLCV_CACHE_SECONDS = 8.0
     COINBASE_OHLCV_SHORTFALL_CACHE_SECONDS = 20.0
     COINBASE_OHLCV_MAX_CONCURRENCY = 2
+    SPOT_ACCOUNT_CACHE_SECONDS = 3.0
+    COINBASE_SPOT_ACCOUNT_CACHE_SECONDS = 8.0
+    COINBASE_OPEN_ORDERS_CACHE_SECONDS = 5.0
     SPOT_PRICE_CACHE_SECONDS = 15.0
     SPOT_DUST_THRESHOLD = 1e-10
     SPOT_CASH_EQUIVALENTS = {"USD", "USDC", "USDT", "BUSD", "EUR", "GBP"}
@@ -130,6 +144,9 @@ class CCXTBroker(BaseBroker):
         self.symbols = []
         self._connected = False
         self._open_orders_snapshot_cache = {}
+        self._spot_account_snapshot_cache = None
+        self._spot_account_snapshot_cache_until = 0.0
+        self._spot_account_snapshot_inflight = None
         self._ticker_price_cache = {}
         self._ticker_price_cache_until = {}
         self._ticker_price_inflight = {}
@@ -205,6 +222,10 @@ class CCXTBroker(BaseBroker):
 
         self._market_symbol_lookup = lookup
         return lookup
+
+    def _supports_attached_protection_prices(self):
+        exchange_code = self._exchange_code()
+        return exchange_code in set()
 
     def supports_symbol(self, symbol):
         normalized_symbol = self._normalize_market_symbol(symbol)
@@ -887,11 +908,14 @@ class CCXTBroker(BaseBroker):
         if not isinstance(raw_balance, dict):
             return raw_balance
 
+        snapshot = await self._spot_account_snapshot_from_balance(raw_balance)
+        return self._compose_spot_balance_snapshot(raw_balance, snapshot)
+
+    def _compose_spot_balance_snapshot(self, raw_balance, snapshot):
         normalized = dict(raw_balance)
         totals = self._spot_balance_totals(raw_balance)
         if totals:
             normalized.setdefault("asset_balances", dict(totals))
-        snapshot = await self._spot_account_snapshot_from_balance(raw_balance)
         cash_value = float(snapshot.get("cash_value", 0.0) or 0.0)
         position_value = sum(
             float((position or {}).get("value", 0.0) or 0.0)
@@ -912,8 +936,98 @@ class CCXTBroker(BaseBroker):
             normalized.setdefault("net_liquidation", account_value)
         return normalized
 
+    def _spot_account_cache_seconds(self):
+        if self._exchange_code() == "coinbase":
+            return self.COINBASE_SPOT_ACCOUNT_CACHE_SECONDS
+        return self.SPOT_ACCOUNT_CACHE_SECONDS
+
+    def _invalidate_account_state_cache(self):
+        self._spot_account_snapshot_cache = None
+        self._spot_account_snapshot_cache_until = 0.0
+        self._open_orders_snapshot_cache.clear()
+
+    async def _get_spot_account_snapshot_cached(self):
+        now = time.monotonic()
+        cached_snapshot = self._spot_account_snapshot_cache
+        if cached_snapshot is not None and now < float(self._spot_account_snapshot_cache_until or 0.0):
+            return copy.deepcopy(cached_snapshot)
+
+        inflight = self._spot_account_snapshot_inflight
+        if inflight is not None and not inflight.done():
+            return copy.deepcopy(await inflight)
+
+        async def runner():
+            raw_balance = await self._fetch_raw_balance()
+            if not isinstance(raw_balance, dict):
+                payload = {
+                    "raw_balance": raw_balance,
+                    "balance": raw_balance,
+                    "positions": [],
+                    "cash_value": 0.0,
+                }
+            else:
+                snapshot = await self._spot_account_snapshot_from_balance(raw_balance)
+                payload = {
+                    "raw_balance": raw_balance,
+                    "balance": self._compose_spot_balance_snapshot(raw_balance, snapshot),
+                    "positions": list(snapshot.get("positions", [])),
+                    "cash_value": float(snapshot.get("cash_value", 0.0) or 0.0),
+                }
+
+            self._spot_account_snapshot_cache = copy.deepcopy(payload)
+            self._spot_account_snapshot_cache_until = time.monotonic() + self._spot_account_cache_seconds()
+            return copy.deepcopy(payload)
+
+        task = asyncio.create_task(runner())
+        self._spot_account_snapshot_inflight = task
+        try:
+            return await task
+        finally:
+            current = self._spot_account_snapshot_inflight
+            if current is task:
+                self._spot_account_snapshot_inflight = None
+
     def _coinbase_ohlcv_cache_key(self, symbol, timeframe, limit):
         return f"{str(symbol or '').upper().strip()}|{str(timeframe or '1h').lower().strip()}|{max(int(limit or 0), 1)}"
+
+    def _normalize_ohlcv_boundary_ms(self, value, *, end_of_day=False):
+        if value is None:
+            return None
+
+        if isinstance(value, datetime):
+            timestamp = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            if end_of_day:
+                timestamp = timestamp.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return int(timestamp.timestamp() * 1000)
+
+        try:
+            numeric = float(value)
+            if abs(numeric) > 1e11:
+                return int(numeric)
+            return int(numeric * 1000)
+        except Exception:
+            pass
+
+        text_value = str(value or "").strip()
+        if not text_value:
+            return None
+        if "T" not in text_value and len(text_value) <= 10:
+            text_value = (
+                f"{text_value}T23:59:59.999999+00:00"
+                if end_of_day
+                else f"{text_value}T00:00:00+00:00"
+            )
+        if text_value.endswith("Z"):
+            text_value = text_value[:-1] + "+00:00"
+        try:
+            timestamp = datetime.fromisoformat(text_value)
+        except ValueError:
+            return None
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
+        return int(timestamp.timestamp() * 1000)
 
     async def _fetch_coinbase_ohlcv_cached(self, symbol, timeframe="1h", limit=100):
         cache_key = self._coinbase_ohlcv_cache_key(symbol, timeframe, limit)
@@ -1139,19 +1253,23 @@ class CCXTBroker(BaseBroker):
     async def fetch_order_book(self, symbol, limit=100):
         return await self.fetch_orderbook(symbol, limit=limit)
 
-    async def _fetch_coinbase_ohlcv(self, symbol, timeframe="1h", limit=100):
+    async def _fetch_coinbase_ohlcv(self, symbol, timeframe="1h", limit=100, start_time=None, end_time=None):
         await self._ensure_connected()
 
-        requested_limit = max(int(limit or self.COINBASE_MAX_OHLCV_CANDLES), 1)
+        # Respect the user-requested limit while capping at Coinbase's maximum.
+        requested_limit = max(min(int(limit or self.COINBASE_MAX_OHLCV_CANDLES), self.COINBASE_MAX_OHLCV_CANDLES), 1)
         timeframe_seconds = max(self._timeframe_seconds(timeframe), 1)
         remaining = requested_limit
-        end_seconds = int(time.time())
+        end_ms = self._normalize_ohlcv_boundary_ms(end_time, end_of_day=True)
+        start_ms = self._normalize_ohlcv_boundary_ms(start_time, end_of_day=False)
+        end_seconds = int((end_ms / 1000.0) if end_ms is not None else time.time())
+        start_seconds_boundary = int(start_ms / 1000.0) if start_ms is not None else 0
         seen_timestamps = set()
         candles = []
 
-        while remaining > 0:
+        while remaining > 0 and end_seconds >= start_seconds_boundary:
             batch_size = min(remaining, self.COINBASE_MAX_OHLCV_CANDLES)
-            start_seconds = max(end_seconds - (batch_size * timeframe_seconds), 0)
+            start_seconds = max(end_seconds - (batch_size * timeframe_seconds), start_seconds_boundary, 0)
             params = {
                 "start": str(start_seconds),
                 "end": str(end_seconds),
@@ -1173,6 +1291,10 @@ class CCXTBroker(BaseBroker):
                 if not isinstance(candle, (list, tuple)) or not candle:
                     continue
                 timestamp = candle[0]
+                if start_ms is not None and int(timestamp) < int(start_ms):
+                    continue
+                if end_ms is not None and int(timestamp) > int(end_ms):
+                    continue
                 if timestamp in seen_timestamps:
                     continue
                 seen_timestamps.add(timestamp)
@@ -1186,6 +1308,8 @@ class CCXTBroker(BaseBroker):
             earliest_timestamp = batch[0][0] if isinstance(batch[0], (list, tuple)) and batch[0] else None
             if earliest_timestamp is None or new_rows == 0 or len(batch) < batch_size:
                 break
+            if start_ms is not None and int(earliest_timestamp) <= int(start_ms):
+                break
 
             next_end_seconds = int(earliest_timestamp / 1000) - timeframe_seconds
             if next_end_seconds <= 0 or next_end_seconds >= end_seconds:
@@ -1196,10 +1320,92 @@ class CCXTBroker(BaseBroker):
 
         return candles[-requested_limit:]
 
-    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+    async def _fetch_generic_ohlcv_range(self, symbol, timeframe="1h", limit=100, start_time=None, end_time=None):
+        await self._ensure_connected()
+
+        # Respect the user-requested limit while capping at the generic maximum.
+        requested_limit = max(min(int(limit or self.GENERIC_MAX_OHLCV_CANDLES), self.GENERIC_MAX_OHLCV_CANDLES), 1)
+        timeframe_seconds = max(self._timeframe_seconds(timeframe), 1)
+        step_ms = timeframe_seconds * 1000
+        start_ms = self._normalize_ohlcv_boundary_ms(start_time, end_of_day=False)
+        end_ms = self._normalize_ohlcv_boundary_ms(end_time, end_of_day=True)
+        if end_ms is None and start_ms is not None:
+            end_ms = start_ms + (requested_limit * step_ms)
+        if start_ms is None and end_ms is not None:
+            start_ms = max(0, end_ms - (requested_limit * step_ms))
+        if start_ms is None:
+            start_ms = max(0, int(time.time() * 1000) - (requested_limit * step_ms))
+        if end_ms is None:
+            end_ms = start_ms + (requested_limit * step_ms)
+        if start_ms is not None and end_ms is not None:
+            newest_window_start = max(0, int(end_ms) - (max(requested_limit - 1, 0) * step_ms))
+            start_ms = max(int(start_ms), newest_window_start)
+
+        candles = []
+        seen_timestamps = set()
+        current_since = int(start_ms)
+
+        while current_since <= int(end_ms) and len(candles) < requested_limit:
+            batch_limit = min(self.GENERIC_MAX_OHLCV_CANDLES, requested_limit - len(candles))
+            batch = await self._call_unified(
+                "fetch_ohlcv",
+                symbol,
+                timeframe=timeframe,
+                since=current_since,
+                limit=batch_limit,
+                params={},
+                default=[],
+            )
+            if not batch:
+                break
+
+            new_rows = 0
+            last_timestamp = None
+            for candle in batch:
+                if not isinstance(candle, (list, tuple)) or len(candle) < 6:
+                    continue
+                timestamp = int(candle[0])
+                last_timestamp = timestamp
+                if timestamp < int(start_ms) or timestamp > int(end_ms):
+                    continue
+                if timestamp in seen_timestamps:
+                    continue
+                seen_timestamps.add(timestamp)
+                candles.append(list(candle[:6]))
+                new_rows += 1
+
+            candles.sort(key=lambda row: row[0])
+            if len(candles) >= requested_limit or last_timestamp is None or new_rows == 0 or len(batch) < batch_limit:
+                break
+
+            next_since = int(last_timestamp) + step_ms
+            if next_since <= current_since:
+                break
+            current_since = next_since
+
+        return candles[-requested_limit:]
+
+    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=100, start_time=None, end_time=None):
+        await self._ensure_connected()
         normalized_symbol = self._normalize_market_symbol(symbol)
         if not self.supports_symbol(normalized_symbol):
             return []
+        if start_time is not None or end_time is not None:
+            if self._exchange_code() == "coinbase":
+                return await self._fetch_coinbase_ohlcv(
+                    normalized_symbol,
+                    timeframe=timeframe,
+                    limit=limit,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            return await self._fetch_generic_ohlcv_range(
+                normalized_symbol,
+                timeframe=timeframe,
+                limit=limit,
+                start_time=start_time,
+                end_time=end_time,
+            )
         if self._exchange_code() == "coinbase":
             return await self._fetch_coinbase_ohlcv_cached(normalized_symbol, timeframe=timeframe, limit=limit)
         self.logger.debug("Fetching OHLCV for %s", normalized_symbol)
@@ -1265,9 +1471,9 @@ class CCXTBroker(BaseBroker):
         if trigger_price is not None:
             order_params.setdefault("stopPrice", float(trigger_price))
             order_params.setdefault("stop_price", float(trigger_price))
-        if stop_loss is not None:
+        if stop_loss is not None and self._supports_attached_protection_prices():
             order_params.setdefault("stopLossPrice", stop_loss)
-        if take_profit is not None:
+        if take_profit is not None and self._supports_attached_protection_prices():
             order_params.setdefault("takeProfitPrice", take_profit)
 
         if not self._exchange_has("create_order"):
@@ -1281,16 +1487,19 @@ class CCXTBroker(BaseBroker):
             normalized_price,
             order_params,
         )
+        self._invalidate_account_state_cache()
         if isinstance(created, dict) and trigger_price is not None:
             created.setdefault("stop_price", float(trigger_price))
         return created
 
     async def cancel_order(self, order_id, symbol=None):
+        self._invalidate_account_state_cache()
         if symbol is None:
             return await self._call_unified("cancel_order", order_id)
         return await self._call_unified("cancel_order", order_id, symbol)
 
     async def cancel_all_orders(self, symbol=None):
+        self._invalidate_account_state_cache()
         if symbol is None:
             return await self._call_unified("cancel_all_orders", default=[])
         return await self._call_unified("cancel_all_orders", symbol, default=[])
@@ -1300,24 +1509,24 @@ class CCXTBroker(BaseBroker):
     # ==========================================================
 
     async def fetch_balance(self):
+        if not self._supports_positions_endpoint():
+            try:
+                snapshot = await self._get_spot_account_snapshot_cached()
+                return snapshot.get("balance")
+            except Exception as exc:
+                self.logger.debug("Unable to derive spot account valuation on %s: %s", self.exchange_name, exc)
         raw_balance = await self._fetch_raw_balance()
         if not isinstance(raw_balance, dict):
             return raw_balance
-        if not self._supports_positions_endpoint():
-            try:
-                return await self._augment_spot_balance_snapshot(raw_balance)
-            except Exception as exc:
-                self.logger.debug("Unable to derive spot account valuation on %s: %s", self.exchange_name, exc)
         return raw_balance
 
     async def fetch_positions(self, symbols=None):
         if not self._supports_positions_endpoint():
             try:
-                raw_balance = await self._fetch_raw_balance()
-                snapshot = await self._spot_account_snapshot_from_balance(raw_balance)
+                snapshot = await self._get_spot_account_snapshot_cached()
                 return [
                     position
-                    for position in snapshot.get("positions", [])
+                    for position in (snapshot or {}).get("positions", [])
                     if isinstance(position, dict) and self._spot_position_matches_symbols(position, symbols)
                 ]
             except Exception as exc:
@@ -1369,6 +1578,26 @@ class CCXTBroker(BaseBroker):
             }
             return orders
 
+        if exchange_code == "coinbase":
+            cache_key = ("coinbase-snapshot", tuple(monitored_symbols), limit)
+            cached = self._open_orders_snapshot_cache.get(cache_key)
+            if cached and now < cached["expires_at"]:
+                return list(cached["orders"])
+
+            try:
+                orders = self._dedupe_orders_snapshot(await self._fetch_open_orders_without_symbol(limit=limit))
+            except Exception:
+                if monitored_symbols:
+                    orders = await self._fetch_open_orders_by_symbols(monitored_symbols, limit=limit)
+                else:
+                    raise
+
+            self._open_orders_snapshot_cache[cache_key] = {
+                "orders": list(orders),
+                "expires_at": now + self.COINBASE_OPEN_ORDERS_CACHE_SECONDS,
+            }
+            return orders
+
         try:
             return self._dedupe_orders_snapshot(await self._fetch_open_orders_without_symbol(limit=limit))
         except Exception:
@@ -1388,6 +1617,7 @@ class CCXTBroker(BaseBroker):
             order_params.update(params)
         if tag is not None:
             order_params.setdefault("tag", tag)
+        self._invalidate_account_state_cache()
         return await self._call_unified(
             "withdraw",
             code,

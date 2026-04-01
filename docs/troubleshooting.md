@@ -71,6 +71,15 @@ Check:
 - whether amount precision or minimum size is stricter than expected
 - whether SL and TP were auto-suggested and then manually overwritten
 - whether you are switching between brokers with different lot or precision rules
+- for Oanda or leveraged FX, whether the app reduced the size from available balance, margin, or equity before submission
+
+## Live Trade Says Quote Data Is Stale
+
+Check:
+- whether the broker is currently returning fresh ticker data for the symbol
+- whether the symbol has only an old cached quote and needs a fresh fetch
+- whether the market is open and the broker is still publishing prices for that instrument
+- if the ticket includes a manual entry price, retry once after a fresh quote arrives because live preflight will re-check freshness before submission
 
 ## Order Was Rejected
 
@@ -81,11 +90,20 @@ Common reasons include:
 - behavior guard block
 - live safety lock or kill switch state
 
+If the rejection is a manual insufficient-funds, insufficient-margin, or buying-power case, the app now tries to recompute a smaller safe size from the latest balance or equity snapshot and retries once automatically. If the order still rejects, inspect:
+
+- broker minimum size and size increment rules
+- instrument availability or session restrictions
+- stop-loss, take-profit, or entry precision
+- broker-side account permissions or leverage restrictions
+
 ## Telegram Is Not Responding
 
 Check:
 - Telegram enabled in settings
 - bot token and chat ID configured
+- if you do not know the token yet, create the bot with `@BotFather` and `/newbot`
+- if you do not know the chat ID yet, message the bot once and inspect `https://api.telegram.org/bot<token>/getUpdates` for `message.chat.id`
 - the bot is messaging the expected chat
 - network access is available
 - use `/help` or `/commands` to restore the keyboard
@@ -94,6 +112,7 @@ Check:
 
 Check:
 - OpenAI API key set in Settings -> Integrations
+- if you do not have a key yet, create one at `https://platform.openai.com/api-keys`
 - OpenAI model set correctly
 - if using OpenAI speech, speech provider is set to `OpenAI`
 - if using Google recognition, optional recognition packages are installed

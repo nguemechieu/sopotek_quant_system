@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+
+
 class OrderBookBuffer:
 
     def __init__(self):
@@ -7,10 +10,11 @@ class OrderBookBuffer:
     # UPDATE ORDERBOOK
     # ====================================
 
-    def update(self, symbol, bids, asks):
+    def update(self, symbol, bids, asks, updated_at=None):
         self.books[symbol] = {
             "bids": bids,
-            "asks": asks
+            "asks": asks,
+            "updated_at": updated_at or datetime.now(timezone.utc).isoformat(),
         }
 
     # ====================================

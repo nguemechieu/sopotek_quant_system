@@ -5,8 +5,10 @@
 Recommended desktop run command:
 
 ```powershell
-python src\main.py
+python main.py
 ```
+
+This repo-root launcher is the preferred operator path. It forwards startup to `src/main.py`.
 
 ## Test Commands
 

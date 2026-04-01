@@ -41,6 +41,7 @@ def test_manual_trade_ticket_builder_creates_expected_widgets():
     assert window._manual_trade_submit_btn.text() == "Submit Order"
     assert window._manual_trade_buy_limit_btn.text() == "Buy Market"
     assert window._manual_trade_sell_limit_btn.text() == "Sell Market"
+    assert "Stop loss and take profit are optional." in window._manual_trade_hint.text()
     assert window._manual_trade_source == "manual"
 
 

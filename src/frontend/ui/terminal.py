@@ -29,15 +29,15 @@ import pyqtgraph as pg  # type: ignore[import-untyped]
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, cast
 from PySide6.QtCore import Qt, QDate, QSettings, QDateTime, Signal, QTimer, QUrl, QRect
-from PySide6.QtGui import QAction, QColor, QTextCursor, QDesktopServices
+from PySide6.QtGui import QAction, QActionGroup, QColor, QTextCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QDockWidget, QSpinBox,
     QTableWidget, QTableWidgetItem,
     QAbstractItemView,
     QPushButton, QLabel, QComboBox, QProgressBar,
-    QTabWidget, QToolBar, QDialog, QGridLayout, QDoubleSpinBox, QMessageBox, QFormLayout, QInputDialog, QColorDialog, 
-    QFrame, QHeaderView,
-    QHBoxLayout, QSizePolicy, QTextEdit, QTextBrowser, QApplication, QLineEdit, QSlider, QCheckBox, QScrollArea
+    QTabWidget, QToolBar, QDialog, QGridLayout, QDoubleSpinBox, QMessageBox, QFormLayout, QInputDialog, QColorDialog,
+    QFrame, QHeaderView, QMenu,
+    QHBoxLayout, QSizePolicy, QTextEdit, QTextBrowser, QApplication, QLineEdit, QSlider, QCheckBox, QScrollArea, QFileDialog
 )
 
 
@@ -71,6 +71,7 @@ from frontend.ui.actions.trading_actions import (
     export_trades,
     show_async_message,
 )
+from frontend.ui.actions.live_trade_actions import submit_manual_trade as submit_live_manual_trade
 from frontend.ui.actions.optimization_actions import (
     apply_best_optimization_params,
     optimize_strategy,
@@ -136,6 +137,9 @@ from frontend.ui.panels.trading_panels import (
     create_trade_log_panel,
 )
 from frontend.ui.panels.trading_updates import (
+    apply_open_orders_filter,
+    apply_positions_filter,
+    apply_trade_log_filter,
     format_trade_log_value,
     format_trade_source_label,
     normalize_open_order_entry,
@@ -162,7 +166,10 @@ from frontend.ui.panels.workspace_updates import (
     update_recent_trades,
     update_risk_heatmap,
 )
+from frontend.ui.services.diagnostics_service import export_diagnostics_bundle
+from frontend.ui.services.error_reporting import report_uncaught_exception, set_active_terminal
 from frontend.ui.services.screenshot_service import prompt_and_save_widget_screenshot
+from frontend.ui.services.runtime_metrics import build_runtime_metrics_snapshot
 from integrations.news_service import NewsService
 from quant.ml_research import MLResearchPipeline
 from strategy.strategy import Strategy
@@ -212,6 +219,133 @@ RISK_PROFILE_PRESETS = {
     },
 }
 
+CHART_TIMEFRAME_MENU_OPTIONS = [
+    ("1 Min", "1m"),
+    ("5 Min", "5m"),
+    ("15 Min", "15m"),
+    ("30 Min", "30m"),
+    ("1 Hour", "1h"),
+    ("4 Hours", "4h"),
+    ("1 Day", "1d"),
+    ("1 Week", "1w"),
+]
+
+CHART_INDICATOR_OPTIONS = [
+    "Moving Average",
+    "EMA",
+    "SMMA",
+    "LWMA",
+    "VWAP",
+    "Fibonacci Retracement",
+    "ADX",
+    "ATR",
+    "Bollinger Bands",
+    "Envelopes",
+    "Ichimoku",
+    "Parabolic SAR",
+    "Standard Deviation",
+    "Accelerator Oscillator",
+    "Awesome Oscillator",
+    "CCI",
+    "DeMarker",
+    "MACD",
+    "Momentum",
+    "OsMA",
+    "RSI",
+    "RVI",
+    "Stochastic Oscillator",
+    "Williams' Percent Range",
+    "Accumulation/Distribution",
+    "Money Flow Index",
+    "On Balance Volume",
+    "Volumes",
+    "Alligator",
+    "Fractal",
+    "Gator Oscillator",
+    "Market Facilitation Index",
+    "Bulls Power",
+    "Bears Power",
+    "Force Index",
+    "Donchian Channel",
+    "Keltner Channel",
+    "ZigZag",
+]
+
+CHART_INDICATOR_DEFAULT_PERIODS = {
+    "Moving Average": 14,
+    "EMA": 14,
+    "SMMA": 14,
+    "LWMA": 14,
+    "VWAP": 20,
+    "Fibonacci Retracement": 120,
+    "ADX": 14,
+    "ATR": 14,
+    "Bollinger Bands": 20,
+    "Envelopes": 14,
+    "Standard Deviation": 20,
+    "CCI": 14,
+    "DeMarker": 14,
+    "Momentum": 14,
+    "RSI": 14,
+    "RVI": 10,
+    "Stochastic Oscillator": 14,
+    "Williams' Percent Range": 14,
+    "Money Flow Index": 14,
+    "Force Index": 13,
+    "Donchian Channel": 20,
+    "Keltner Channel": 20,
+    "Fractal": 5,
+    "ZigZag": 12,
+}
+
+CHART_FIXED_DEFAULT_INDICATORS = {
+    "Ichimoku",
+    "Parabolic SAR",
+    "Accelerator Oscillator",
+    "Awesome Oscillator",
+    "MACD",
+    "OsMA",
+    "Accumulation/Distribution",
+    "On Balance Volume",
+    "Volumes",
+    "Alligator",
+    "Gator Oscillator",
+    "Market Facilitation Index",
+    "Bulls Power",
+    "Bears Power",
+}
+
+CHART_STUDY_MENU_GROUPS = [
+    (
+        "Trend",
+        [
+            ("Moving Average", 14),
+            ("EMA", 14),
+            ("VWAP", 20),
+            ("Bollinger Bands", 20),
+            ("Ichimoku", None),
+        ],
+    ),
+    (
+        "Momentum",
+        [
+            ("RSI", 14),
+            ("MACD", None),
+            ("Stochastic Oscillator", 14),
+            ("Momentum", 14),
+        ],
+    ),
+    (
+        "Volatility & Volume",
+        [
+            ("ATR", 14),
+            ("Standard Deviation", 20),
+            ("Volumes", None),
+            ("On Balance Volume", None),
+        ],
+    ),
+]
+
 
 def global_exception_hook(exctype, value, tb):
     """Global exception hook to capture unexpected errors in the GUI process."""
@@ -221,6 +355,20 @@ def global_exception_hook(exctype, value, tb):
 
     print("UNCAUGHT EXCEPTION:")
     traceback.print_exception(exctype, value, tb)
+    report_uncaught_exception(exctype, value, tb)
+
+
+def global_thread_exception_hook(args):
+    """Capture uncaught worker-thread exceptions with the same reporting path."""
+    exctype = getattr(args, "exc_type", Exception)
+    value = getattr(args, "exc_value", None)
+    tb = getattr(args, "exc_traceback", None)
+    if exctype in (KeyboardInterrupt, SystemExit):
+        return
+
+    print("UNCAUGHT THREAD EXCEPTION:")
+    traceback.print_exception(exctype, value, tb)
+    report_uncaught_exception(exctype, value, tb)
 
 
 def _json_text(value: object, fallback: str) -> str:
@@ -298,9 +446,13 @@ class Terminal(QMainWindow):
     def __init__(self, controller):
         """Initialize terminal state and start refresh timers."""
 
-        super().__init__(controller)
+        # The controller is not a QWidget parent; it is an application controller
+        # object that manages the terminal state and signals.
+        super().__init__()
 
+        set_active_terminal(self)
         sys.excepthook = global_exception_hook
+        threading.excepthook = global_thread_exception_hook
 
         self.controller = controller
         self.logger = controller.logger
@@ -389,9 +541,10 @@ class Terminal(QMainWindow):
         self.setMinimumSize(1024, 680)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setDockOptions(
+            # GroupedDragging has been unstable on Windows when hidden/tabbed docks
+            # are dragged together, so keep tabs but drag only the active dock.
             QMainWindow.DockOption.AllowNestedDocks
             | QMainWindow.DockOption.AllowTabbedDocks
-            | QMainWindow.DockOption.GroupedDragging
             | QMainWindow.DockOption.AnimatedDocks
         )
 
@@ -489,6 +642,22 @@ class Terminal(QMainWindow):
     def _is_stellar_market_watch(self):
         """Return whether the current market watch should include Stellar column behavior."""
         return self._active_exchange_name() == "stellar"
+
+    def _sync_exchange_scoped_actions(self):
+        """Show venue-specific actions only when the active broker supports them."""
+        is_stellar = Terminal._active_exchange_name(self) == "stellar"
+
+        stellar_action = getattr(self, "action_stellar_asset_explorer", None)
+        if stellar_action is not None:
+            stellar_action.setVisible(is_stellar)
+
+        stellar_separator = getattr(self, "_research_stellar_separator_action", None)
+        if stellar_separator is not None:
+            stellar_separator.setVisible(is_stellar)
+
+        explorer_window = (getattr(self, "detached_tool_windows", {}) or {}).get("stellar_asset_explorer")
+        if not is_stellar and Terminal._is_qt_object_alive(self, explorer_window):
+            explorer_window.hide()
 
     def _market_watch_headers(self):
         """Return headers for the market watch table based on exchange type."""
@@ -983,9 +1152,9 @@ class Terminal(QMainWindow):
                 candle_up_color=self.candle_up_color,
                 candle_down_color=self.candle_down_color,
                 show_volume_panel=getattr(self, "show_chart_volume", False),
-                chart_background=self.chart_background_color,
-                grid_color=self.chart_grid_color,
-                axis_color=self.chart_axis_color,
+                chart_background=getattr(self, "chart_background_color", "#11161f"),
+                grid_color=getattr(self, "chart_grid_color", "#8290a0"),
+                axis_color=getattr(self, "chart_axis_color", "#9aa4b2"),
             )
             self._configure_chart_widget(chart)
             chart.setMinimumHeight(300)
@@ -1539,6 +1708,19 @@ class Terminal(QMainWindow):
             self.toolbar_timeframe_label.setText(
                 self._tr("terminal.toolbar.timeframe_active", timeframe=active_tf)
             )
+        self._sync_chart_timeframe_menu_actions()
+
+    def _sync_chart_timeframe_menu_actions(self):
+        current = str(
+            getattr(self, "current_timeframe", getattr(getattr(self, "controller", None), "time_frame", "1h"))
+            or "1h"
+        ).strip().lower() or "1h"
+        for timeframe, action in getattr(self, "chart_timeframe_actions", {}).items():
+            try:
+                action.blockSignals(True)
+                action.setChecked(str(timeframe).strip().lower() == current)
+            finally:
+                action.blockSignals(False)
 
     def _update_autotrade_button(self):
         scope_suffix = f" [{self._autotrade_scope_label()}]"
@@ -1641,130 +1823,157 @@ class Terminal(QMainWindow):
 
     def _create_menu_bar(self):
         menu_bar = self.menuBar()
+        menu_bar.clear()
+        menu_bar.setStyleSheet(
+            """
+            QMenuBar {
+                background-color: #0b1220;
+                border-bottom: 1px solid #1e2a3f;
+                padding: 4px 10px;
+                color: #dce7f8;
+                spacing: 6px;
+                font-weight: 600;
+            }
+            QMenuBar::item {
+                background: transparent;
+                padding: 6px 10px;
+                margin: 0 2px;
+                border-radius: 8px;
+            }
+            QMenuBar::item:selected {
+                background-color: #132033;
+            }
+            QMenuBar::item:pressed {
+                background-color: #17304f;
+            }
+            QMenu {
+                background-color: #101827;
+                border: 1px solid #24324a;
+                padding: 6px;
+                color: #dce7f8;
+            }
+            QMenu::item {
+                padding: 7px 28px 7px 12px;
+                border-radius: 6px;
+            }
+            QMenu::item:selected {
+                background-color: #17304f;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #24324a;
+                margin: 6px 8px;
+            }
+            """
+        )
 
         self.file_menu = menu_bar.addMenu("")
+        self.trading_menu = menu_bar.addMenu("")
+        self.strategy_menu = menu_bar.addMenu("")
+        self.charts_menu = menu_bar.addMenu("")
+        self.data_menu = menu_bar.addMenu("")
+        self.settings_menu = menu_bar.addMenu("")
+        self.risk_menu = menu_bar.addMenu("")
+        self.review_menu = menu_bar.addMenu("")
+        self.research_menu = menu_bar.addMenu("")
+        self.education_menu = menu_bar.addMenu("")
+        self.tools_menu = menu_bar.addMenu("")
+        self.help_menu = menu_bar.addMenu("")
+
+        self.language_menu = QMenu(self.settings_menu)
+        self.backtest_menu = QMenu(self.strategy_menu)
+        self.chart_style_menu = QMenu(self.charts_menu)
+        self.chart_studies_menu = QMenu(self.charts_menu)
+        self.chart_quick_studies_menu = QMenu(self.chart_studies_menu)
+        self.chart_timeframe_menu = QMenu(self.charts_menu)
+        self.chart_timeframe_actions = {}
+        self._chart_timeframe_action_group = QActionGroup(self)
+        self._chart_timeframe_action_group.setExclusive(True)
+        self.analyze_positions_menu = QMenu(self.risk_menu)
+        self.analyze_trade_review_menu = QMenu(self.risk_menu)
+        self.analyze_desk_menu = QMenu(self.risk_menu)
+
         self.action_generate_report = QAction(self)
         self.action_generate_report.triggered.connect(self._generate_report)
-        self.file_menu.addAction(self.action_generate_report)
         self.action_export_trades = QAction(self)
         self.action_export_trades.triggered.connect(self._export_trades)
-        self.file_menu.addAction(self.action_export_trades)
-        self.file_menu.addSeparator()
         self.action_exit = QAction(self)
         self.action_exit.triggered.connect(self.close)
-        self.file_menu.addAction(self.action_exit)
 
-        self.trading_menu = menu_bar.addMenu("")
         self.action_start_trading = QAction(self)
         self.action_start_trading.triggered.connect(lambda: self._set_autotrading_enabled(True))
         self.action_start_trading.setShortcut("Ctrl+T")
-        self.trading_menu.addAction(self.action_start_trading)
         self.action_stop_trading = QAction(self)
         self.action_stop_trading.triggered.connect(lambda: self._set_autotrading_enabled(False))
-        self.trading_menu.addAction(self.action_stop_trading)
         self.action_manual_trade = QAction(self)
         self.action_manual_trade.triggered.connect(self._open_manual_trade)
-        self.trading_menu.addAction(self.action_manual_trade)
-        self.trading_menu.addSeparator()
         self.action_close_all = QAction(self)
         self.action_close_all.triggered.connect(self._close_all_positions)
-        self.trading_menu.addAction(self.action_close_all)
         self.action_cancel_orders = QAction(self)
         self.action_cancel_orders.triggered.connect(self._cancel_all_orders)
-        self.trading_menu.addAction(self.action_cancel_orders)
         self.action_kill_switch = QAction("Emergency Kill Switch", self)
         self.action_kill_switch.triggered.connect(self._toggle_emergency_stop)
-        self.trading_menu.addAction(self.action_kill_switch)
 
-        self.backtest_menu = menu_bar.addMenu("")
         self.action_run_backtest = QAction(self)
         self.action_run_backtest.triggered.connect(
             lambda: asyncio.get_event_loop().create_task(self.run_backtest_clicked())
         )
         self.action_run_backtest.setShortcut("Ctrl+B")
-        self.backtest_menu.addAction(self.action_run_backtest)
-        self.action_optimize_strategy = QAction(self)
-        self.action_optimize_strategy.triggered.connect(self._optimize_strategy)
-        self.action_optimize_strategy.setShortcut("Ctrl+Shift+O")
-        self.backtest_menu.addAction(self.action_optimize_strategy)
-
-        self.strategy_menu = menu_bar.addMenu("")
-
-        self.charts_menu = menu_bar.addMenu("")
         self.action_new_chart = QAction(self)
         self.action_new_chart.setShortcut("Ctrl+N")
         self.action_new_chart.triggered.connect(self._add_new_chart)
-        self.charts_menu.addAction(self.action_new_chart)
         self.action_multi_chart = QAction(self)
         self.action_multi_chart.triggered.connect(self._multi_chart_layout)
-        self.charts_menu.addAction(self.action_multi_chart)
         self.action_detach_chart = QAction("Detach Current Tab", self)
         self.action_detach_chart.setShortcut("Ctrl+Shift+D")
         self.action_detach_chart.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.action_detach_chart.triggered.connect(self._detach_current_chart_tab)
-        self.charts_menu.addAction(self.action_detach_chart)
         self.action_reattach_chart = QAction("Reattach Active Chart", self)
         self.action_reattach_chart.setShortcut("Ctrl+Shift+R")
         self.action_reattach_chart.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.action_reattach_chart.triggered.connect(self._reattach_active_chart_window)
-        self.charts_menu.addAction(self.action_reattach_chart)
         self.action_tile_chart_windows = QAction("Tile Chart Windows", self)
         self.action_tile_chart_windows.setShortcut("Ctrl+Shift+T")
         self.action_tile_chart_windows.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.action_tile_chart_windows.triggered.connect(self._tile_chart_windows)
-        self.charts_menu.addAction(self.action_tile_chart_windows)
         self.action_cascade_chart_windows = QAction("Cascade Chart Windows", self)
         self.action_cascade_chart_windows.setShortcut("Ctrl+Shift+C")
         self.action_cascade_chart_windows.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.action_cascade_chart_windows.triggered.connect(self._cascade_chart_windows)
-        self.charts_menu.addAction(self.action_cascade_chart_windows)
         self.action_candle_colors = QAction(self)
         self.action_candle_colors.triggered.connect(self._choose_candle_colors)
-        self.charts_menu.addAction(self.action_candle_colors)
+        self.action_chart_settings = QAction("Chart Settings...", self)
+        self.action_chart_settings.triggered.connect(self._open_chart_settings)
+        self.action_edit_studies = QAction("Edit Studies...", self)
+        self.action_edit_studies.triggered.connect(self._open_studies_manager)
         self.action_add_indicator = QAction(self)
         self.action_add_indicator.triggered.connect(self._add_indicator_to_current_chart)
-        self.charts_menu.addAction(self.action_add_indicator)
         self.action_remove_indicator = QAction(self)
         self.action_remove_indicator.triggered.connect(self._remove_indicator_from_current_chart)
-        self.charts_menu.addAction(self.action_remove_indicator)
+        self.action_remove_all_indicators = QAction("Remove All Studies", self)
+        self.action_remove_all_indicators.triggered.connect(self._remove_all_indicators_from_current_chart)
         self.toggle_bid_ask_lines_action = QAction(self)
         self.toggle_bid_ask_lines_action.setCheckable(True)
         self.toggle_bid_ask_lines_action.setChecked(self.show_bid_ask_lines)
         self.toggle_bid_ask_lines_action.triggered.connect(self._toggle_bid_ask_lines)
-        self.charts_menu.addAction(self.toggle_bid_ask_lines_action)
         self.toggle_volume_bar_action = QAction(self)
         self.toggle_volume_bar_action.setCheckable(True)
         self.toggle_volume_bar_action.setChecked(getattr(self, "show_chart_volume", False))
         self.toggle_volume_bar_action.triggered.connect(self._toggle_chart_volume)
-        self.charts_menu.addAction(self.toggle_volume_bar_action)
-
-        self.data_menu = menu_bar.addMenu("")
         self.action_refresh_markets = QAction(self)
         self.action_refresh_markets.triggered.connect(self._refresh_markets)
-        self.data_menu.addAction(self.action_refresh_markets)
         self.action_refresh_chart = QAction(self)
         self.action_refresh_chart.triggered.connect(self._refresh_active_chart_data)
-        self.data_menu.addAction(self.action_refresh_chart)
         self.action_refresh_orderbook = QAction(self)
         self.action_refresh_orderbook.triggered.connect(self._refresh_active_orderbook)
-        self.data_menu.addAction(self.action_refresh_orderbook)
-        self.data_menu.addSeparator()
         self.action_reload_balance = QAction(self)
         self.action_reload_balance.triggered.connect(self._reload_balance)
-        self.data_menu.addAction(self.action_reload_balance)
-
-        self.settings_menu = menu_bar.addMenu("")
         self.action_app_settings = QAction(self)
         self.action_app_settings.triggered.connect(self._open_settings)
-        self.settings_menu.addAction(self.action_app_settings)
         self.action_risk_settings = QAction("Risk Settings", self)
         self.action_risk_settings.triggered.connect(self._open_risk_settings)
-        self.settings_menu.addAction(self.action_risk_settings)
         self.action_portfolio_view = QAction(self)
         self.action_portfolio_view.triggered.connect(self._show_portfolio_exposure)
-        self.settings_menu.addAction(self.action_portfolio_view)
-
-        self.language_menu = menu_bar.addMenu("")
         self.language_actions = {}
         for code, label in iter_supported_languages():
             action = QAction(label, self)
@@ -1781,6 +1990,8 @@ class Terminal(QMainWindow):
         self.action_ml_monitor.triggered.connect(self._open_ml_monitor)
         self.action_logs = QAction(self)
         self.action_logs.triggered.connect(self._open_logs)
+        self.action_export_diagnostics = QAction("Export Diagnostics Bundle", self)
+        self.action_export_diagnostics.triggered.connect(self._export_diagnostics_bundle)
         self.action_performance = QAction(self)
         self.action_performance.triggered.connect(self._open_performance)
         self.action_performance.setShortcut("Ctrl+Shift+P")
@@ -1797,11 +2008,16 @@ class Terminal(QMainWindow):
         self.action_quant_pm.triggered.connect(self._open_quant_pm_window)
         self.action_ml_research = QAction("ML Research Lab", self)
         self.action_ml_research.triggered.connect(self._open_ml_research_window)
+        self.action_trader_tv = QAction("Trader TV", self)
+        self.action_trader_tv.triggered.connect(self._open_trader_tv_window)
+        self.action_education_center = QAction("Education Center", self)
+        self.action_education_center.triggered.connect(self._open_education_center_window)
         self.action_position_analysis = QAction("Position Analysis", self)
         self.action_position_analysis.triggered.connect(self._open_position_analysis_window)
         self.action_position_analysis.setShortcut("Ctrl+Shift+I")
         self.action_strategy_optimization = QAction("Strategy Optimization", self)
         self.action_strategy_optimization.triggered.connect(self._optimize_strategy)
+        self.action_strategy_optimization.setShortcut("Ctrl+Shift+O")
         self.action_strategy_assigner = QAction("Strategy Assigner", self)
         self.action_strategy_assigner.triggered.connect(self._open_strategy_assignment_window)
         self.action_strategy_scorecard = QAction("Strategy Scorecard", self)
@@ -1815,22 +2031,97 @@ class Terminal(QMainWindow):
         self.action_stellar_asset_explorer = QAction("Stellar Asset Explorer", self)
         self.action_stellar_asset_explorer.triggered.connect(self._open_stellar_asset_explorer_window)
 
-        self.strategy_menu.addAction(self.action_strategy_optimization)
-        self.strategy_menu.addAction(self.action_strategy_assigner)
+        self.settings_menu.addAction(self.action_app_settings)
+        self.settings_menu.addMenu(self.language_menu)
+        self.file_menu.addAction(self.action_exit)
+
+        self.trading_menu.addAction(self.action_start_trading)
+        self.trading_menu.addAction(self.action_stop_trading)
+        self.trading_menu.addAction(self.action_manual_trade)
+        self.trading_menu.addSeparator()
+        self.trading_menu.addAction(self.action_close_all)
+        self.trading_menu.addAction(self.action_cancel_orders)
+        self.trading_menu.addSeparator()
+        self.trading_menu.addAction(self.action_kill_switch)
+
+        self.backtest_menu.addAction(self.action_run_backtest)
+        self.backtest_menu.addAction(self.action_strategy_optimization)
+        self.strategy_menu.addMenu(self.backtest_menu)
         self.strategy_menu.addSeparator()
+        self.strategy_menu.addAction(self.action_strategy_assigner)
         self.strategy_menu.addAction(self.action_strategy_scorecard)
         self.strategy_menu.addAction(self.action_strategy_debug)
 
-        self.risk_menu = menu_bar.addMenu("")
-        self.risk_menu.addAction(self.action_risk_settings)
-        self.risk_menu.addAction(self.action_portfolio_view)
-        self.risk_menu.addAction(self.action_position_analysis)
-        self.risk_menu.addAction(self.action_trade_checklist)
-        self.risk_menu.addSeparator()
-        self.risk_menu.addAction(self.action_system_health)
-        self.risk_menu.addAction(self.action_kill_switch)
+        self.charts_menu.addAction(self.action_new_chart)
+        self.charts_menu.addAction(self.action_multi_chart)
+        self.charts_menu.addSeparator()
+        self.charts_menu.addMenu(self.chart_timeframe_menu)
+        self.charts_menu.addMenu(self.chart_style_menu)
+        self.charts_menu.addMenu(self.chart_studies_menu)
+        self.charts_menu.addSeparator()
+        self.charts_menu.addAction(self.action_detach_chart)
+        self.charts_menu.addAction(self.action_reattach_chart)
+        self.charts_menu.addAction(self.action_tile_chart_windows)
+        self.charts_menu.addAction(self.action_cascade_chart_windows)
 
-        self.review_menu = menu_bar.addMenu("")
+        self.chart_style_menu.addAction(self.action_chart_settings)
+        self.chart_style_menu.addSeparator()
+        self.chart_style_menu.addAction(self.action_candle_colors)
+        self.chart_style_menu.addAction(self.toggle_bid_ask_lines_action)
+        self.chart_style_menu.addAction(self.toggle_volume_bar_action)
+
+        self.chart_studies_menu.addAction(self.action_edit_studies)
+        self.chart_studies_menu.addAction(self.action_add_indicator)
+        self.chart_studies_menu.addAction(self.action_remove_indicator)
+        self.chart_studies_menu.addAction(self.action_remove_all_indicators)
+        self.chart_studies_menu.addSeparator()
+        self.chart_studies_menu.addMenu(self.chart_quick_studies_menu)
+
+        for label, timeframe in CHART_TIMEFRAME_MENU_OPTIONS:
+            timeframe_action = QAction(label, self)
+            timeframe_action.setCheckable(True)
+            timeframe_action.triggered.connect(
+                lambda checked=False, tf=timeframe: self._set_timeframe(tf)
+            )
+            self._chart_timeframe_action_group.addAction(timeframe_action)
+            self.chart_timeframe_menu.addAction(timeframe_action)
+            self.chart_timeframe_actions[timeframe] = timeframe_action
+
+        for section_name, studies in CHART_STUDY_MENU_GROUPS:
+            section_menu = self.chart_quick_studies_menu.addMenu(section_name)
+            for study_name, default_period in studies:
+                study_action = QAction(study_name, self)
+                study_action.triggered.connect(
+                    lambda checked=False, name=study_name, period=default_period: self._add_indicator_to_current_chart(
+                        indicator_name=name,
+                        preset_period=period,
+                        prompt_for_period=False,
+                    )
+                )
+                section_menu.addAction(study_action)
+
+        self.data_menu.addAction(self.action_refresh_markets)
+        self.data_menu.addAction(self.action_refresh_chart)
+        self.data_menu.addAction(self.action_refresh_orderbook)
+        self.data_menu.addSeparator()
+        self.data_menu.addAction(self.action_reload_balance)
+
+        self.risk_menu.addMenu(self.analyze_positions_menu)
+        self.risk_menu.addMenu(self.analyze_trade_review_menu)
+        self.risk_menu.addMenu(self.analyze_desk_menu)
+
+        self.analyze_positions_menu.addAction(self.action_risk_settings)
+        self.analyze_positions_menu.addAction(self.action_portfolio_view)
+        self.analyze_positions_menu.addAction(self.action_position_analysis)
+
+        self.analyze_trade_review_menu.addAction(self.action_trade_checklist)
+        self.analyze_trade_review_menu.addAction(self.action_closed_journal)
+        self.analyze_trade_review_menu.addAction(self.action_journal_review)
+        self.analyze_trade_review_menu.addAction(self.action_performance)
+
+        self.analyze_desk_menu.addAction(self.action_system_health)
+        self.analyze_desk_menu.addAction(self.action_recommendations)
+        self.analyze_desk_menu.addAction(self.action_quant_pm)
         self.review_menu.addAction(self.action_performance)
         self.review_menu.addAction(self.action_recommendations)
         self.review_menu.addAction(self.action_closed_journal)
@@ -1839,43 +2130,30 @@ class Terminal(QMainWindow):
         self.review_menu.addAction(self.action_generate_report)
         self.review_menu.addAction(self.action_export_trades)
 
-        self.research_menu = menu_bar.addMenu("")
         self.research_menu.addAction(self.action_market_chat)
         self.research_menu.addAction(self.action_quant_pm)
         self.research_menu.addAction(self.action_ml_monitor)
         self.research_menu.addAction(self.action_ml_research)
-        self.research_menu.addSeparator()
-        self.research_menu.addAction(self.action_strategy_optimization)
-        self.research_menu.addAction(self.action_strategy_assigner)
-        self.research_menu.addAction(self.action_run_backtest)
+        self._research_stellar_separator_action = self.research_menu.addSeparator()
         self.research_menu.addAction(self.action_stellar_asset_explorer)
 
-        self.tools_menu = menu_bar.addMenu("")
-        self.tools_menu.addAction(self.action_market_chat)
-        self.tools_menu.addAction(self.action_recommendations)
-        self.tools_menu.addAction(self.action_ml_monitor)
+        self.education_menu.addAction(self.action_trader_tv)
+        self.education_menu.addAction(self.action_education_center)
+
         self.tools_menu.addAction(self.action_logs)
+        self.tools_menu.addAction(self.action_export_diagnostics)
+        self.tools_menu.addSeparator()
         self.tools_menu.addAction(self.action_system_console)
         self.tools_menu.addAction(self.action_system_status)
-        self.tools_menu.addAction(self.action_performance)
-        self.tools_menu.addAction(self.action_closed_journal)
-        self.tools_menu.addAction(self.action_trade_checklist)
-        self.tools_menu.addAction(self.action_journal_review)
-        self.tools_menu.addAction(self.action_system_health)
-        self.tools_menu.addAction(self.action_quant_pm)
-        self.tools_menu.addAction(self.action_ml_research)
-        self.tools_menu.addAction(self.action_position_analysis)
-        self.tools_menu.addAction(self.action_strategy_optimization)
-        self.tools_menu.addAction(self.action_strategy_assigner)
-        self.tools_menu.addAction(self.action_stellar_asset_explorer)
-
-        self.help_menu = menu_bar.addMenu("")
         self.action_documentation = QAction(self)
         self.action_documentation.triggered.connect(self._open_docs)
         self.help_menu.addAction(self.action_documentation)
         self.action_api_docs = QAction(self)
         self.action_api_docs.triggered.connect(self._open_api_docs)
         self.help_menu.addAction(self.action_api_docs)
+        self.education_menu.addSeparator()
+        self.education_menu.addAction(self.action_documentation)
+        self.education_menu.addAction(self.action_api_docs)
         self.help_menu.addSeparator()
         self.action_license = QAction("License", self)
         self.action_license.triggered.connect(self._open_license_manager)
@@ -1884,6 +2162,8 @@ class Terminal(QMainWindow):
         self.action_about.triggered.connect(self._show_about)
         self.help_menu.addAction(self.action_about)
 
+        self._sync_chart_timeframe_menu_actions()
+        Terminal._sync_exchange_scoped_actions(self)
         self.apply_language()
 
     def update_connection_status(self, status: str):
@@ -1912,17 +2192,25 @@ class Terminal(QMainWindow):
         if hasattr(self, "file_menu"):
             self.file_menu.setTitle(self._tr("terminal.menu.file"))
             self.trading_menu.setTitle(self._tr("terminal.menu.trading"))
+            self.strategy_menu.setTitle(self._tr("terminal.menu.strategy"))
             self.backtest_menu.setTitle(self._tr("terminal.menu.backtesting"))
-            self.strategy_menu.setTitle("Strategy")
             self.charts_menu.setTitle(self._tr("terminal.menu.charts"))
             self.data_menu.setTitle(self._tr("terminal.menu.data"))
             self.settings_menu.setTitle(self._tr("terminal.menu.settings"))
-            self.risk_menu.setTitle(self._tr("terminal.menu.risk"))
+            self.risk_menu.setTitle("Analyze")
             self.review_menu.setTitle(self._tr("terminal.menu.review"))
             self.research_menu.setTitle(self._tr("terminal.menu.research"))
+            self.education_menu.setTitle("Education")
             self.language_menu.setTitle(self._tr("terminal.menu.language"))
             self.tools_menu.setTitle(self._tr("terminal.menu.tools"))
             self.help_menu.setTitle(self._tr("terminal.menu.help"))
+            self.chart_timeframe_menu.setTitle("Time Frame")
+            self.chart_style_menu.setTitle("Style")
+            self.chart_studies_menu.setTitle("Studies")
+            self.chart_quick_studies_menu.setTitle("Quick Studies")
+            self.analyze_positions_menu.setTitle("Positions & Risk")
+            self.analyze_trade_review_menu.setTitle("Trade Review")
+            self.analyze_desk_menu.setTitle("Desk & System")
 
             self.action_generate_report.setText(self._tr("terminal.action.generate_report"))
             self.action_export_trades.setText(self._tr("terminal.action.export_trades"))
@@ -1934,29 +2222,33 @@ class Terminal(QMainWindow):
             self.action_cancel_orders.setText(self._tr("terminal.action.cancel_all"))
             self.action_kill_switch.setText("Emergency Kill Switch")
             self.action_run_backtest.setText(self._tr("terminal.action.run_backtest"))
-            self.action_optimize_strategy.setText("Strategy Optimization")
+            self.action_strategy_optimization.setText("Strategy Optimization")
             self.action_new_chart.setText(self._tr("terminal.action.new_chart"))
             self.action_multi_chart.setText(self._tr("terminal.action.multi_chart"))
-            self.action_detach_chart.setText("Detach Current Tab")
-            self.action_reattach_chart.setText("Reattach Active Chart")
+            self.action_detach_chart.setText("Detach Chart")
+            self.action_reattach_chart.setText("Reattach Chart")
             self.action_tile_chart_windows.setText("Tile Chart Windows")
             self.action_cascade_chart_windows.setText("Cascade Chart Windows")
-            self.action_candle_colors.setText(self._tr("terminal.action.candle_colors"))
-            self.action_add_indicator.setText(self._tr("terminal.action.add_indicator"))
-            self.action_remove_indicator.setText("Remove Indicator")
+            self.action_chart_settings.setText("Chart Settings...")
+            self.action_candle_colors.setText("Candle Colors...")
+            self.action_edit_studies.setText("Edit Studies...")
+            self.action_add_indicator.setText("Add Study...")
+            self.action_remove_indicator.setText("Remove Study...")
+            self.action_remove_all_indicators.setText("Remove All Studies")
             self.toggle_bid_ask_lines_action.setText(self._tr("terminal.action.toggle_bid_ask"))
-            self.toggle_volume_bar_action.setText("Volume Bar")
+            self.toggle_volume_bar_action.setText("Show Volume Subgraph")
             self.action_refresh_markets.setText(self._tr("terminal.action.refresh_markets"))
             self.action_refresh_chart.setText(self._tr("terminal.action.refresh_chart"))
             self.action_refresh_orderbook.setText(self._tr("terminal.action.refresh_orderbook"))
             self.action_reload_balance.setText(self._tr("terminal.action.reload_balance"))
             self.action_app_settings.setText(self._tr("terminal.action.app_settings"))
-            self.action_risk_settings.setText(self._tr("terminal.action.risk_settings"))
-            self.action_portfolio_view.setText(self._tr("terminal.action.portfolio"))
+            self.action_risk_settings.setText("Risk Profile Settings")
+            self.action_portfolio_view.setText("Portfolio Exposure")
             self.action_market_chat.setText("Sopotek Pilot")
             self.action_recommendations.setText("Recommendations")
             self.action_ml_monitor.setText(self._tr("terminal.action.ml_monitor"))
             self.action_logs.setText(self._tr("terminal.action.logs"))
+            self.action_export_diagnostics.setText("Export Diagnostics Bundle")
             self.action_performance.setText(self._tr("terminal.action.performance"))
             self.action_closed_journal.setText("Closed Journal")
             self.action_trade_checklist.setText("Trade Checklist")
@@ -1964,6 +2256,8 @@ class Terminal(QMainWindow):
             self.action_system_health.setText("System Health")
             self.action_quant_pm.setText("Quant PM")
             self.action_ml_research.setText("ML Research Lab")
+            self.action_trader_tv.setText("Trader TV")
+            self.action_education_center.setText("Education Center")
             self.action_position_analysis.setText("Position Analysis")
             self.action_strategy_optimization.setText("Strategy Optimization")
             self.action_strategy_assigner.setText("Strategy Assigner")
@@ -2017,6 +2311,7 @@ class Terminal(QMainWindow):
             previous_language=previous_language,
         )
         self._applied_language_code = getattr(self.controller, "language_code", "en")
+        Terminal._sync_exchange_scoped_actions(self)
 
     # ==========================================================
     # TOOLBAR
@@ -2353,9 +2648,10 @@ class Terminal(QMainWindow):
             self.controller,
             candle_up_color=self.candle_up_color,
             candle_down_color=self.candle_down_color,
-            chart_background=self.chart_background_color,
-            grid_color=self.chart_grid_color,
-            axis_color=self.chart_axis_color,
+            show_volume_panel=getattr(self, "show_chart_volume", False),
+            chart_background=getattr(self, "chart_background_color", "#11161f"),
+            grid_color=getattr(self, "chart_grid_color", "#8290a0"),
+            axis_color=getattr(self, "chart_axis_color", "#9aa4b2"),
         )
         self._configure_chart_widget(chart)
 
@@ -2463,6 +2759,17 @@ class Terminal(QMainWindow):
         if not symbol:
             return None
 
+        resolver = getattr(self.controller, "_resolve_preferred_market_symbol", None)
+        resolved_symbol = symbol
+        if callable(resolver):
+            try:
+                resolved_symbol = str(resolver(symbol) or symbol).strip().upper() or symbol
+            except Exception:
+                resolved_symbol = symbol
+        if resolved_symbol and resolved_symbol != symbol:
+            self._retarget_chart_widget_symbol(chart, resolved_symbol)
+            symbol = resolved_symbol
+
         try:
             requested_limit = int(limit if limit is not None else self._history_request_limit())
         except Exception:
@@ -2506,6 +2813,68 @@ class Terminal(QMainWindow):
         elif hasattr(chart, "clear_data_status"):
             chart.clear_data_status()
         return frame
+
+    def _retarget_chart_widget_symbol(self, chart, symbol):
+        if not isinstance(chart, ChartWidget) or not self._is_qt_object_alive(chart):
+            return None
+
+        target_symbol = str(symbol or "").strip().upper()
+        current_symbol = str(getattr(chart, "symbol", "") or "").strip().upper()
+        if not target_symbol:
+            return current_symbol or None
+        if target_symbol == current_symbol:
+            return target_symbol
+
+        chart.symbol = target_symbol
+        if getattr(self, "symbol", None) == current_symbol:
+            self.symbol = target_symbol
+
+        if hasattr(chart, "refresh_context_display"):
+            try:
+                chart.refresh_context_display()
+            except (RuntimeError, AttributeError, TypeError):
+                pass
+
+        page = None
+        chart_page_for_widget = getattr(self, "_chart_page_for_widget", None)
+        if callable(chart_page_for_widget):
+            try:
+                page = chart_page_for_widget(chart)
+            except Exception:
+                page = None
+
+        chart_tabs_ready = getattr(self, "_chart_tabs_ready", None)
+        if callable(chart_tabs_ready):
+            try:
+                if chart_tabs_ready() and page is not None:
+                    index = self.chart_tabs.indexOf(page)
+                    if index >= 0:
+                        self.chart_tabs.setTabText(index, self._chart_page_title(page, fallback_index=index))
+            except Exception:
+                pass
+
+        try:
+            window = page.window() if page is not None and hasattr(page, "window") else None
+        except Exception:
+            window = None
+        if window is not None and window is not self and getattr(window, "_contains_chart_page", False):
+            try:
+                window.setWindowTitle(self._chart_page_title(page))
+            except Exception:
+                pass
+
+        active_chart = getattr(self, "_active_chart_widget_ref", None)
+        if active_chart is chart and self.symbol_picker is not None:
+            try:
+                if self.symbol_picker.findText(target_symbol) < 0:
+                    self.symbol_picker.addItem(target_symbol)
+                self.symbol_picker.setCurrentText(target_symbol)
+            except Exception:
+                pass
+            current_timeframe = str(getattr(self, "current_timeframe", "1h") or "1h")
+            self._last_chart_request_key = (target_symbol, str(getattr(chart, "timeframe", current_timeframe) or current_timeframe))
+
+        return target_symbol
 
     def _chart_page_title(self, page, fallback_index=None):
         charts = self._chart_widgets_in_page(page)
@@ -2693,9 +3062,10 @@ class Terminal(QMainWindow):
             self.controller,
             candle_up_color=self.candle_up_color,
             candle_down_color=self.candle_down_color,
-            chart_background=self.chart_background_color,
-            grid_color=self.chart_grid_color,
-            axis_color=self.chart_axis_color,
+            show_volume_panel=getattr(self, "show_chart_volume", False),
+            chart_background=getattr(self, "chart_background_color", "#11161f"),
+            grid_color=getattr(self, "chart_grid_color", "#8290a0"),
+            axis_color=getattr(self, "chart_axis_color", "#9aa4b2"),
         )
         self._configure_chart_widget(chart)
         if hasattr(chart, "set_compact_view_mode"):
@@ -3213,8 +3583,22 @@ class Terminal(QMainWindow):
             return normalized_positions
         return list(self._portfolio_positions_snapshot() or [])
 
+    def _active_open_orders_snapshot(self):
+        normalized_orders = []
+        for raw in list(getattr(self, "_latest_open_orders_snapshot", []) or []):
+            normalized = self._normalize_open_order_entry(raw)
+            if normalized is not None:
+                normalized_orders.append(normalized)
+        return normalized_orders
+
+    def _runtime_metrics_snapshot(self):
+        return build_runtime_metrics_snapshot(self)
+
     def _populate_positions_table(self, positions):
         populate_positions_table(self, positions)
+
+    def _apply_positions_filter(self):
+        apply_positions_filter(self)
 
     def _build_position_close_button(self, position, compact=False):
         button = QPushButton("->" if compact else "-> Close")
@@ -3282,6 +3666,18 @@ class Terminal(QMainWindow):
                 if resolved_side:
                     side_text = f" [{resolved_side}]"
             self.system_console.log(f"Close position {status_text}: {symbol}{side_text}{amount_text}", "INFO")
+            if hasattr(controller, "queue_trade_audit"):
+                controller.queue_trade_audit(
+                    "close_position_success",
+                    status=str((result or {}).get("status") or "submitted"),
+                    symbol=symbol,
+                    side="sell" if str((position or {}).get("position_side") or (position or {}).get("side") or "").strip().lower() != "short" else "buy",
+                    order_type="market",
+                    source="terminal",
+                    order_id=(result or {}).get("order_id") if isinstance(result, dict) else None,
+                    payload={"amount": amount, "position": dict(position or {}) if isinstance(position, dict) else position},
+                    message=f"Submitted close-position order for {symbol}.",
+                )
             self._schedule_positions_refresh()
             self._refresh_position_analysis_window()
             if show_dialog:
@@ -3293,6 +3689,16 @@ class Terminal(QMainWindow):
         except Exception as exc:
             self.logger.exception("Close-position request failed")
             self.system_console.log(f"Close position failed for {symbol}: {exc}", "ERROR")
+            if hasattr(controller, "queue_trade_audit"):
+                controller.queue_trade_audit(
+                    "close_position_error",
+                    status="error",
+                    symbol=symbol,
+                    order_type="market",
+                    source="terminal",
+                    message=str(exc),
+                    payload={"amount": amount, "position": dict(position or {}) if isinstance(position, dict) else position},
+                )
             if show_dialog:
                 self._show_async_message("Close Position Failed", str(exc), QMessageBox.Icon.Critical)
 
@@ -3301,6 +3707,9 @@ class Terminal(QMainWindow):
 
     def _populate_open_orders_table(self, orders):
         populate_open_orders_table(self, orders)
+
+    def _apply_open_orders_filter(self):
+        apply_open_orders_filter(self)
 
     async def _refresh_positions_async(self):
         await refresh_positions_async(self)
@@ -4244,6 +4653,9 @@ class Terminal(QMainWindow):
     def _update_trade_log(self, trade):
         update_trade_log(self, trade)
 
+    def _apply_trade_log_filter(self):
+        apply_trade_log_filter(self)
+
     def _handle_agent_runtime_event(self, payload):
         if getattr(self, "_ui_shutting_down", False) or not isinstance(payload, dict):
             return
@@ -4751,20 +5163,21 @@ class Terminal(QMainWindow):
 
     def _apply_terminal_table_sizing(self):
         market_watch = getattr(self, "symbols_table", None)
-        if market_watch is not None:
+        if self._is_qt_object_alive(market_watch):
             market_watch.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             market_watch.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             market_watch.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             header = market_watch.horizontalHeader()
-            header.setMinimumSectionSize(40)
-            header.setSectionResizeMode(self._market_watch_watch_column(), QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(self._market_watch_symbol_column(), QHeaderView.ResizeMode.Stretch)
-            header.setSectionResizeMode(self._market_watch_bid_column(), QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(self._market_watch_ask_column(), QHeaderView.ResizeMode.ResizeToContents)
-            usd_column = self._market_watch_usd_column()
-            if usd_column is not None:
-                header.setSectionResizeMode(usd_column, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(self._market_watch_status_column(), QHeaderView.ResizeMode.ResizeToContents)
+            if self._is_qt_object_alive(header):
+                header.setMinimumSectionSize(40)
+                header.setSectionResizeMode(self._market_watch_watch_column(), QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(self._market_watch_symbol_column(), QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(self._market_watch_bid_column(), QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(self._market_watch_ask_column(), QHeaderView.ResizeMode.ResizeToContents)
+                usd_column = self._market_watch_usd_column()
+                if usd_column is not None:
+                    header.setSectionResizeMode(usd_column, QHeaderView.ResizeMode.ResizeToContents)
+                header.setSectionResizeMode(self._market_watch_status_column(), QHeaderView.ResizeMode.ResizeToContents)
 
         for table_name in (
             "positions_table",
@@ -4775,13 +5188,15 @@ class Terminal(QMainWindow):
             "ai_table",
         ):
             table = getattr(self, table_name, None)
-            if table is None:
+            if not self._is_qt_object_alive(table):
                 continue
             table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             table.setWordWrap(False)
-            table.horizontalHeader().setStretchLastSection(True)
+            header = table.horizontalHeader()
+            if self._is_qt_object_alive(header):
+                header.setStretchLastSection(True)
 
     def _safe_tabify_docks(self, primary, secondary):
         if primary is None or secondary is None or primary is secondary:
@@ -4793,6 +5208,18 @@ class Terminal(QMainWindow):
         return True
 
     def _apply_default_dock_layout(self):
+        for dock in (
+            self.market_watch_dock,
+            self.positions_dock,
+            self.open_orders_dock,
+            self.trade_log_dock,
+            self.orderbook_dock,
+            self.risk_heatmap_dock,
+            self.ai_signal_dock,
+        ):
+            if dock is not None:
+                dock.show()
+
         self._safe_tabify_docks(self.positions_dock, self.open_orders_dock)
         self._safe_tabify_docks(self.trade_log_dock, self.orderbook_dock)
         self._safe_tabify_docks(self.trade_log_dock, self.risk_heatmap_dock)
@@ -4816,8 +5243,62 @@ class Terminal(QMainWindow):
     def _show_workspace_dock(self, dock):
         if not self._is_qt_object_alive(dock):
             return
+        dock_name = ""
+        try:
+            dock_name = str(dock.objectName() or "").strip()
+        except Exception:
+            dock_name = ""
+
+        default_areas = {
+            "market_watch_dock": Qt.DockWidgetArea.LeftDockWidgetArea,
+            "tick_chart_dock": Qt.DockWidgetArea.LeftDockWidgetArea,
+            "positions_dock": Qt.DockWidgetArea.RightDockWidgetArea,
+            "open_orders_dock": Qt.DockWidgetArea.RightDockWidgetArea,
+            "trade_log_dock": Qt.DockWidgetArea.RightDockWidgetArea,
+            "orderbook_dock": Qt.DockWidgetArea.BottomDockWidgetArea,
+            "risk_heatmap_dock": Qt.DockWidgetArea.BottomDockWidgetArea,
+            "ai_signal_dock": Qt.DockWidgetArea.BottomDockWidgetArea,
+            "strategy_scorecard_dock": Qt.DockWidgetArea.BottomDockWidgetArea,
+            "strategy_debug_dock": Qt.DockWidgetArea.BottomDockWidgetArea,
+            "system_console_dock": Qt.DockWidgetArea.BottomDockWidgetArea,
+            "system_status_dock": Qt.DockWidgetArea.RightDockWidgetArea,
+        }
+
+        try:
+            if dock.isFloating():
+                dock.setFloating(False)
+        except Exception:
+            pass
+
+        target_area = default_areas.get(dock_name)
+        if target_area is not None:
+            try:
+                self.addDockWidget(target_area, dock)
+            except Exception:
+                pass
+
         dock.show()
-        dock.raise_()
+        try:
+            dock.raise_()
+        except Exception:
+            pass
+
+        try:
+            self.resizeDocks(
+                [candidate for candidate in (self.market_watch_dock, self.trade_log_dock) if candidate is not None],
+                [320, 420],
+                Qt.Orientation.Horizontal,
+            )
+            self.resizeDocks(
+                [candidate for candidate in (self.positions_dock, self.open_orders_dock) if candidate is not None],
+                [280, 220],
+                Qt.Orientation.Vertical,
+            )
+        except Exception:
+            pass
+
+        if hasattr(self, "_queue_terminal_layout_fit"):
+            self._queue_terminal_layout_fit()
 
     def _open_strategy_scorecard_dock(self):
         self._show_workspace_dock(getattr(self, "strategy_scorecard_dock", None))
@@ -4848,6 +5329,9 @@ class Terminal(QMainWindow):
             if hasattr(chart, "set_visual_theme"):
                 chart.set_visual_theme(**theme_kwargs)
 
+    def _open_chart_settings(self):
+        self._show_settings_window("Display")
+
     def _choose_candle_colors(self):
         up = QColorDialog.getColor(QColor(self.candle_up_color), self, "Select Bullish Candle Color")
         if not up.isValid():
@@ -4865,110 +5349,123 @@ class Terminal(QMainWindow):
 
         self._apply_candle_colors_to_all_charts()
 
-    def _add_indicator_to_current_chart(self):
+    def _current_chart_indicator_specs(self, chart=None):
+        active_chart = chart if isinstance(chart, ChartWidget) else self._current_chart_widget()
+        if not isinstance(active_chart, ChartWidget):
+            return None, []
+        indicator_specs = [
+            spec
+            for spec in list(getattr(active_chart, "indicators", []) or [])
+            if isinstance(spec, dict) and str(spec.get("key") or "").strip()
+        ]
+        return active_chart, indicator_specs
+
+    def _show_loaded_studies(self):
+        chart, indicator_specs = self._current_chart_indicator_specs()
+        if not isinstance(chart, ChartWidget):
+            QMessageBox.warning(self, "Studies", "Select a chart first.")
+            return
+        if not indicator_specs:
+            QMessageBox.information(self, "Studies", "This chart does not have any studies loaded.")
+            return
+
+        study_lines = "\n".join(
+            f"- {self._chart_indicator_display_name(spec)}"
+            for spec in indicator_specs
+        )
+        QMessageBox.information(
+            self,
+            "Studies",
+            f"Active studies on {chart.symbol} ({chart.timeframe}):\n\n{study_lines}",
+        )
+
+    def _open_studies_manager(self):
+        chart, _indicator_specs = self._current_chart_indicator_specs()
+        if not isinstance(chart, ChartWidget):
+            QMessageBox.warning(self, "Studies", "Select a chart first.")
+            return
+
+        choices = [
+            "Show Loaded Studies",
+            "Add Study...",
+            "Remove Study...",
+            "Remove All Studies",
+        ]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Edit Studies",
+            "Study action:",
+            choices,
+            0,
+            False,
+        )
+        if not ok or not choice:
+            return
+
+        if choice == "Show Loaded Studies":
+            self._show_loaded_studies()
+        elif choice == "Add Study...":
+            self._add_indicator_to_current_chart()
+        elif choice == "Remove Study...":
+            self._remove_indicator_from_current_chart()
+        elif choice == "Remove All Studies":
+            self._remove_all_indicators_from_current_chart()
+
+    def _remove_all_indicators_from_current_chart(self):
+        chart, indicator_specs = self._current_chart_indicator_specs()
+        if not isinstance(chart, ChartWidget):
+            QMessageBox.warning(self, "Studies", "Select a chart first.")
+            return
+        if not indicator_specs:
+            QMessageBox.information(self, "Studies", "This chart has no studies to remove.")
+            return
+
+        response = QMessageBox.question(
+            self,
+            "Remove All Studies",
+            f"Remove all studies from {chart.symbol} ({chart.timeframe})?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if response != QMessageBox.StandardButton.Yes:
+            return
+
+        removed = False
+        for spec in indicator_specs:
+            removed = chart.remove_indicator(str(spec.get("key") or "").strip()) or removed
+
+        if not removed:
+            QMessageBox.warning(self, "Studies", "Unable to remove the loaded studies.")
+            return
+
+        chart.updateGeometry()
+        chart.repaint()
+
+    def _add_indicator_to_current_chart(self, checked=False, indicator_name=None, preset_period=None, prompt_for_period=True):
+        _ = checked
         chart = self._current_chart_widget()
         if not isinstance(chart, ChartWidget):
             QMessageBox.warning(self, "Chart", "Select a chart first.")
             return
 
-        options = [
-            "Moving Average",
-            "EMA",
-            "SMMA",
-            "LWMA",
-            "VWAP",
-            "Fibonacci Retracement",
-            "ADX",
-            "ATR",
-            "Bollinger Bands",
-            "Envelopes",
-            "Ichimoku",
-            "Parabolic SAR",
-            "Standard Deviation",
-            "Accelerator Oscillator",
-            "Awesome Oscillator",
-            "CCI",
-            "DeMarker",
-            "MACD",
-            "Momentum",
-            "OsMA",
-            "RSI",
-            "RVI",
-            "Stochastic Oscillator",
-            "Williams' Percent Range",
-            "Accumulation/Distribution",
-            "Money Flow Index",
-            "On Balance Volume",
-            "Volumes",
-            "Alligator",
-            "Fractal",
-            "Gator Oscillator",
-            "Market Facilitation Index",
-            "Bulls Power",
-            "Bears Power",
-            "Force Index",
-            "Donchian Channel",
-            "Keltner Channel",
-            "ZigZag",
-        ]
-        indicator, ok = QInputDialog.getItem(
-            self,
-            "Add Indicator",
-            "Indicator:",
-            options,
-            0,
-            False,
-        )
-        if not ok or not indicator:
-            return
+        indicator = str(indicator_name or "").strip()
+        if not indicator:
+            indicator, ok = QInputDialog.getItem(
+                self,
+                "Add Study",
+                "Study:",
+                CHART_INDICATOR_OPTIONS,
+                0,
+                False,
+            )
+            if not ok or not indicator:
+                return
 
-        default_period_map = {
-            "Moving Average": 14,
-            "EMA": 14,
-            "SMMA": 14,
-            "LWMA": 14,
-            "VWAP": 20,
-            "Fibonacci Retracement": 120,
-            "ADX": 14,
-            "ATR": 14,
-            "Bollinger Bands": 20,
-            "Envelopes": 14,
-            "Standard Deviation": 20,
-            "CCI": 14,
-            "DeMarker": 14,
-            "Momentum": 14,
-            "RSI": 14,
-            "RVI": 10,
-            "Stochastic Oscillator": 14,
-            "Williams' Percent Range": 14,
-            "Money Flow Index": 14,
-            "Force Index": 13,
-            "Donchian Channel": 20,
-            "Keltner Channel": 20,
-            "Fractal": 5,
-            "ZigZag": 12,
-        }
-        fixed_default_indicators = {
-            "Ichimoku",
-            "Parabolic SAR",
-            "Accelerator Oscillator",
-            "Awesome Oscillator",
-            "MACD",
-            "OsMA",
-            "Accumulation/Distribution",
-            "On Balance Volume",
-            "Volumes",
-            "Alligator",
-            "Gator Oscillator",
-            "Market Facilitation Index",
-            "Bulls Power",
-            "Bears Power",
-        }
-        period = default_period_map.get(indicator, 20)
-        if indicator not in fixed_default_indicators:
+        period = preset_period if preset_period is not None else CHART_INDICATOR_DEFAULT_PERIODS.get(indicator, 20)
+        if indicator not in CHART_FIXED_DEFAULT_INDICATORS and prompt_for_period:
             period, ok = QInputDialog.getInt(
                 self,
-                "Indicator Period",
+                "Study Length",
                 "Period:",
                 period,
                 2,
@@ -4977,10 +5474,15 @@ class Terminal(QMainWindow):
             )
             if not ok:
                 return
+        elif indicator not in CHART_FIXED_DEFAULT_INDICATORS:
+            try:
+                period = max(2, int(period))
+            except (TypeError, ValueError):
+                period = CHART_INDICATOR_DEFAULT_PERIODS.get(indicator, 20)
 
         key = chart.add_indicator(indicator, period)
         if key is None:
-            QMessageBox.warning(self, "Indicator", "Unsupported indicator.")
+            QMessageBox.warning(self, "Study", "Unsupported study.")
             return
 
         # Force redraw using existing candle cache for this symbol/timeframe.
@@ -5057,7 +5559,7 @@ class Terminal(QMainWindow):
     def _remove_indicator_from_current_chart(self):
         chart = self._current_chart_widget()
         if not isinstance(chart, ChartWidget):
-            QMessageBox.warning(self, "Chart", "Select a chart first.")
+            QMessageBox.warning(self, "Studies", "Select a chart first.")
             return
 
         indicator_specs = [
@@ -5066,7 +5568,7 @@ class Terminal(QMainWindow):
             if isinstance(spec, dict) and str(spec.get("key") or "").strip()
         ]
         if not indicator_specs:
-            QMessageBox.information(self, "Indicator", "This chart has no indicators to remove.")
+            QMessageBox.information(self, "Studies", "This chart has no studies to remove.")
             return
 
         options = []
@@ -5079,8 +5581,8 @@ class Terminal(QMainWindow):
 
         selection, ok = QInputDialog.getItem(
             self,
-            "Remove Indicator",
-            "Indicator:",
+            "Remove Study",
+            "Study:",
             options,
             0,
             False,
@@ -5089,7 +5591,7 @@ class Terminal(QMainWindow):
             return
 
         if not chart.remove_indicator(option_map.get(selection, "")):
-            QMessageBox.warning(self, "Indicator", "Unable to remove the selected indicator.")
+            QMessageBox.warning(self, "Studies", "Unable to remove the selected study.")
             return
 
         chart.updateGeometry()
@@ -5253,28 +5755,55 @@ class Terminal(QMainWindow):
         self.spinner_timer.start(500)
 
     def _update_symbols(self, exchange, symbols):
-
+        normalized_symbols = [str(symbol or "").strip().upper() for symbol in symbols or [] if str(symbol or "").strip()]
+        supported_symbols = set(normalized_symbols)
+        resolver = getattr(getattr(self, "controller", None), "_resolve_preferred_market_symbol", None)
         blocked = self.symbols_table.blockSignals(True)
         self.symbols_table.setRowCount(0)
         self.symbols_table.setAccessibleName(exchange)
+        Terminal._sync_exchange_scoped_actions(self)
         self._configure_market_watch_table()
         if self.symbol_picker is not None:
-            current_symbol = self.symbol_picker.currentText()
+            current_symbol = str(self.symbol_picker.currentText() or "").strip().upper()
+            resolved_current_symbol = current_symbol
+            if callable(resolver) and current_symbol:
+                try:
+                    resolved_current_symbol = str(resolver(current_symbol) or current_symbol).strip().upper() or current_symbol
+                except Exception:
+                    resolved_current_symbol = current_symbol
             self.symbol_picker.blockSignals(True)
             self.symbol_picker.clear()
-            self.symbol_picker.addItems(symbols)
-            if current_symbol in symbols:
+            self.symbol_picker.addItems(normalized_symbols)
+            if resolved_current_symbol in supported_symbols:
+                self.symbol_picker.setCurrentText(resolved_current_symbol)
+            elif current_symbol in supported_symbols:
                 self.symbol_picker.setCurrentText(current_symbol)
-            elif symbols:
+            elif normalized_symbols:
                 self.symbol_picker.setCurrentIndex(0)
             self.symbol_picker.blockSignals(False)
 
-        for symbol in symbols:
+        for symbol in normalized_symbols:
             row = self.symbols_table.rowCount()
             self.symbols_table.insertRow(row)
             self._set_market_watch_row(row, symbol, bid="-", ask="-", status="⏳", usd_value="-")
         self.symbols_table.blockSignals(blocked)
         self._reorder_market_watch_rows()
+
+        if callable(resolver):
+            for chart in self._all_chart_widgets():
+                chart_symbol = str(getattr(chart, "symbol", "") or "").strip().upper()
+                if not chart_symbol:
+                    continue
+                try:
+                    resolved_chart_symbol = str(resolver(chart_symbol) or chart_symbol).strip().upper() or chart_symbol
+                except Exception:
+                    resolved_chart_symbol = chart_symbol
+                if resolved_chart_symbol == chart_symbol:
+                    continue
+                if supported_symbols and resolved_chart_symbol not in supported_symbols and chart_symbol in supported_symbols:
+                    continue
+                self._retarget_chart_widget_symbol(chart, resolved_chart_symbol)
+                self._schedule_chart_data_refresh(chart)
 
     def _manual_trade_default_payload(self, prefill=None):
         return manual_trade_default_payload(self, prefill=prefill)
@@ -5910,58 +6439,18 @@ class Terminal(QMainWindow):
         take_profit=None,
     ):
         try:
-            submit_amount = requested_amount if requested_amount is not None else amount
-            order = await self.controller.submit_trade_with_preflight(
+            await submit_live_manual_trade(
+                self,
                 symbol=symbol,
                 side=side,
-                amount=submit_amount,
+                amount=amount,
+                requested_amount=requested_amount,
                 quantity_mode=quantity_mode,
                 order_type=order_type,
                 price=price,
                 stop_price=stop_price,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                source="manual",
-                strategy_name="Manual",
-                reason="Manual order",
-            )
-            status_text = str(order.get("status") or "submitted").replace("_", " ").upper()
-            display_amount = order.get(
-                "applied_requested_mode_amount",
-                requested_amount if requested_amount is not None else amount,
-            )
-            requested_display_amount = order.get(
-                "requested_amount",
-                requested_amount if requested_amount is not None else amount,
-            )
-            display_mode = self._normalize_manual_trade_quantity_mode(quantity_mode)
-            sizing_summary = str(order.get("sizing_summary") or "").strip()
-            ai_sizing_reason = str(order.get("ai_sizing_reason") or "").strip()
-            requested_suffix = (
-                f" | requested {requested_display_amount} {display_mode}"
-                if bool(order.get("size_adjusted"))
-                else ""
-            )
-            sizing_suffix = f" | {sizing_summary}" if sizing_summary else ""
-            ai_suffix = f" | ChatGPT size note: {ai_sizing_reason}" if ai_sizing_reason else ""
-            self.system_console.log(
-                (
-                    f"Manual order {status_text}: {side.upper()} {display_amount} {display_mode} "
-                    f"{symbol} ({order_type}){requested_suffix}{sizing_suffix}{ai_suffix}"
-                ),
-                "INFO",
-            )
-            message = f"{status_text.title()} {side.upper()} {display_amount} {display_mode} {symbol}."
-            if bool(order.get("size_adjusted")):
-                message += f"\nRequested: {requested_display_amount} {display_mode}"
-            if sizing_summary:
-                message += f"\nSizing: {sizing_summary}"
-            if ai_sizing_reason:
-                message += f"\nChatGPT size note: {ai_sizing_reason}"
-            self._show_async_message(
-                "Manual Order",
-                message,
-                QMessageBox.Icon.Information,
             )
         except Exception as exc:
             self.logger.exception("Manual order failed")
@@ -6052,6 +6541,145 @@ class Terminal(QMainWindow):
             """,
             width=900,
             height=720,
+        )
+
+    def _learning_market_snapshot(self):
+        symbol = ""
+        try:
+            symbol = str(self._current_chart_symbol() or "").strip().upper()
+        except Exception:
+            symbol = ""
+        if not symbol:
+            symbol = str(getattr(self, "symbol", "") or "").strip().upper()
+
+        loaded_symbols = list(getattr(self.controller, "symbols", []) or [])
+        if not symbol and loaded_symbols:
+            symbol = str(loaded_symbols[0]).strip().upper()
+
+        timeframe = str(getattr(self, "current_timeframe", "") or "1h").strip() or "1h"
+        try:
+            exchange_name = str(self._active_exchange_name() or "").strip()
+        except Exception:
+            exchange_name = ""
+
+        return {
+            "focus_symbol": symbol or "No active symbol",
+            "timeframe": timeframe,
+            "exchange": exchange_name.upper() or "DESK",
+            "loaded_symbols": len(loaded_symbols),
+            "connection": str(getattr(self, "current_connection_status", "connecting") or "connecting").strip().title(),
+            "news_mode": "Live feed on" if bool(getattr(self.controller, "news_enabled", True)) else "Live feed off",
+            "autotrade_mode": "Enabled" if bool(getattr(self, "autotrading_enabled", False)) else "Disabled",
+        }
+
+    def _trader_tv_html(self):
+        snapshot = self._learning_market_snapshot()
+        focus_symbol = html.escape(snapshot["focus_symbol"])
+        timeframe = html.escape(snapshot["timeframe"])
+        exchange = html.escape(snapshot["exchange"])
+        connection = html.escape(snapshot["connection"])
+        news_mode = html.escape(snapshot["news_mode"])
+        autotrade_mode = html.escape(snapshot["autotrade_mode"])
+
+        return f"""
+            <h2>Trader TV</h2>
+            <p><b>Trader TV</b> is the desk-side market briefing for the current Sopotek session. Use it to learn what matters before you place a trade.</p>
+
+            <h3>Current Desk Snapshot</h3>
+            <p>
+                <b>Desk:</b> {exchange}<br>
+                <b>Focus symbol:</b> {focus_symbol}<br>
+                <b>Time frame:</b> {timeframe}<br>
+                <b>Loaded symbols:</b> {snapshot["loaded_symbols"]}<br>
+                <b>Connection:</b> {connection}<br>
+                <b>News mode:</b> {news_mode}<br>
+                <b>Auto trading:</b> {autotrade_mode}
+            </p>
+
+            <h3>What To Learn From The Market</h3>
+            <ul>
+                <li><b>Trend:</b> Start with the higher-timeframe direction before drilling into entries.</li>
+                <li><b>Volatility:</b> Watch candle expansion, ATR, and spread changes before sizing up.</li>
+                <li><b>Liquidity:</b> Check order-book depth and recent prints so you do not trade into thin conditions.</li>
+                <li><b>Event risk:</b> Treat macro releases, earnings, and breaking news as volatility events.</li>
+            </ul>
+
+            <h3>Trader TV Segments</h3>
+            <ul>
+                <li><b>Pre-Market Map:</b> Mark the dominant trend, nearby support and resistance, and the high-impact calendar events for the session.</li>
+                <li><b>Intraday Rotation:</b> Compare leaders, laggards, and correlated symbols to understand where capital is rotating.</li>
+                <li><b>Risk Window:</b> Confirm whether volatility is expanding fast enough to justify a trade and whether your stop still fits the plan.</li>
+                <li><b>Closing Review:</b> Revisit your best and worst decisions while the market context is still fresh.</li>
+            </ul>
+
+            <h3>Where To Continue In Sopotek</h3>
+            <ul>
+                <li><b>Charts -&gt; Studies:</b> Layer RSI, moving averages, ATR, and volume studies onto the active chart.</li>
+                <li><b>Research -&gt; Sopotek Pilot:</b> Ask the AI for symbol context, scenario planning, and trade ideas.</li>
+                <li><b>Analyze -&gt; Positions &amp; Risk:</b> Check exposure, position structure, and portfolio limits before execution.</li>
+                <li><b>Review -&gt; Journal Review:</b> Turn live observations into repeatable lessons after the session.</li>
+            </ul>
+        """
+
+    def _education_center_html(self):
+        snapshot = self._learning_market_snapshot()
+        focus_symbol = html.escape(snapshot["focus_symbol"])
+        timeframe = html.escape(snapshot["timeframe"])
+
+        return f"""
+            <h2>Education Center</h2>
+            <p><b>Education Center</b> is the trader learning hub inside Sopotek. Use it to build skill, rehearse process, and connect lessons to the live workspace.</p>
+
+            <h3>Learning Track</h3>
+            <ol>
+                <li><b>Market structure:</b> Learn trend, range, breakout, pullback, and failed breakout behavior.</li>
+                <li><b>Trade location:</b> Practice entering only where reward-to-risk is clear and invalidation is obvious.</li>
+                <li><b>Risk control:</b> Keep size aligned with volatility, stop distance, and your account rules.</li>
+                <li><b>Execution discipline:</b> Trade the plan you wrote, not the emotion you feel in the moment.</li>
+                <li><b>Review loop:</b> Journal every good and bad trade so the next session starts smarter.</li>
+            </ol>
+
+            <h3>Practice Loop Inside This App</h3>
+            <ul>
+                <li><b>Step 1:</b> Open <b>{focus_symbol}</b> on <b>{timeframe}</b> and map the structure with chart studies.</li>
+                <li><b>Step 2:</b> Use <b>Trader TV</b> and <b>Sopotek Pilot</b> to form a market thesis.</li>
+                <li><b>Step 3:</b> Run the idea through <b>Analyze</b> for exposure, stop placement, and portfolio fit.</li>
+                <li><b>Step 4:</b> Execute in paper mode first, then review it in <b>Closed Journal</b> and <b>Journal Review</b>.</li>
+            </ul>
+
+            <h3>Study Topics To Repeat Weekly</h3>
+            <ul>
+                <li><b>Context:</b> How trend, volatility, and liquidity change the same setup.</li>
+                <li><b>Risk:</b> Why the best traders protect downside before they chase upside.</li>
+                <li><b>Process:</b> How checklists and journals improve consistency more than raw prediction.</li>
+                <li><b>Adaptation:</b> How to review losses without overfitting or revenge trading.</li>
+            </ul>
+
+            <h3>Ready-For-Live Checklist</h3>
+            <ul>
+                <li>You can explain the setup in one sentence before you enter.</li>
+                <li>You know where the trade is wrong before you know where it can win.</li>
+                <li>Your size respects the risk profile, not your latest emotion.</li>
+                <li>You are willing to review the trade honestly after it closes.</li>
+            </ul>
+        """
+
+    def _open_trader_tv_window(self):
+        return self._open_text_window(
+            "education_trader_tv",
+            "Trader TV",
+            self._trader_tv_html(),
+            width=920,
+            height=720,
+        )
+
+    def _open_education_center_window(self):
+        return self._open_text_window(
+            "education_center",
+            "Education Center",
+            self._education_center_html(),
+            width=940,
+            height=760,
         )
 
     def _multi_chart_layout(self):
@@ -7899,6 +8527,40 @@ class Terminal(QMainWindow):
         ]
         capabilities_browser.setHtml("<h3>Broker Capabilities</h3><ul>" + "".join(capability_lines) + "</ul>")
 
+    def _export_diagnostics_bundle(self):
+        default_dir = str(self.settings.value("diagnostics/export_dir", "logs") or "logs")
+        destination = QFileDialog.getExistingDirectory(self, "Export Diagnostics Bundle", default_dir)
+        if not destination:
+            return None
+        try:
+            bundle_path = export_diagnostics_bundle(self, destination)
+        except Exception as exc:
+            self.logger.exception("Diagnostics bundle export failed")
+            if hasattr(self, "_push_notification"):
+                self._push_notification(
+                    "Diagnostics export failed",
+                    str(exc),
+                    level="ERROR",
+                    source="diagnostics",
+                    dedupe_seconds=5.0,
+                )
+            QMessageBox.warning(self, "Export Diagnostics", f"Diagnostics bundle export failed:\n{exc}")
+            return None
+
+        self.settings.setValue("diagnostics/export_dir", str(Path(destination)))
+        if getattr(self, "system_console", None) is not None:
+            self.system_console.log(f"Diagnostics bundle exported to {bundle_path}", "INFO")
+        if hasattr(self, "_push_notification"):
+            self._push_notification(
+                "Diagnostics bundle exported",
+                f"Saved diagnostics bundle to {bundle_path}.",
+                level="INFO",
+                source="diagnostics",
+                dedupe_seconds=2.0,
+            )
+        QMessageBox.information(self, "Export Diagnostics", f"Diagnostics bundle exported to:\n{bundle_path}")
+        return bundle_path
+
     def _open_system_health_window(self):
         window = self._get_or_create_tool_window(
             "system_health",
@@ -7921,6 +8583,25 @@ class Terminal(QMainWindow):
             )
             layout.addWidget(summary)
 
+            controls = QHBoxLayout()
+            rerun_btn = QPushButton("Run Checks")
+            rerun_btn.clicked.connect(
+                lambda: (
+                    self.controller._create_task(self.controller.run_startup_health_check(), "manual_health_check")
+                    if hasattr(self.controller, "run_startup_health_check") and hasattr(self.controller, "_create_task")
+                    else None
+                )
+            )
+            export_btn = QPushButton("Export Diagnostics")
+            export_btn.clicked.connect(self._export_diagnostics_bundle)
+            logs_btn = QPushButton("Open Logs")
+            logs_btn.clicked.connect(self._open_logs)
+            controls.addWidget(rerun_btn)
+            controls.addWidget(export_btn)
+            controls.addWidget(logs_btn)
+            controls.addStretch()
+            layout.addLayout(controls)
+
             checks = QTableWidget()
             checks.setColumnCount(3)
             checks.setHorizontalHeaderLabels(["Check", "Status", "Detail"])
@@ -7934,6 +8615,8 @@ class Terminal(QMainWindow):
 
             window.setCentralWidget(container)
             window._health_summary = summary
+            window._health_rerun_btn = rerun_btn
+            window._health_export_btn = export_btn
             window._health_checks_table = checks
             window._capabilities_browser = capabilities_browser
 
@@ -8119,7 +8802,12 @@ class Terminal(QMainWindow):
 
     def _set_status_value(self, field, value, tooltip=None):
         label = self.status_labels.get(field)
-        if label is None:
+        if label is None or not self._is_qt_object_alive(label):
+            if label is not None:
+                try:
+                    self.status_labels.pop(field, None)
+                except Exception:
+                    pass
             return
 
         display = self._elide_text(value)
@@ -8154,27 +8842,17 @@ class Terminal(QMainWindow):
         try:
 
             controller = self.controller
-
-            balance = getattr(controller, "balances", {})
-            balance_equity = None
-            resolve_equity = getattr(controller, "_extract_balance_equity_value", None)
-            if callable(resolve_equity):
-                try:
-                    balance_equity = resolve_equity(balance)
-                except Exception:
-                    balance_equity = None
-
-            if balance_equity is None:
-                equity = getattr(controller.portfolio, "get_equity", lambda: 0)()
-            else:
-                equity = float(balance_equity)
-            spread = getattr(controller, "spread_pct", 0)
-            positions = list(self._active_positions_snapshot() or [])
-            symbols = getattr(controller, "symbols", [])
+            runtime_metrics = self._runtime_metrics_snapshot()
+            balance = dict(runtime_metrics.get("balances") or {})
+            equity = float(runtime_metrics.get("equity_value") or 0.0)
+            spread = runtime_metrics.get("spread_pct", 0)
+            positions = list(runtime_metrics.get("positions") or [])
+            open_orders = list(runtime_metrics.get("open_orders") or [])
+            symbols_loaded = int(runtime_metrics.get("symbols_loaded") or 0)
             exchange_display, exchange_tooltip = self._system_status_exchange_display()
 
-            free = balance.get("free", 0) if isinstance(balance, dict) else 0
-            used = balance.get("used", 0) if isinstance(balance, dict) else 0
+            free = runtime_metrics.get("free_balances", 0)
+            used = runtime_metrics.get("used_balances", 0)
 
             balance_summary, balance_tooltip = self._compact_balance_text(balance)
             free_summary, free_tooltip = self._compact_balance_text(
@@ -8211,9 +8889,9 @@ class Terminal(QMainWindow):
             self._set_status_value("Trade Venue", trade_venue)
             self._set_status_value("News Mode", news_mode)
 
-            self._set_status_value("Symbols Loaded", len(symbols))
+            self._set_status_value("Symbols Loaded", symbols_loaded)
 
-            self._set_status_value("Equity", f"{equity:.4f}")
+            self._set_status_value("Equity", self._format_currency(equity))
 
             self._set_status_value("Balance", balance_summary, balance_tooltip)
 
@@ -8224,7 +8902,7 @@ class Terminal(QMainWindow):
             self._set_status_value("Spread %", f"{spread:.4f}")
 
             self._set_status_value("Open Positions", len(positions))
-            self._set_status_value("Open Orders", len(getattr(self, "_latest_open_orders_snapshot", [])))
+            self._set_status_value("Open Orders", len(open_orders))
 
             market_stream_status = "Stopped"
             if hasattr(controller, "get_market_stream_status"):
@@ -8251,8 +8929,8 @@ class Terminal(QMainWindow):
             self._update_kill_switch_button()
 
             self._update_risk_heatmap()
-            self._populate_positions_table(getattr(self, "_latest_positions_snapshot", []))
-            self._populate_open_orders_table(getattr(self, "_latest_open_orders_snapshot", []))
+            self._populate_positions_table(positions)
+            self._populate_open_orders_table(open_orders)
             self._schedule_broker_status_refresh()
             self._schedule_positions_refresh()
             self._schedule_open_orders_refresh()
@@ -8352,6 +9030,11 @@ class Terminal(QMainWindow):
             "regime": str(data.get("regime", "") or ""),
             "volatility": data.get("volatility", ""),
             "reason": str(data.get("reason", "") or ""),
+            "decision": str(data.get("decision", "") or ""),
+            "risk": str(data.get("risk", "") or ""),
+            "warnings": list(data.get("warnings") or []),
+            "provider": str(data.get("provider", "") or ""),
+            "mode": str(data.get("mode", "") or ""),
             "timestamp": str(data.get("timestamp", "") or ""),
         }
         self._ai_signal_records[symbol] = record
@@ -9699,18 +10382,23 @@ def _hotfix_backtest_requested_range_text(window=None, context=None):
 
 def _hotfix_backtest_requested_limit(window=None, context=None, fallback=None):
     context = context or {}
+    backtest_cap = 1000000
+    if window is not None:
+        terminal = getattr(window, "_terminal_owner", None)
+        controller = getattr(terminal, "controller", None) if terminal is not None else None
+        backtest_cap = int(getattr(controller, "MAX_BACKTEST_HISTORY_LIMIT", backtest_cap) or backtest_cap)
     widget = getattr(window, "_backtest_history_limit", None) if window is not None else None
     if widget is not None:
         try:
-            return max(1, min(int(widget.value()), 50000))
+            return max(1, min(int(widget.value()), backtest_cap))
         except Exception:
             pass
     value = context.get("history_limit", fallback if fallback is not None else 50000)
     try:
-        return max(1, min(int(value), 50000))
+        return max(1, min(int(value), backtest_cap))
     except Exception:
         fallback_value = fallback if fallback is not None else 50000
-        return max(1, min(int(fallback_value), 50000))
+        return max(1, min(int(fallback_value), backtest_cap))
 
 
 def _hotfix_backtest_apply_history_limit(frame, requested_limit):
@@ -9767,13 +10455,15 @@ def _hotfix_backtest_required_history_limit(self, timeframe, start_date=None, en
         required_bars = int(np.ceil(total_seconds / float(step_seconds))) + 64
         required_limit = max(default_limit, required_bars)
 
-    resolver = getattr(self.controller, "_resolve_history_limit", None)
+    resolver = getattr(self.controller, "_resolve_backtest_history_limit", None)
+    if not callable(resolver):
+        resolver = getattr(self.controller, "_resolve_history_limit", None)
     if callable(resolver):
         try:
             return int(resolver(required_limit))
         except Exception:
             pass
-    return max(100, min(int(required_limit), 50000))
+    return max(100, min(int(required_limit), int(getattr(self.controller, "MAX_BACKTEST_HISTORY_LIMIT", 1000000) or 1000000)))
 
 
 def _hotfix_backtest_frame_for_symbol(self, symbol, timeframe):
@@ -10172,6 +10862,7 @@ async def _hotfix_prepare_backtest_context_with_selection(self, symbol=None, tim
             limit=fetch_limit,
             start_time=_hotfix_qdate_to_utc_boundary_text(selected_start_date, end_of_day=False),
             end_time=_hotfix_qdate_to_utc_boundary_text(selected_end_date, end_of_day=True),
+            history_scope="backtest",
         )
         frame = (getattr(self.controller, "candle_buffers", {}).get(symbol) or {}).get(timeframe)
     frame = candles_to_df(frame)
@@ -11129,6 +11820,9 @@ def _hotfix_open_stellar_asset_trustline(self, window=None):
 
 
 def _hotfix_open_stellar_asset_explorer_window(self):
+    if Terminal._active_exchange_name(self) != "stellar":
+        return
+
     window = self._get_or_create_tool_window(
         "stellar_asset_explorer",
         "Stellar Asset Explorer",
@@ -12289,12 +12983,18 @@ def _hotfix_show_ml_research_window(self):
         controls = QHBoxLayout()
         train_btn = QPushButton("Train Model")
         walk_forward_btn = QPushButton("Run Walk-Forward")
+        auto_research_btn = QPushButton("Auto Research Best")
+        auto_deploy_btn = QPushButton("Auto Deploy Best")
         deploy_btn = QPushButton("Deploy Selected")
         train_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_ml_model_training()))
         walk_forward_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_ml_walk_forward()))
+        auto_research_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_ml_auto_research()))
+        auto_deploy_btn.clicked.connect(lambda: asyncio.get_event_loop().create_task(self._run_ml_auto_research(auto_deploy=True)))
         deploy_btn.clicked.connect(self._deploy_selected_ml_model)
         controls.addWidget(train_btn)
         controls.addWidget(walk_forward_btn)
+        controls.addWidget(auto_research_btn)
+        controls.addWidget(auto_deploy_btn)
         controls.addWidget(deploy_btn)
         controls.addStretch()
         layout.addLayout(controls)
@@ -12324,6 +13024,16 @@ def _hotfix_show_ml_research_window(self):
         )
         tabs.addTab(walk_table, "Walk-Forward")
 
+        leaderboard_table = QTableWidget()
+        leaderboard_table.setAlternatingRowColors(True)
+        leaderboard_table.setSelectionBehavior(QTableWidget.SelectRows)
+        leaderboard_table.setSelectionMode(QTableWidget.SingleSelection)
+        leaderboard_table.setColumnCount(8)
+        leaderboard_table.setHorizontalHeaderLabels(
+            ["Model", "Family", "Seq", "Score", "WF Acc", "WF Prec", "Test Acc", "Test Prec"]
+        )
+        tabs.addTab(leaderboard_table, "Leaderboard")
+
         details = QTextBrowser()
         details.setStyleSheet(
             "QTextBrowser { background-color: #0b1220; color: #d7dfeb; border: 1px solid #24344f; border-radius: 10px; padding: 10px; }"
@@ -12346,9 +13056,12 @@ def _hotfix_show_ml_research_window(self):
         window._ml_research_test_window_spin = test_window_spin
         window._ml_research_train_btn = train_btn
         window._ml_research_walk_btn = walk_forward_btn
+        window._ml_research_auto_btn = auto_research_btn
+        window._ml_research_auto_deploy_btn = auto_deploy_btn
         window._ml_research_deploy_btn = deploy_btn
         window._ml_research_experiments_table = experiments_table
         window._ml_research_walk_table = walk_table
+        window._ml_research_leaderboard_table = leaderboard_table
         window._ml_research_details = details
 
         symbol_picker.currentTextChanged.connect(lambda _text: _hotfix_ml_research_selection_changed(self))
@@ -12361,6 +13074,7 @@ def _hotfix_show_ml_research_window(self):
         train_window_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
         test_window_spin.valueChanged.connect(lambda _v: _hotfix_ml_research_selection_changed(self))
         experiments_table.itemSelectionChanged.connect(lambda: self._refresh_ml_research_window())
+        leaderboard_table.itemSelectionChanged.connect(lambda: self._refresh_ml_research_window())
 
     _hotfix_refresh_ml_research_selectors(self, window)
     self._refresh_ml_research_window(window)
@@ -12534,7 +13248,86 @@ def _hotfix_populate_ml_walk_table(_self, table, frame):
     table.resizeColumnsToContents()
 
 
-def _hotfix_build_ml_research_details(_self, context, result=None, walk_summary=None):
+def _hotfix_populate_ml_leaderboard_table(_self, table, frame):
+    if table is None:
+        return
+    leaderboard = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    if leaderboard.empty:
+        table.setRowCount(0)
+        return
+    display = leaderboard.copy().reset_index(drop=True)
+    table.setRowCount(len(display))
+    columns = [
+        ("model_name", "{}"),
+        ("model_family", "{}"),
+        ("sequence_length", "{:g}"),
+        ("selection_score", "{:.3f}"),
+        ("walk_forward_accuracy", "{:.3f}"),
+        ("walk_forward_precision", "{:.3f}"),
+        ("test_accuracy", "{:.3f}"),
+        ("test_precision", "{:.3f}"),
+    ]
+    for row_idx, (_, row) in enumerate(display.iterrows()):
+        for col_idx, (column, fmt) in enumerate(columns):
+            value = row.get(column, "")
+            try:
+                text = fmt.format(float(value)) if fmt != "{}" else fmt.format(value)
+            except Exception:
+                text = str(value)
+            item = QTableWidgetItem(text)
+            if col_idx == 0:
+                item.setData(Qt.UserRole, str(row.get("model_name") or ""))
+            table.setItem(row_idx, col_idx, item)
+    table.resizeColumnsToContents()
+
+
+def _hotfix_select_ml_table_row_by_model_name(table, model_name):
+    if table is None:
+        return
+    target = str(model_name or "").strip()
+    if not target:
+        return
+    blocked = table.blockSignals(True)
+    try:
+        for row_idx in range(table.rowCount()):
+            items = [table.item(row_idx, column) for column in range(min(2, table.columnCount()))]
+            candidate = ""
+            for item in items:
+                if item is None:
+                    continue
+                candidate = str(item.data(Qt.UserRole) or item.text() or "").strip()
+                if candidate:
+                    break
+            if candidate == target:
+                table.selectRow(row_idx)
+                return
+    finally:
+        table.blockSignals(blocked)
+
+
+def _hotfix_effective_ml_model_name(self, window=None, prefer_best=True):
+    model_name = ""
+    if window is not None:
+        leaderboard_table = getattr(window, "_ml_research_leaderboard_table", None)
+        if leaderboard_table is not None and leaderboard_table.currentRow() >= 0:
+            item = leaderboard_table.item(leaderboard_table.currentRow(), 0)
+            if item is not None:
+                model_name = str(item.data(Qt.UserRole) or item.text() or "").strip()
+        if not model_name:
+            table = getattr(window, "_ml_research_experiments_table", None)
+            if table is not None and table.currentRow() >= 0:
+                item = table.item(table.currentRow(), 1)
+                if item is not None:
+                    model_name = str(item.data(Qt.UserRole) or item.text() or "").strip()
+    if not model_name and prefer_best:
+        best_candidate = getattr(getattr(self, "_ml_auto_research_result", None), "best_candidate", None)
+        model_name = str(getattr(best_candidate, "model_name", "") or "").strip()
+    if not model_name:
+        model_name = str(getattr(getattr(self, "_ml_latest_result", None), "model_name", "") or "").strip()
+    return model_name
+
+
+def _hotfix_build_ml_research_details(_self, context, result=None, walk_summary=None, auto_summary=None):
     lines = ["<h3 style='margin-top:0;'>ML Research Lab</h3>"]
     if context:
         lines.append(
@@ -12544,6 +13337,20 @@ def _hotfix_build_ml_research_details(_self, context, result=None, walk_summary=
             f"<b>Family:</b> {html.escape(str(context.get('model_family') or '-'))} | "
             f"<b>Horizon:</b> {html.escape(str(context.get('horizon') or '-'))}"
             "</p>"
+        )
+    best_candidate = getattr(auto_summary, "best_candidate", None) if auto_summary is not None else None
+    if best_candidate is not None:
+        best_metrics = dict(getattr(best_candidate, "selection_metrics", {}) or {})
+        lines.append("<h4>Auto Research Winner</h4>")
+        lines.append(
+            "<ul>"
+            f"<li>Model: <b>{html.escape(str(best_candidate.model_name or '-'))}</b></li>"
+            f"<li>Family: <b>{html.escape(str(best_candidate.model_family or '-'))}</b> | Sequence length: <b>{int(best_candidate.sequence_length or 1)}</b></li>"
+            f"<li>Selection score: <b>{float(best_metrics.get('selection_score', 0.0) or 0.0):.3f}</b></li>"
+            f"<li>Walk-forward accuracy: <b>{float(best_metrics.get('walk_forward_accuracy', 0.0) or 0.0):.3f}</b></li>"
+            f"<li>Walk-forward precision: <b>{float(best_metrics.get('walk_forward_precision', 0.0) or 0.0):.3f}</b></li>"
+            f"<li>Test accuracy: <b>{float(best_metrics.get('test_accuracy', 0.0) or 0.0):.3f}</b></li>"
+            "</ul>"
         )
     if result is not None:
         metrics = dict(getattr(result, "metrics", {}) or {})
@@ -12582,11 +13389,14 @@ def _hotfix_refresh_ml_research_window(self, window=None, message=None):
     summary = getattr(window, "_ml_research_summary", None)
     train_btn = getattr(window, "_ml_research_train_btn", None)
     walk_btn = getattr(window, "_ml_research_walk_btn", None)
+    auto_btn = getattr(window, "_ml_research_auto_btn", None)
+    auto_deploy_btn = getattr(window, "_ml_research_auto_deploy_btn", None)
     deploy_btn = getattr(window, "_ml_research_deploy_btn", None)
     experiments_table = getattr(window, "_ml_research_experiments_table", None)
     walk_table = getattr(window, "_ml_research_walk_table", None)
+    leaderboard_table = getattr(window, "_ml_research_leaderboard_table", None)
     details = getattr(window, "_ml_research_details", None)
-    if status is None or summary is None or experiments_table is None or walk_table is None or details is None:
+    if status is None or summary is None or experiments_table is None or walk_table is None or leaderboard_table is None or details is None:
         return
 
     if message is not None:
@@ -12594,30 +13404,46 @@ def _hotfix_refresh_ml_research_window(self, window=None, message=None):
 
     context = getattr(self, "_ml_research_context", {}) or {}
     running = bool(getattr(self, "_ml_research_running", False))
+    running_mode = str(getattr(self, "_ml_research_mode", "") or "").strip().lower()
+    best_candidate = getattr(getattr(self, "_ml_auto_research_result", None), "best_candidate", None)
     status.setText(getattr(self, "_ml_research_status_message", None) or ("ML research running..." if running else "ML research workspace ready."))
-    summary.setText(
+    summary_parts = [
         f"Symbol: {context.get('symbol', '-')} | Timeframe: {context.get('timeframe', '-')} | "
         f"Family: {context.get('model_family', '-')} | Horizon: {context.get('horizon', '-')} | "
         f"Test Size: {float(context.get('test_size', 0.25) or 0.25):.0%}"
-    )
+    ]
+    if best_candidate is not None:
+        summary_parts.append(
+            f" | Best: {best_candidate.model_family} -> {best_candidate.model_name}"
+        )
+    summary.setText("".join(summary_parts))
     if train_btn is not None:
         train_btn.setEnabled(not running)
-        train_btn.setText("Training..." if running else "Train Model")
+        train_btn.setText("Training..." if running and running_mode == "training" else "Train Model")
     if walk_btn is not None:
         walk_btn.setEnabled(not running)
-        walk_btn.setText("Running..." if running else "Run Walk-Forward")
+        walk_btn.setText("Running..." if running and running_mode == "walk_forward" else "Run Walk-Forward")
+    if auto_btn is not None:
+        auto_btn.setEnabled(not running)
+        auto_btn.setText("Researching..." if running and running_mode == "auto_research" else "Auto Research Best")
+    if auto_deploy_btn is not None:
+        auto_deploy_btn.setEnabled(not running)
+        auto_deploy_btn.setText("Deploying..." if running and running_mode == "auto_deploy" else "Auto Deploy Best")
 
     pipeline = _hotfix_get_ml_pipeline(self)
     experiment_frame = pipeline.experiment_tracker.to_frame()
     _hotfix_populate_ml_experiments_table(self, experiments_table, experiment_frame)
     _hotfix_populate_ml_walk_table(self, walk_table, getattr(self, "_ml_walk_forward_summary", None))
+    _hotfix_populate_ml_leaderboard_table(self, leaderboard_table, getattr(getattr(self, "_ml_auto_research_result", None), "leaderboard", None))
 
-    selected_model_name = ""
-    current_row = experiments_table.currentRow()
-    if current_row >= 0:
-        item = experiments_table.item(current_row, 1)
-        if item is not None:
-            selected_model_name = str(item.data(Qt.UserRole) or item.text() or "").strip()
+    preferred_model_name = str(getattr(self, "_ml_selected_model_name", "") or "").strip()
+    if not preferred_model_name and best_candidate is not None:
+        preferred_model_name = str(best_candidate.model_name or "").strip()
+    if preferred_model_name:
+        _hotfix_select_ml_table_row_by_model_name(experiments_table, preferred_model_name)
+        _hotfix_select_ml_table_row_by_model_name(leaderboard_table, preferred_model_name)
+
+    selected_model_name = _hotfix_effective_ml_model_name(self, window=window)
     if deploy_btn is not None:
         deploy_btn.setEnabled((not running) and bool(selected_model_name or getattr(getattr(self, "_ml_latest_result", None), "model_name", "")))
 
@@ -12627,6 +13453,7 @@ def _hotfix_refresh_ml_research_window(self, window=None, message=None):
             context,
             result=getattr(self, "_ml_latest_result", None),
             walk_summary=getattr(self, "_ml_walk_forward_summary", None),
+            auto_summary=getattr(self, "_ml_auto_research_result", None),
         )
     )
 
@@ -12645,6 +13472,7 @@ async def _hotfix_run_ml_model_training(self):
             raise RuntimeError("No ML dataset could be built from the selected history")
 
         self._ml_research_running = True
+        self._ml_research_mode = "training"
         self._ml_research_status_message = "Training ML model..."
         self._ml_research_context = {**(getattr(self, "_ml_research_context", {}) or {}), **context}
         self._refresh_ml_research_window(message="Training ML model...")
@@ -12664,6 +13492,7 @@ async def _hotfix_run_ml_model_training(self):
             "terminal_training",
         )
         self._ml_latest_result = result
+        self._ml_selected_model_name = str(result.model_name or "").strip()
         self.system_console.log(f"ML model trained: {result.model_name}", "INFO")
         self._ml_research_status_message = "ML training completed."
         self._refresh_ml_research_window(message="ML training completed.")
@@ -12673,6 +13502,7 @@ async def _hotfix_run_ml_model_training(self):
         self._refresh_ml_research_window(message=f"ML training failed: {e}")
     finally:
         self._ml_research_running = False
+        self._ml_research_mode = ""
         self._refresh_ml_research_window()
 
 
@@ -12690,6 +13520,7 @@ async def _hotfix_run_ml_walk_forward(self):
             raise RuntimeError("No ML dataset could be built from the selected history")
 
         self._ml_research_running = True
+        self._ml_research_mode = "walk_forward"
         self._ml_research_status_message = "Running ML walk-forward..."
         self._ml_research_context = {**(getattr(self, "_ml_research_context", {}) or {}), **context}
         self._refresh_ml_research_window(message="Running ML walk-forward...")
@@ -12715,22 +13546,98 @@ async def _hotfix_run_ml_walk_forward(self):
         self._refresh_ml_research_window(message=f"ML walk-forward failed: {e}")
     finally:
         self._ml_research_running = False
+        self._ml_research_mode = ""
         self._refresh_ml_research_window()
 
 
-def _hotfix_deploy_selected_ml_model(self):
+async def _hotfix_run_ml_auto_research(self, auto_deploy=False):
+    if bool(getattr(self, "_ml_research_running", False)):
+        self._show_ml_research_window()
+        self._refresh_ml_research_window(message="ML research is already running.")
+        return
+
+    try:
+        self._show_ml_research_window()
+        context = await _hotfix_prepare_ml_research_context(self)
+        dataset = context.get("dataset")
+        if dataset is None or dataset.empty:
+            raise RuntimeError("No ML dataset could be built from the selected history")
+
+        self._ml_research_running = True
+        self._ml_research_mode = "auto_deploy" if auto_deploy else "auto_research"
+        self._ml_research_status_message = (
+            "Auto researching and deploying the best ML model..."
+            if auto_deploy
+            else "Auto researching ML candidates..."
+        )
+        self._ml_research_context = {**(getattr(self, "_ml_research_context", {}) or {}), **context}
+        self._refresh_ml_research_window(message=self._ml_research_status_message)
+
+        pipeline = _hotfix_get_ml_pipeline(self)
+        symbol_label = str(context.get("symbol") or "symbol").replace("/", "_")
+        timeframe_label = str(context.get("timeframe") or "1h").replace("/", "_")
+        auto_summary = await asyncio.to_thread(
+            pipeline.auto_research,
+            dataset,
+            ["linear", "tree", "sequence"],
+            context["sequence_length"],
+            context["test_size"],
+            context["train_window"],
+            context["test_window"],
+            None,
+            f"{symbol_label}_{timeframe_label}_auto",
+            "ml_auto_research_lab",
+            "terminal_auto_research",
+            None,
+        )
+        best_candidate = getattr(auto_summary, "best_candidate", None)
+        if best_candidate is None:
+            raise RuntimeError("Auto research did not return a winning model")
+
+        self._ml_auto_research_result = auto_summary
+        self._ml_best_result = best_candidate.result
+        self._ml_latest_result = best_candidate.result
+        self._ml_walk_forward_summary = best_candidate.walk_summary
+        self._ml_walk_forward_predictions = best_candidate.walk_predictions
+        self._ml_selected_model_name = str(best_candidate.model_name or "").strip()
+        self._ml_research_context = {
+            **(getattr(self, "_ml_research_context", {}) or {}),
+            "model_family": str(best_candidate.model_family or context.get("model_family") or "linear"),
+            "sequence_length": int(best_candidate.sequence_length or context.get("sequence_length", 4) or 4),
+        }
+
+        best_score = float(best_candidate.selection_score or 0.0)
+        self.system_console.log(
+            f"Auto research selected {best_candidate.model_name} ({best_candidate.model_family}) "
+            f"with score {best_score:.3f}.",
+            "INFO",
+        )
+        self._ml_research_status_message = (
+            f"Auto research selected {best_candidate.model_name}."
+        )
+        self._refresh_ml_research_window(message=self._ml_research_status_message)
+
+        if auto_deploy:
+            self._ml_research_running = False
+            self._ml_research_mode = ""
+            self._deploy_selected_ml_model(model_name=best_candidate.model_name)
+            self._ml_research_status_message = f"Auto research deployed {best_candidate.model_name}."
+            self._refresh_ml_research_window(message=self._ml_research_status_message)
+    except Exception as e:
+        self.system_console.log(f"ML auto research failed: {e}", "ERROR")
+        self._ml_research_status_message = f"ML auto research failed: {e}"
+        self._refresh_ml_research_window(message=f"ML auto research failed: {e}")
+    finally:
+        self._ml_research_running = False
+        self._ml_research_mode = ""
+        self._refresh_ml_research_window()
+
+
+def _hotfix_deploy_selected_ml_model(self, model_name=None):
     try:
         window = getattr(self, "detached_tool_windows", {}).get("ml_research_lab")
         pipeline = _hotfix_get_ml_pipeline(self)
-        model_name = ""
-        if window is not None:
-            table = getattr(window, "_ml_research_experiments_table", None)
-            if table is not None and table.currentRow() >= 0:
-                item = table.item(table.currentRow(), 1)
-                if item is not None:
-                    model_name = str(item.data(Qt.UserRole) or item.text() or "").strip()
-        if not model_name:
-            model_name = str(getattr(getattr(self, "_ml_latest_result", None), "model_name", "") or "").strip()
+        model_name = str(model_name or "").strip() or _hotfix_effective_ml_model_name(self, window=window)
         if not model_name:
             raise RuntimeError("Train or select an ML model before deployment")
 
@@ -12745,6 +13652,7 @@ def _hotfix_deploy_selected_ml_model(self):
 
         pipeline.deploy_to_strategy_registry(strategy_registry, model_name, strategy_name="ML Model")
         self.controller.strategy_name = "ML Model"
+        self._ml_selected_model_name = model_name
         if hasattr(strategy_registry, "set_active"):
             strategy_registry.set_active("ML Model")
         self.system_console.log(f"Deployed ML model: {model_name}", "INFO")
@@ -12788,12 +13696,12 @@ async def _hotfix_reload_chart_data(self, symbol, timeframe):
 
 
 def _hotfix_open_risk_settings(self):
-    self._show_settings_window()
+    self._show_settings_window("Risk")
 
 
 def _hotfix_save_settings(self):
     try:
-        self._show_settings_window()
+        self._show_settings_window("General")
     except Exception as e:
         self.logger.error(f"Risk settings error: {e}")
 
@@ -12845,6 +13753,18 @@ def _hotfix_update_database_mode_state(window):
             )
         else:
             hint_label.setText("Local mode uses Sopotek's built-in SQLite database in the data folder.")
+
+
+def _hotfix_focus_settings_tab(window, tab_name):
+    tabs = getattr(window, "_settings_tabs", None)
+    if tabs is None or not tab_name:
+        return
+
+    target = str(tab_name).strip().lower()
+    for index in range(tabs.count()):
+        if str(tabs.tabText(index) or "").strip().lower() == target:
+            tabs.setCurrentIndex(index)
+            return
 
 
 def _hotfix_refresh_market_type_picker(window, controller):
@@ -13151,6 +14071,30 @@ def _hotfix_test_openai_from_settings(self, window=None):
         window._settings_openai_test_task = asyncio.create_task(runner)
 
 
+def _hotfix_wrap_tab_in_scroll_area(content, minimum_width=0):
+    if isinstance(content, QScrollArea):
+        return content
+
+    content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    holder = QWidget()
+    holder_layout = QVBoxLayout(holder)
+    holder_layout.setContentsMargins(0, 0, 0, 0)
+    holder_layout.setSpacing(0)
+    holder_layout.addWidget(content)
+    holder_layout.addStretch(1)
+    if minimum_width:
+        holder.setMinimumWidth(int(minimum_width))
+
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+    scroll.setWidget(holder)
+    return scroll
+
+
 def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False):
     if not isinstance(values, dict):
         return
@@ -13417,7 +14361,7 @@ def _hotfix_apply_settings_values(self, values, persist=True, reload_chart=False
         self._save_detached_chart_layouts()
 
 
-def _hotfix_show_settings_window(self):
+def _hotfix_show_settings_window(self, initial_tab=None):
     window = self._get_or_create_tool_window(
         "application_settings",
         "Settings",
@@ -13429,7 +14373,10 @@ def _hotfix_show_settings_window(self):
         container = QWidget()
         layout = QVBoxLayout(container)
 
-        intro = QLabel("Configure trading defaults, chart behavior, refresh timing, and risk in one place.")
+        intro = QLabel(
+            "Configure trading defaults, chart behavior, refresh timing, and integrations here. "
+            "Use the Analyze menu when you want to jump straight to portfolio controls and risk limits."
+        )
         intro.setWordWrap(True)
         intro.setStyleSheet("color: #c9d5e8; font-weight: 600; padding: 4px 0 10px 0;")
         layout.addWidget(intro)
@@ -13482,7 +14429,7 @@ def _hotfix_show_settings_window(self):
         general_form.addRow("Initial capital", initial_capital)
         general_form.addRow("Terminal refresh (ms)", refresh_ms)
         general_form.addRow("Orderbook refresh (ms)", orderbook_ms)
-        tabs.addTab(general_tab, "General")
+        tabs.addTab(_hotfix_wrap_tab_in_scroll_area(general_tab, minimum_width=600), "General")
 
         storage_tab = QWidget()
         storage_form = QFormLayout(storage_tab)
@@ -13499,7 +14446,7 @@ def _hotfix_show_settings_window(self):
         storage_form.addRow("Database backend", database_mode)
         storage_form.addRow("Remote database URL", database_url)
         storage_form.addRow("", database_hint)
-        tabs.addTab(storage_tab, "Storage")
+        tabs.addTab(_hotfix_wrap_tab_in_scroll_area(storage_tab, minimum_width=600), "Storage")
 
         display_tab = QWidget()
         display_form = QFormLayout(display_tab)
@@ -13572,7 +14519,7 @@ def _hotfix_show_settings_window(self):
         display_form.addRow("Grid color", chart_grid_btn)
         display_form.addRow("Bullish candle color", up_color_btn)
         display_form.addRow("Bearish candle color", down_color_btn)
-        tabs.addTab(display_tab, "Display")
+        tabs.addTab(_hotfix_wrap_tab_in_scroll_area(display_tab, minimum_width=600), "Display")
 
         risk_tab = QWidget()
         risk_form = QFormLayout(risk_tab)
@@ -13623,7 +14570,7 @@ def _hotfix_show_settings_window(self):
         risk_form.addRow("Max gross exposure", max_gross)
         risk_form.addRow("Closeout guard", margin_closeout_guard)
         risk_form.addRow("Closeout block threshold", margin_closeout_pct)
-        tabs.addTab(risk_tab, "Risk")
+        tabs.addTab(_hotfix_wrap_tab_in_scroll_area(risk_tab, minimum_width=600), "Risk")
 
         strategy_tab = QWidget()
         strategy_form = QFormLayout(strategy_tab)
@@ -13686,7 +14633,7 @@ def _hotfix_show_settings_window(self):
         strategy_form.addRow("Breakout lookback", strategy_breakout)
         strategy_form.addRow("AI min confidence", strategy_confidence)
         strategy_form.addRow("Signal amount", strategy_amount)
-        tabs.addTab(strategy_tab, "Strategy")
+        tabs.addTab(_hotfix_wrap_tab_in_scroll_area(strategy_tab, minimum_width=600), "Strategy")
 
         integrations_tab = QWidget()
         integrations_form = QFormLayout(integrations_tab)
@@ -13745,7 +14692,7 @@ def _hotfix_show_settings_window(self):
         integrations_form.addRow("Trade from news bias", news_autotrade)
         integrations_form.addRow("Draw news on chart", news_chart)
         integrations_form.addRow("News feed URL", news_feed_url)
-        tabs.addTab(integrations_tab, "Integrations")
+        tabs.addTab(_hotfix_wrap_tab_in_scroll_area(integrations_tab, minimum_width=600), "Integrations")
 
         summary = QLabel("-")
         summary.setWordWrap(True)
@@ -13945,6 +14892,8 @@ def _hotfix_show_settings_window(self):
         f"OpenAI {'set' if window._settings_openai_api_key.text().strip() else 'not set'}"
     )
 
+    _hotfix_focus_settings_tab(window, initial_tab or "General")
+
     window.show()
     window.raise_()
     window.activateWindow()
@@ -13991,7 +14940,7 @@ def _hotfix_apply_settings_window(self, window=None):
 
 
 def _hotfix_open_settings(self):
-    self._show_settings_window()
+    self._show_settings_window("General")
 
 
 def _hotfix_restore_settings(self):
@@ -14275,6 +15224,7 @@ Terminal._backtest_requested_limit = staticmethod(_hotfix_backtest_requested_lim
 Terminal._backtest_symbol_candidates = _hotfix_backtest_symbol_candidates
 Terminal._backtest_timeframe_candidates = _hotfix_backtest_timeframe_candidates
 Terminal._refresh_backtest_selectors = _hotfix_refresh_backtest_selectors
+Terminal._load_backtest_history_clicked = _hotfix_load_backtest_history_clicked
 Terminal._backtest_selection_changed = _hotfix_backtest_selection_changed
 Terminal._start_backtest_graph_animation = _hotfix_start_backtest_graph_animation
 Terminal._stop_backtest_graph_animation = staticmethod(_hotfix_stop_backtest_graph_animation)
@@ -14319,6 +15269,7 @@ Terminal._show_ml_research_window = _hotfix_show_ml_research_window
 Terminal._refresh_ml_research_window = _hotfix_refresh_ml_research_window
 Terminal._run_ml_model_training = _hotfix_run_ml_model_training
 Terminal._run_ml_walk_forward = _hotfix_run_ml_walk_forward
+Terminal._run_ml_auto_research = _hotfix_run_ml_auto_research
 Terminal._deploy_selected_ml_model = _hotfix_deploy_selected_ml_model
 Terminal._reload_chart_data = _hotfix_reload_chart_data
 Terminal._refresh_markets = _hotfix_refresh_markets

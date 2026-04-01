@@ -24,6 +24,9 @@ class RiskAgent(BaseAgent):
             )
             return working
 
+        signal = dict(signal)
+        signal.setdefault("decision_id", decision_id)
+        working["signal"] = signal
         review = await self.reviewer(
             symbol=symbol,
             signal=signal,

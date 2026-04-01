@@ -48,9 +48,23 @@ def test_strategy_registry_includes_expanded_strategy_library():
         "MACD Trend",
         "Range Fade",
     }.issubset(available)
-    assert len(available) == 617
+    assert len(available) >= 4200
     assert "Trend Following | Scalp Conservative" in available
+    assert "Trend Following | Scalp Conservative FX Core" in available
+    assert "Trend Following | Scalp Conservative Equities Macro" in available
     assert "AI Hybrid | Institutional Prime" in available
+
+
+def test_strategy_registry_lazily_instantiates_variants():
+    registry = StrategyRegistry()
+
+    assert registry.strategies == {}
+
+    selected = registry.get("Trend Following | Scalp Conservative Equities Macro")
+
+    assert selected is not None
+    assert selected.strategy_name == "Trend Following | Scalp Conservative Equities Macro"
+    assert len(registry.strategies) == 1
 
 
 def test_strategy_variant_names_resolve_to_base_signal_family():

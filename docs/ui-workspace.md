@@ -29,7 +29,8 @@ The terminal is a dock-heavy operator workspace. Evidence in `src/frontend/ui/te
 - risk heatmap
 - system console
 - system status
-- settings
+- settings menu
+- risk menu
 - journal and analytics tools
 
 ## Chart Workspace
@@ -73,6 +74,10 @@ The manual trade ticket supports:
 - auto-suggested SL/TP that can still be adjusted manually
 - chart-linked trade level sync
 - one-click limit submission buttons
+- live preflight quote freshness checks before submission
+- automatic size reduction from available balance, free margin, or equity when the requested trade is too large
+- Oanda and leveraged FX sizing based on account buying capacity rather than spot-style quote currency inventory
+- sizing summaries and rejection reasons in the operator feedback when the app changes or retries a manual order
 
 ## Trade Monitoring
 
@@ -139,13 +144,21 @@ Surfaces overtrading and protective lock conditions in the runtime workspace.
 ### System Status And System Health
 Surface runtime status, health checks, and mode/account context.
 
-## Settings
+## Settings Menu
 
-The application settings window exposes runtime preferences including:
+The `Settings` menu opens the general settings window for runtime preferences including:
 
 - strategy selection and parameters
-- risk profile selection
 - Telegram and OpenAI integration keys
 - voice and speech options
 - news behavior
 - other UI and behavior preferences backed by `QSettings`
+
+## Risk Menu
+
+The `Risk` menu is separate from the general settings menu and is intended for:
+
+- risk profile selection
+- risk settings and limits
+- risk-focused review or monitoring workflows
+- faster operator access during live supervision

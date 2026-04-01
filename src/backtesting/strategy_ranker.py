@@ -8,13 +8,25 @@ from backtesting.simulator import Simulator
 
 
 class StrategyRanker:
+    """Rank trading strategies by backtest performance metrics."""
+
     def __init__(self, strategy_registry, initial_balance=10000, commission_bps=0.0, slippage_bps=0.0):
+        """Create a ranker for backtesting strategies.
+
+        Args:
+            strategy_registry: A registry or factory object used by BacktestEngine to resolve strategies.
+            initial_balance: Starting equity used by the simulator.
+            commission_bps: Commission expressed in basis points.
+            slippage_bps: Slippage expressed in basis points.
+        """
         self.strategy_registry = strategy_registry
         self.initial_balance = float(initial_balance or 10000)
         self.commission_bps = float(commission_bps or 0.0)
         self.slippage_bps = float(slippage_bps or 0.0)
 
     def _score_report(self, report):
+        """Compute a numeric score for a backtest report."""
+        report = report or {}
         total_profit = float(report.get("total_profit", 0.0) or 0.0)
         sharpe = float(report.get("sharpe_ratio", 0.0) or 0.0)
         sortino = float(report.get("sortino_ratio", 0.0) or 0.0)
@@ -37,6 +49,7 @@ class StrategyRanker:
         return float(score)
 
     def rank(self, data, symbol, timeframe=None, strategy_names=None, top_n=None):
+        """Backtest strategies and return a ranked DataFrame of performance metrics."""
         names = list(strategy_names or getattr(self.strategy_registry, "list", lambda: [])())
         rows = []
         for strategy_name in names:

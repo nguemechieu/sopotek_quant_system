@@ -432,18 +432,6 @@ def populate_manual_trade_ticket(terminal, window, prefill=None):
     defaults = terminal._manual_trade_default_payload(prefill)
     if defaults["price"] in (None, ""):
         defaults["price"] = terminal._default_entry_price_for_symbol(defaults["symbol"], side=defaults["side"])
-    if defaults["stop_loss"] in (None, "") or defaults["take_profit"] in (None, ""):
-        suggested_entry, suggested_sl, suggested_tp = terminal._suggest_manual_trade_levels(
-            defaults["symbol"],
-            side=defaults["side"],
-            entry_price=defaults["price"],
-        )
-        if defaults["price"] in (None, ""):
-            defaults["price"] = suggested_entry
-        if defaults["stop_loss"] in (None, ""):
-            defaults["stop_loss"] = suggested_sl
-        if defaults["take_profit"] in (None, ""):
-            defaults["take_profit"] = suggested_tp
     symbol_picker = getattr(window, "_manual_trade_symbol_picker", None)
     side_picker = getattr(window, "_manual_trade_side_picker", None)
     type_picker = getattr(window, "_manual_trade_type_picker", None)
@@ -499,11 +487,12 @@ def populate_manual_trade_ticket(terminal, window, prefill=None):
         if defaults["source"] in {"chart_double_click", "chart_context_menu"} and defaults["price"] is not None:
             hint.setText(
                 f"Chart captured {defaults['symbol']} at {defaults['price']:.6f}. "
-                "Auto SL and TP were suggested from recent price action. Adjust them if needed before submitting."
+                "Stop loss and take profit are optional. Add them only if you want protection levels on this ticket."
             )
         else:
             hint.setText(
-                "Entry, stop loss, and take profit were auto-suggested from the current chart. Adjust them before sending if you want."
+                "Set symbol, side, and size. Limit and stop-limit orders need prices. "
+                "Stop loss and take profit are optional."
             )
     terminal._refresh_manual_trade_ticket(window)
 

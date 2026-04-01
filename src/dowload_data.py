@@ -1,9 +1,10 @@
 import asyncio
 import os
-import pandas as pd
-import aiohttp
-import ccxt.async_support as ccxt
 
+
+import ccxt.async_support as ccxt
+import aiohttp
+import pandas as pd
 DATA_DIR = "./data/raw"
 os.makedirs(DATA_DIR, exist_ok=True)
 

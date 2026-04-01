@@ -139,11 +139,17 @@ def _make_controller():
     controller.strategy_auto_assignment_in_progress = False
     controller.strategy_auto_assignment_progress = {}
     controller._strategy_auto_assignment_task = None
+    controller._strategy_auto_assignment_deferred_task = None
+    controller._symbol_universe_tiers = {}
+    controller._symbol_universe_rotation_cursor = 0
     controller.time_frame = "1h"
     controller.strategy_assignment_scan_timeframes = ["1h"]
     controller.strategy_name = "Trend Following"
     controller.initial_capital = 10000
     controller.symbols = ["EUR/USD", "BTC/USDT"]
+    controller.autotrade_watchlist = set()
+    controller.balances = {}
+    controller.market_trade_preference = "auto"
     controller.candle_buffers = {
         "EUR/USD": {"1h": frame.copy()},
         "BTC/USDT": {"1h": frame.copy()},
@@ -159,7 +165,9 @@ def _make_controller():
         refresh_strategy_preferences=lambda: refresh_calls.append(True),
     )
     controller.terminal = None
+    controller.connected = True
     controller._build_strategy_ranker = lambda strategy_registry: ranker
+    controller._create_task = lambda coro, _name: asyncio.get_event_loop().create_task(coro)
     controller._refresh_calls = refresh_calls
     controller._ranker = ranker
     return controller
@@ -310,6 +318,24 @@ def test_auto_rank_and_assign_strategies_selects_best_timeframe_for_symbol():
     assert ranked[0]["timeframe"] == "4h"
     assert result["scan_timeframes"] == ["1h", "4h"]
 
+
+def test_auto_rank_and_assign_strategies_uses_dedicated_ranking_helper():
+    controller = _make_controller()
+    controller.symbols = ["EUR/USD"]
+    ranking_calls = []
+
+    async def fake_run_strategy_ranking(ranker, frame, symbol, timeframe, strategy_names):
+        ranking_calls.append((symbol, timeframe, tuple(strategy_names or []), len(frame)))
+        return ranker.rank(frame, symbol, timeframe, strategy_names)
+
+    controller._run_strategy_ranking = fake_run_strategy_ranking
+
+    result = asyncio.run(controller.auto_rank_and_assign_strategies(timeframe="1h"))
+
+    assert result["assigned_symbols"] == ["EUR/USD"]
+    assert ranking_calls == [("EUR/USD", "1h", ("Trend Following", "EMA Cross", "MACD Trend"), 160)]
+
+
 def test_strategy_auto_assignment_status_reports_ready_after_scan():
     controller = _make_controller()
 
@@ -370,6 +396,179 @@ def test_schedule_strategy_auto_assignment_only_scans_symbols_missing_saved_stat
 
     assert scheduled["symbols"] == ["BTC/USDT"]
     assert scheduled["timeframe"] == "1h"
+    assert scheduled["force"] is False
+
+
+def test_coinbase_startup_fast_mode_defers_strategy_auto_assignment():
+    controller = _make_controller()
+    controller.broker = SimpleNamespace(exchange_name="coinbase")
+    controller.market_trade_preference = "spot"
+    controller.strategy_assignment_scan_timeframes = None
+    controller.COINBASE_FAST_START_AUTO_ASSIGN_DELAY_SECONDS = 0.01
+    controller.COINBASE_AUTO_ASSIGN_SYMBOL_LIMIT = 4
+    controller.COINBASE_WATCHLIST_SYMBOL_LIMIT = 4
+    controller.COINBASE_DISCOVERY_BATCH_SIZE = 2
+    controller.COINBASE_DISCOVERY_PRIORITY_COUNT = 2
+    controller.symbols = ["BTC/USD", "ETH/USD"]
+    controller.autotrade_watchlist = {"SOL/USD", "ADA/USD"}
+    controller._refresh_symbol_universe_tiers(
+        catalog_symbols=["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD", "AVAX/USD", "LINK/USD"],
+        broker_type="crypto",
+        exchange="coinbase",
+    )
+    scheduled = {}
+
+    def fake_schedule_strategy_auto_assignment(symbols=None, timeframe=None, force=False):
+        scheduled["symbols"] = None if symbols is None else list(symbols or [])
+        scheduled["timeframe"] = timeframe
+        scheduled["force"] = force
+        future = asyncio.get_event_loop().create_future()
+        future.set_result({"scheduled": True})
+        return future
+
+    controller.schedule_strategy_auto_assignment = fake_schedule_strategy_auto_assignment
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        task = controller._schedule_startup_strategy_auto_assignment(
+            symbols=controller.symbols,
+            timeframe="1h",
+            exchange="coinbase",
+        )
+        assert scheduled == {}
+        loop.run_until_complete(task)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    assert scheduled["symbols"] is None
+    assert scheduled["timeframe"] == "1h"
+    assert scheduled["force"] is False
+    assert "Coinbase fast mode" in controller.strategy_auto_assignment_progress["message"]
+
+
+def test_non_coinbase_startup_auto_assignment_runs_immediately():
+    controller = _make_controller()
+    controller.broker = SimpleNamespace(exchange_name="binanceus")
+    controller.COINBASE_FAST_START_AUTO_ASSIGN_DELAY_SECONDS = 0.01
+    scheduled = {}
+
+    def fake_schedule_strategy_auto_assignment(symbols=None, timeframe=None, force=False):
+        scheduled["symbols"] = None if symbols is None else list(symbols or [])
+        scheduled["timeframe"] = timeframe
+        scheduled["force"] = force
+        return "scheduled-now"
+
+    controller.schedule_strategy_auto_assignment = fake_schedule_strategy_auto_assignment
+
+    result = controller._schedule_startup_strategy_auto_assignment(
+        symbols=controller.symbols,
+        timeframe="1h",
+        exchange="binanceus",
+    )
+
+    assert result == "scheduled-now"
+    assert scheduled["symbols"] is None
+    assert scheduled["timeframe"] == "1h"
+    assert scheduled["force"] is False
+
+
+def test_coinbase_symbol_universe_rotates_background_batch_without_expanding_live_symbols():
+    controller = _make_controller()
+    controller.broker = SimpleNamespace(exchange_name="coinbase")
+    controller.market_trade_preference = "spot"
+    controller.symbols = ["BTC/USD", "ETH/USD"]
+    controller.autotrade_watchlist = {"SOL/USD", "ADA/USD"}
+    controller.COINBASE_AUTO_ASSIGN_SYMBOL_LIMIT = 4
+    controller.COINBASE_WATCHLIST_SYMBOL_LIMIT = 4
+    controller.COINBASE_DISCOVERY_BATCH_SIZE = 2
+    controller.COINBASE_DISCOVERY_PRIORITY_COUNT = 2
+
+    catalog = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD", "AVAX/USD", "LINK/USD", "UNI/USD"]
+    controller._refresh_symbol_universe_tiers(catalog_symbols=catalog, broker_type="crypto", exchange="coinbase")
+
+    first = controller._rotating_discovery_batch(limit=4, advance=True, broker_type="crypto", exchange="coinbase")
+    second = controller._rotating_discovery_batch(limit=4, advance=True, broker_type="crypto", exchange="coinbase")
+    tiers = controller.get_symbol_universe_snapshot()
+
+    assert controller.symbols == ["BTC/USD", "ETH/USD"]
+    assert tiers["catalog"] == catalog
+    assert tiers["watchlist"][:4] == ["BTC/USD", "ETH/USD", "ADA/USD", "SOL/USD"]
+    assert first == ["BTC/USD", "ETH/USD", "AVAX/USD", "LINK/USD"]
+    assert second == ["BTC/USD", "ETH/USD", "UNI/USD", "AVAX/USD"]
+
+
+def test_spot_only_broker_symbol_universe_rotates_background_batch():
+    controller = _make_controller()
+    controller.broker = SimpleNamespace(exchange_name="binanceus")
+    controller.market_trade_preference = "spot"
+    controller.symbols = ["BTC/USDT", "ETH/USDT"]
+    controller.autotrade_watchlist = {"SOL/USDT"}
+    controller.SPOT_ONLY_SYMBOL_WATCHLIST_LIMIT = 4
+    controller.SPOT_ONLY_DISCOVERY_BATCH_SIZE = 4
+
+    catalog = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT"]
+    controller._refresh_symbol_universe_tiers(catalog_symbols=catalog, broker_type="crypto", exchange="binanceus")
+
+    batch = controller._rotating_discovery_batch(limit=4, advance=True, broker_type="crypto", exchange="binanceus")
+    tiers = controller.get_symbol_universe_snapshot()
+
+    assert tiers["catalog"] == catalog
+    assert tiers["watchlist"][:4] == ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT"]
+    assert batch == ["BTC/USDT", "ETH/USDT", "SOL/USDT", "AVAX/USDT"]
+
+
+def test_coinbase_market_preference_change_keeps_live_symbol_cap():
+    controller = _make_controller()
+    controller.connected = True
+    controller.symbols = ["BTC/USD"]
+    controller.config = SimpleNamespace(
+        broker=SimpleNamespace(
+            type="crypto",
+            exchange="coinbase",
+            options={},
+        )
+    )
+    controller.broker = SimpleNamespace(
+        exchange_name="coinbase",
+        extra_options={},
+        market_preference="spot",
+        apply_market_preference=lambda _pref: [
+            "BTC/USD",
+            "ETH/USD",
+            "SOL/USD",
+            "ADA/USD",
+            "AVAX/USD",
+            "LINK/USD",
+            "UNI/USD",
+            "NEAR/USD",
+            "DOGE/USD",
+            "XRP/USD",
+            "LTC/USD",
+        ],
+        supported_market_venues=lambda: ["auto", "spot", "derivative"],
+    )
+    emitted = []
+    scheduled = {}
+    controller.symbols_signal = SimpleNamespace(emit=lambda exchange, symbols: emitted.append((exchange, list(symbols))))
+
+    def fake_schedule_strategy_auto_assignment(symbols=None, timeframe=None, force=False):
+        scheduled["symbols"] = symbols
+        scheduled["timeframe"] = timeframe
+        scheduled["force"] = force
+        return None
+
+    controller.schedule_strategy_auto_assignment = fake_schedule_strategy_auto_assignment
+
+    controller.set_market_trade_preference("spot")
+
+    assert len(controller.symbols) == controller.COINBASE_SYMBOL_LIMIT
+    assert emitted[-1][0] == "coinbase"
+    assert emitted[-1][1] == controller.symbols
+    assert len(controller.get_symbol_universe_snapshot()["catalog"]) == 11
+    assert scheduled["symbols"] is None
+    assert scheduled["timeframe"] == controller.time_frame
     assert scheduled["force"] is False
 
 

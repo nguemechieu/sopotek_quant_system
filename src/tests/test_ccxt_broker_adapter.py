@@ -140,6 +140,17 @@ class UnsupportedPrivateExchange(FakeExchange):
         self.has["fetchDepositAddress"] = False
 
 
+class RangeHistoryExchange(FakeExchange):
+    async def fetch_ohlcv(self, symbol, timeframe="1h", since=None, limit=100, params=None):
+        base = int(since or 1710000000000)
+        step_ms = 3600000 if timeframe == "1h" else 60000
+        rows = []
+        for index in range(int(limit or 100)):
+            timestamp = base + (index * step_ms)
+            rows.append([timestamp, 100 + index, 101 + index, 99 + index, 100.5 + index, 10 + index])
+        return rows
+
+
 @pytest.fixture
 def broker_module(monkeypatch):
     import broker.ccxt_broker as broker_mod
@@ -158,6 +169,7 @@ def broker_module(monkeypatch):
     monkeypatch.setattr(broker_mod.ccxt, "fakeexchange", FakeExchange, raising=False)
     monkeypatch.setattr(broker_mod.ccxt, "binanceus", FakeExchange, raising=False)
     monkeypatch.setattr(broker_mod.ccxt, "unsupportedexchange", UnsupportedPrivateExchange, raising=False)
+    monkeypatch.setattr(broker_mod.ccxt, "rangehistoryexchange", RangeHistoryExchange, raising=False)
     return broker_mod
 
 
@@ -274,6 +286,49 @@ def test_ccxt_broker_supports_stop_limit_orders(broker_module):
         assert order["price"] == 101.99
         assert order["stop_price"] == 102.5
         assert order["params"]["stopPrice"] == 102.5
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_does_not_forward_attached_sl_tp_prices_by_default(broker_module):
+    async def scenario():
+        broker = CCXTBroker(make_config())
+
+        order = await broker.create_order(
+            symbol="BTC/USDT",
+            side="buy",
+            amount=1.0,
+            type="limit",
+            price=101.987,
+            stop_loss=99.5,
+            take_profit=110.0,
+        )
+
+        assert "stopLossPrice" not in order["params"]
+        assert "takeProfitPrice" not in order["params"]
+
+        await broker.close()
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_broker_fetches_date_range_history_for_backtests(broker_module):
+    async def scenario():
+        broker = CCXTBroker(make_config(exchange="rangehistoryexchange"))
+
+        candles = await broker.fetch_ohlcv(
+            "BTC/USDT",
+            timeframe="1h",
+            limit=6,
+            start_time="2026-03-10T00:00:00+00:00",
+            end_time="2026-03-10T05:00:00+00:00",
+        )
+
+        assert len(candles) == 6
+        assert candles[0][0] == 1773100800000
+        assert candles[-1][0] == 1773118800000
 
         await broker.close()
 

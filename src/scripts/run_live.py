@@ -3,21 +3,20 @@ import logging
 import sys
 from pathlib import Path
 
+# Add src directory to Python path before importing local project packages.
+# This ensures the script can resolve `src.*` and sibling package imports when run
+# from `src/scripts/run_live.py` directly.
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from manager.portfolio_manager import PortfolioManager
 from src.engines.trading_engine import TradingEngine
 from event_bus.event_bus import EventBus
 from execution.execution_manager import ExecutionManager
-from portfolio.portfolio_manager import PortfolioManager
 from strategy.momentum_strategy import MomentumStrategy
 from broker.broker_factory import BrokerFactory
 from core.multi_symbol_orchestrator import MultiSymbolOrchestrator
 from engines.market_data_engine import MarketDataEngine
 from engines.risk_engine import RiskEngine
-
-# Add src directory to Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-
 
 logging.basicConfig(level=logging.INFO)
 
@@ -28,6 +27,7 @@ async def main():
     # BROKER CONFIG
     # ===============================
 
+    # TODO: avoid hardcoding API credentials in source code; use environment variables or a secure secret store.
     broker_config = {
         "type": "crypto",
         "exchange": "binanceus",

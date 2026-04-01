@@ -1,10 +1,13 @@
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from event_bus.event import Event
 from event_bus.event_types import EventType
+from models.instrument import Instrument
+from models.order import Order
 
 
 class ExecutionManager:
@@ -31,6 +34,7 @@ class ExecutionManager:
 
         self.running = False
         self._symbol_cooldowns = {}
+        self._symbol_skip_reasons = {}
         self._execution_lock = asyncio.Lock()
         self._balance_buffer = 0.98
         self._order_tracking_tasks = {}
@@ -79,12 +83,16 @@ class ExecutionManager:
 
     def _set_cooldown(self, symbol, seconds, reason):
         self._symbol_cooldowns[symbol] = time.monotonic() + seconds
+        self._symbol_skip_reasons[symbol] = str(reason or "").strip() or None
         self.logger.warning(
             "Skipping %s for %.0fs: %s",
             symbol,
             seconds,
             reason,
         )
+
+    def last_skip_reason(self, symbol):
+        return self._symbol_skip_reasons.get(symbol)
 
     async def _fetch_reference_price(self, symbol, side, requested_price=None):
         if requested_price is not None:
@@ -136,6 +144,40 @@ class ExecutionManager:
             return markets.get(symbol)
         return None
 
+    def _uses_inventory_balance_checks(self, order, market=None, balance=None):
+        order = order or {}
+        market = market if isinstance(market, dict) else {}
+        exchange_name = str(order.get("exchange") or getattr(self.broker, "exchange_name", "") or "").strip().lower()
+        if exchange_name == "oanda":
+            return False
+
+        requested_mode = str(order.get("requested_quantity_mode") or "").strip().lower()
+        if requested_mode == "lots":
+            return False
+
+        instrument_type = str(order.get("instrument_type") or "").strip().lower()
+        if not instrument_type and isinstance(order.get("instrument"), dict):
+            instrument_type = str(order["instrument"].get("type") or "").strip().lower()
+        if instrument_type in {"option", "future", "derivative"}:
+            return False
+
+        market_type = str(
+            market.get("type")
+            or market.get("market_type")
+            or market.get("venue")
+            or ""
+        ).strip().lower()
+        if market.get("otc") or market_type in {"otc", "margin", "swap", "future", "option", "derivative"}:
+            return False
+        if bool(market.get("contract")):
+            return False
+
+        raw_balance = balance.get("raw") if isinstance(balance, dict) else {}
+        if isinstance(raw_balance, dict) and market.get("otc"):
+            return False
+
+        return True
+
     def _apply_amount_precision(self, symbol, amount):
         exchange = getattr(self.broker, "exchange", None)
         if exchange and hasattr(exchange, "amount_to_precision"):
@@ -145,6 +187,30 @@ class ExecutionManager:
                 pass
 
         return float(amount)
+
+    def _minimum_order_amount(self, market, price):
+        limits = market.get("limits", {}) if isinstance(market, dict) else {}
+        min_amount = self._safe_float(((limits.get("amount") or {}).get("min")), 0.0)
+        min_cost = self._safe_float(((limits.get("cost") or {}).get("min")), 0.0)
+
+        candidates = []
+        if min_amount > 0:
+            candidates.append(min_amount)
+        if price and price > 0 and min_cost > 0:
+            candidates.append(min_cost / price)
+
+        return (max(candidates) if candidates else 0.0), min_amount, min_cost
+
+    def _minimum_order_reason(self, symbol, amount, minimum_amount, base_currency=None, quote_currency=None, min_cost=0.0):
+        unit_label = base_currency or "units"
+        reason = (
+            f"Computed order size for {symbol} ({amount:.8f} {unit_label}) is below the venue minimum "
+            f"({minimum_amount:.8f} {unit_label})."
+        )
+        if min_cost > 0:
+            quote_label = quote_currency or "quote"
+            reason += f" Minimum notional is {min_cost:.8f} {quote_label}."
+        return reason
 
     def _normalize_order_status(self, status):
         normalized = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -304,6 +370,7 @@ class ExecutionManager:
             "symbol": execution.get("symbol") or submitted_order.get("symbol"),
             "side": side,
             "source": str(execution.get("source") or submitted_order.get("source") or "bot").strip().lower() or "bot",
+            "exchange": execution.get("exchange") or submitted_order.get("exchange") or getattr(self.broker, "exchange_name", None),
             "price": actual_price,
             "size": size,
             "filled_size": filled_size,
@@ -335,6 +402,13 @@ class ExecutionManager:
             "execution_strategy": execution_strategy,
             "execution_quality": execution_quality if isinstance(execution_quality, dict) else {},
             "timeframe": execution.get("timeframe") or submitted_order.get("timeframe"),
+            "decision_id": execution.get("decision_id") or submitted_order.get("decision_id"),
+            "signal_timestamp": execution.get("signal_timestamp") or submitted_order.get("signal_timestamp"),
+            "feature_snapshot": execution.get("feature_snapshot") or submitted_order.get("feature_snapshot"),
+            "feature_version": execution.get("feature_version") or submitted_order.get("feature_version"),
+            "regime_snapshot": execution.get("regime_snapshot") or submitted_order.get("regime_snapshot"),
+            "market_regime": execution.get("market_regime") or submitted_order.get("market_regime"),
+            "volatility_regime": execution.get("volatility_regime") or submitted_order.get("volatility_regime"),
             "signal_source_agent": execution.get("signal_source_agent") or submitted_order.get("signal_source_agent"),
             "consensus_status": execution.get("consensus_status") or submitted_order.get("consensus_status"),
             "adaptive_weight": execution.get("adaptive_weight", submitted_order.get("adaptive_weight")),
@@ -375,6 +449,10 @@ class ExecutionManager:
             payload.get("fee"),
             payload.get("timestamp"),
         )
+
+    def _bus_has_subscribers(self, event_type):
+        subscribers = getattr(self.bus, "subscribers", {}) if self.bus is not None else {}
+        return bool(subscribers.get(event_type) or subscribers.get("*"))
 
     async def _persist_trade_update(self, payload):
         if self.trade_repository is not None:
@@ -419,6 +497,17 @@ class ExecutionManager:
             except Exception as exc:
                 self.logger.debug("Trade notification failed for %s: %s", payload.get("symbol"), exc)
 
+    async def _publish_execution_report(self, payload, execution, submitted_order):
+        if not self._bus_has_subscribers(EventType.EXECUTION_REPORT):
+            return
+
+        report = dict(payload or {})
+        if isinstance(execution, dict):
+            report["raw_execution"] = dict(execution)
+        if isinstance(submitted_order, dict):
+            report["submitted_order"] = dict(submitted_order)
+        await self.bus.publish(Event(EventType.EXECUTION_REPORT, report))
+
     async def _publish_fill_delta(self, payload, tracker_state):
         filled_size = max(self._safe_float(payload.get("filled_size"), 0.0), 0.0)
         previous_filled = max(self._safe_float(tracker_state.get("filled_size"), 0.0), 0.0)
@@ -454,6 +543,7 @@ class ExecutionManager:
         fingerprint = self._payload_fingerprint(payload)
         if fingerprint != tracker_state.get("fingerprint"):
             await self._persist_trade_update(payload)
+            await self._publish_execution_report(payload, execution, submitted_order)
 
         if order_id:
             self._tracked_orders[order_id] = {
@@ -551,18 +641,26 @@ class ExecutionManager:
         amount = float(order["amount"])
         base_currency, quote_currency = (symbol.split("/", 1) + [None])[:2]
 
+        balance_snapshot = {}
         balance = {}
         if hasattr(self.broker, "fetch_balance"):
             try:
-                balance = self._extract_free_balances(await self.broker.fetch_balance())
+                balance_snapshot = await self.broker.fetch_balance()
+                balance = self._extract_free_balances(balance_snapshot)
             except Exception as exc:
                 self.logger.debug("Balance fetch failed for %s: %s", symbol, exc)
 
+        enforce_inventory_checks = self._uses_inventory_balance_checks(
+            order,
+            market=market,
+            balance=balance_snapshot,
+        )
+
         available_quote = None
         available_base = None
-        if quote_currency:
+        if quote_currency and enforce_inventory_checks:
             available_quote = float(balance.get(quote_currency, 0) or 0)
-        if base_currency:
+        if base_currency and enforce_inventory_checks:
             available_base = float(balance.get(base_currency, 0) or 0)
 
         if side == "buy" and price and available_quote is not None:
@@ -580,21 +678,40 @@ class ExecutionManager:
                 return None
             amount = min(amount, liquid_base)
 
-        limits = market.get("limits", {}) if isinstance(market, dict) else {}
-        min_amount = ((limits.get("amount") or {}).get("min"))
-        min_cost = ((limits.get("cost") or {}).get("min"))
-
-        if price and min_cost:
-            min_cost_amount = float(min_cost) / price
-            amount = max(amount, min_cost_amount)
-
-        if min_amount:
-            amount = max(amount, float(min_amount))
+        minimum_amount, min_amount, min_cost = self._minimum_order_amount(market, price)
+        if minimum_amount > 0 and amount + 1e-12 < minimum_amount:
+            self._set_cooldown(
+                symbol,
+                120,
+                self._minimum_order_reason(
+                    symbol,
+                    amount,
+                    minimum_amount,
+                    base_currency=base_currency,
+                    quote_currency=quote_currency,
+                    min_cost=min_cost,
+                ),
+            )
+            return None
 
         amount = self._apply_amount_precision(symbol, amount)
 
         if amount <= 0:
             self._set_cooldown(symbol, 120, "computed order amount is zero")
+            return None
+        if minimum_amount > 0 and amount + 1e-12 < minimum_amount:
+            self._set_cooldown(
+                symbol,
+                120,
+                self._minimum_order_reason(
+                    symbol,
+                    amount,
+                    minimum_amount,
+                    base_currency=base_currency,
+                    quote_currency=quote_currency,
+                    min_cost=min_cost,
+                ),
+            )
             return None
 
         if (
@@ -628,18 +745,31 @@ class ExecutionManager:
     async def execute(self, signal=None, **kwargs):
         if signal is None:
             signal = {}
+        elif isinstance(signal, Order):
+            signal = signal.to_dict()
+        elif isinstance(signal, Mapping):
+            signal = dict(signal)
+        elif hasattr(signal, "to_dict") and callable(getattr(signal, "to_dict")):
+            signal = dict(signal.to_dict())
         elif not isinstance(signal, dict):
             raise TypeError("signal must be a dict when provided")
 
         order = {**signal, **kwargs}
 
-        symbol = order.get("symbol")
+        instrument_payload = order.get("instrument")
+        instrument = None
+        if instrument_payload:
+            try:
+                instrument = Instrument.from_mapping(instrument_payload)
+            except Exception:
+                instrument = None
+        symbol = order.get("symbol") or (instrument.symbol if instrument is not None else None)
         side = order.get("side") or order.get("signal")
         amount = order.get("amount")
         if amount is None:
-            amount = order.get("size")
+            amount = order.get("size", order.get("quantity"))
         price = order.get("price")
-        order_type = str(order.get("type", "market") or "market").strip().lower().replace(" ", "_")
+        order_type = str(order.get("order_type") or order.get("type", "market") or "market").strip().lower().replace(" ", "_")
         stop_price = order.get("stop_price")
         stop_loss = order.get("stop_loss")
         take_profit = order.get("take_profit")
@@ -661,9 +791,19 @@ class ExecutionManager:
             "symbol": symbol,
             "side": str(side).lower(),
             "source": str(order.get("source") or "bot").strip().lower() or "bot",
+            "exchange": order.get("exchange") or getattr(self.broker, "exchange_name", None),
             "amount": amount,
+            "quantity": amount,
             "type": order_type,
+            "order_type": order_type,
         }
+        if instrument is not None:
+            normalized_order["instrument"] = instrument.to_dict()
+            normalized_order["instrument_type"] = instrument.type.value
+        elif order.get("instrument") is not None:
+            normalized_order["instrument"] = order.get("instrument")
+        elif order.get("instrument_type") is not None:
+            normalized_order["instrument_type"] = order.get("instrument_type")
 
         if price is not None:
             normalized_order["price"] = price
@@ -683,10 +823,21 @@ class ExecutionManager:
             "pnl",
             "execution_strategy",
             "timeframe",
+            "decision_id",
+            "signal_timestamp",
+            "feature_snapshot",
+            "feature_version",
+            "regime_snapshot",
+            "market_regime",
+            "volatility_regime",
             "signal_source_agent",
             "consensus_status",
             "adaptive_weight",
             "adaptive_score",
+            "broker",
+            "time_in_force",
+            "client_order_id",
+            "account_id",
             "requested_amount",
             "requested_quantity_mode",
             "requested_amount_units",
@@ -698,9 +849,12 @@ class ExecutionManager:
             "sizing_summary",
             "sizing_notes",
             "ai_sizing_reason",
+            "metadata",
         ):
             if order.get(extra_key) is not None:
                 normalized_order[extra_key] = order.get(extra_key)
+        if order.get("legs") is not None:
+            normalized_order["legs"] = list(order.get("legs") or [])
         if params:
             normalized_order["params"] = params
 
@@ -783,5 +937,6 @@ class ExecutionManager:
             if isinstance(execution, dict):
                 execution.setdefault("source", prepared_order.get("source", normalized_order.get("source", "bot")))
             await self._handle_order_update(execution, prepared_order)
+            self._symbol_skip_reasons.pop(symbol, None)
 
         return execution

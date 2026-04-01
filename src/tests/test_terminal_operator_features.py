@@ -6,7 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
-from PySide6.QtWidgets import QApplication, QComboBox, QDockWidget, QMainWindow
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QComboBox, QDockWidget, QMainWindow, QTableWidget
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -53,6 +54,9 @@ class _MenuTerminal(QMainWindow):
     def apply_language(self):
         return Terminal.apply_language(self)
 
+    def _sync_chart_timeframe_menu_actions(self):
+        return Terminal._sync_chart_timeframe_menu_actions(self)
+
     def _update_autotrade_button(self):
         return None
 
@@ -78,6 +82,23 @@ class _ChartRequestController:
         return self.frame
 
 
+class _DerivativeChartRequestController(_ChartRequestController):
+    def __init__(self, frame):
+        super().__init__(frame)
+        self.requested_symbols = []
+
+    @staticmethod
+    def _resolve_preferred_market_symbol(symbol, preference=None):
+        normalized = str(symbol or "").strip().upper()
+        if normalized == "BTC/USD":
+            return "BTC/USD:USD"
+        return normalized
+
+    async def request_candle_data(self, symbol, timeframe="1h", limit=None):
+        self.requested_symbols.append(symbol)
+        return self.frame
+
+
 class _ChartRequestTerminal(QMainWindow):
     def __init__(self, frame):
         super().__init__()
@@ -87,6 +108,10 @@ class _ChartRequestTerminal(QMainWindow):
         self.system_console = SimpleNamespace(log=lambda *args, **kwargs: None)
         self.heartbeat = SimpleNamespace(setStyleSheet=lambda *args, **kwargs: None)
         self._chart_request_tokens = {}
+        self.current_timeframe = "1h"
+        self._last_chart_request_key = None
+        self._active_chart_widget_ref = None
+        self.symbol_picker = None
         self.chart = ChartWidget("AAVE/USD", "1h", self.controller)
 
     def _history_request_limit(self):
@@ -118,15 +143,26 @@ def test_create_menu_bar_adds_workspace_notifications_palette_and_favorite_actio
 
     Terminal._create_menu_bar(terminal)
 
+    menu_titles = [action.text() for action in terminal.menuBar().actions()]
+
     workspace_actions = terminal.workspace_menu.actions()
+    panels_actions = terminal.panels_menu.actions()
     strategy_actions = terminal.strategy_menu.actions()
+    backtest_actions = terminal.backtest_menu.actions()
     assert terminal.action_workspace_trading in workspace_actions
     assert terminal.action_workspace_research in workspace_actions
     assert terminal.action_workspace_risk in workspace_actions
     assert terminal.action_workspace_review in workspace_actions
+    assert terminal.action_symbol_universe in workspace_actions
     assert terminal.action_save_workspace_layout in workspace_actions
     assert terminal.action_restore_workspace_layout in workspace_actions
-    assert terminal.action_strategy_optimization in strategy_actions
+    assert terminal.action_reset_dock_layout in workspace_actions
+    assert terminal.panels_menu.menuAction() in workspace_actions
+    assert terminal.action_symbol_universe in terminal.tools_menu.actions()
+    assert terminal.action_market_watch_panel in panels_actions
+    assert terminal.action_system_console_panel in panels_actions
+    assert terminal.backtest_menu.menuAction() in strategy_actions
+    assert terminal.action_strategy_optimization in backtest_actions
     assert terminal.action_strategy_assigner in strategy_actions
     assert terminal.action_strategy_scorecard in strategy_actions
     assert terminal.action_strategy_debug in strategy_actions
@@ -135,11 +171,18 @@ def test_create_menu_bar_adds_workspace_notifications_palette_and_favorite_actio
     assert terminal.action_agent_timeline in terminal.review_menu.actions()
     assert terminal.action_agent_timeline in terminal.research_menu.actions()
     assert terminal.action_agent_timeline in terminal.tools_menu.actions()
+    assert terminal.action_trader_tv in terminal.education_menu.actions()
+    assert terminal.action_education_center in terminal.education_menu.actions()
     assert terminal.action_command_palette in terminal.tools_menu.actions()
     assert terminal.action_system_console in terminal.tools_menu.actions()
     assert terminal.action_system_status in terminal.tools_menu.actions()
     assert terminal.action_favorite_symbol in terminal.charts_menu.actions()
-    assert terminal.action_remove_indicator in terminal.charts_menu.actions()
+    assert terminal.chart_studies_menu.menuAction() in terminal.charts_menu.actions()
+    assert terminal.action_remove_indicator in terminal.chart_studies_menu.actions()
+    assert terminal.action_chart_settings in terminal.chart_style_menu.actions()
+    assert terminal.chart_timeframe_menu.menuAction() in terminal.charts_menu.actions()
+    assert menu_titles[-1] == terminal.help_menu.title()
+    assert menu_titles[-2] == terminal.workspace_menu.title()
 
 
 def test_push_notification_dedupes_repeated_messages():
@@ -232,6 +275,7 @@ def test_command_palette_entries_include_operator_actions():
         controller=SimpleNamespace(symbols=[]),
         _open_manual_trade=lambda *args, **kwargs: None,
         _open_notification_center=lambda: None,
+        _open_symbol_universe=lambda: None,
         _open_agent_timeline=lambda: None,
         _open_performance=lambda: None,
         _show_portfolio_exposure=lambda: None,
@@ -244,9 +288,13 @@ def test_command_palette_entries_include_operator_actions():
         _open_strategy_assignment_window=lambda: None,
         _optimize_strategy=lambda: None,
         _show_backtest_window=lambda: None,
+        _export_diagnostics_bundle=lambda: None,
         _apply_workspace_preset=lambda _name: None,
         _save_current_workspace_layout=lambda: None,
         _restore_saved_workspace_layout=lambda: None,
+        _apply_default_dock_layout=lambda: None,
+        _show_workspace_dock=lambda _dock: None,
+        market_watch_dock=object(),
         _toggle_current_symbol_favorite=lambda: None,
         _refresh_markets=lambda: None,
         _refresh_active_chart_data=lambda: None,
@@ -254,13 +302,86 @@ def test_command_palette_entries_include_operator_actions():
         _reload_balance=lambda: None,
     )
 
-    entries = Terminal._command_palette_entries(fake, "workspace")
+    entries = Terminal._command_palette_entries(fake, "")
     titles = {entry["title"] for entry in entries}
 
     assert "Trading Workspace" in titles
     assert "Research Workspace" in titles
     assert "Risk Workspace" in titles
     assert "Review Workspace" in titles
+    assert "Symbol Universe" in titles
+    assert "Export Diagnostics Bundle" in titles
+    assert "Reset Dock Layout" in titles
+    assert "Show Market Watch" in titles
+
+
+def test_open_symbol_universe_window_shows_controller_tiers():
+    _app()
+    terminal = _MenuTerminal()
+    terminal.controller = SimpleNamespace(
+        language_code="en",
+        set_language=lambda _code: None,
+        symbols=["BTC/USD", "ETH/USD", "SOL/USD"],
+        get_symbol_universe_snapshot=lambda: {
+            "active": ["BTC/USD", "ETH/USD"],
+            "watchlist": ["BTC/USD", "SOL/USD", "ETH/USD"],
+            "catalog": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD"],
+            "background_catalog": ["SOL/USD", "XRP/USD"],
+            "last_batch": ["BTC/USD", "SOL/USD"],
+            "rotation_cursor": 2,
+            "policy": {
+                "live_symbol_limit": 4,
+                "watchlist_limit": 8,
+                "discovery_batch_size": 3,
+            },
+        },
+    )
+    terminal._is_qt_object_alive = lambda obj: obj is not None
+    _bind(
+        terminal,
+        "_get_or_create_tool_window",
+        "_symbol_universe_snapshot",
+        "_refresh_symbol_universe_window",
+        "_open_symbol_universe",
+    )
+
+    window = terminal._open_symbol_universe()
+
+    assert window is not None
+    assert "Active 2/4" in window._symbol_universe_summary.text()
+    assert "Catalog 4" in window._symbol_universe_summary.text()
+    tree = window._symbol_universe_tree
+    top_labels = [tree.topLevelItem(index).text(0) for index in range(tree.topLevelItemCount())]
+    assert "Active (2)" in top_labels
+    assert "Watchlist (3)" in top_labels
+    assert "Discovery Batch (2)" in top_labels
+    active_item = tree.topLevelItem(0)
+    assert active_item.childCount() >= 2
+    child_symbols = {active_item.child(i).text(0) for i in range(active_item.childCount())}
+    assert {"BTC/USD", "ETH/USD"}.issubset(child_symbols)
+
+
+def test_market_watch_panel_action_shows_hidden_market_watch_dock():
+    _app()
+    terminal = _MenuTerminal()
+    Terminal._create_menu_bar(terminal)
+    _bind(terminal, "_show_workspace_dock")
+    terminal._is_qt_object_alive = lambda obj: obj is not None
+    terminal.show()
+    terminal.market_watch_dock = QDockWidget("Market Watch", terminal)
+    terminal.market_watch_dock.setObjectName("market_watch_dock")
+    terminal.addDockWidget(Qt.LeftDockWidgetArea, terminal.market_watch_dock)
+    terminal.trade_log_dock = QDockWidget("Trade Log", terminal)
+    terminal.trade_log_dock.setObjectName("trade_log_dock")
+    terminal.addDockWidget(Qt.RightDockWidgetArea, terminal.trade_log_dock)
+    terminal.market_watch_dock.setFloating(True)
+    terminal.market_watch_dock.hide()
+
+    terminal.action_market_watch_panel.trigger()
+
+    assert not terminal.market_watch_dock.isHidden()
+    assert terminal.market_watch_dock.isFloating() is False
+    assert terminal.dockWidgetArea(terminal.market_watch_dock) == Qt.LeftDockWidgetArea
 
 
 def test_open_agent_timeline_builds_runtime_table_from_controller_feed():
@@ -812,6 +933,43 @@ def test_request_chart_data_for_widget_marks_empty_broker_history_on_chart():
     assert terminal.chart._chart_status_message == "No data received."
 
 
+def test_request_chart_data_for_widget_retargets_coinbase_derivative_symbol():
+    _app()
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1700000000 + (index * 3600) for index in range(5)],
+            "open": [100.0 + index for index in range(5)],
+            "high": [101.0 + index for index in range(5)],
+            "low": [99.0 + index for index in range(5)],
+            "close": [100.4 + index for index in range(5)],
+            "volume": [1000.0 + (index * 20.0) for index in range(5)],
+        }
+    )
+    terminal = _ChartRequestTerminal(frame)
+    terminal.controller = _DerivativeChartRequestController(frame)
+    terminal.chart.controller = terminal.controller
+    terminal.chart.symbol = "BTC/USD"
+    terminal._active_chart_widget_ref = terminal.chart
+    terminal.symbol_picker = QComboBox()
+    terminal.symbol_picker.addItem("BTC/USD")
+    terminal.symbol_picker.setCurrentText("BTC/USD")
+    _bind(
+        terminal,
+        "_register_chart_request_token",
+        "_is_chart_request_current",
+        "_request_chart_data_for_widget",
+        "_update_chart",
+        "_retarget_chart_widget_symbol",
+    )
+
+    result = asyncio.run(Terminal._request_chart_data_for_widget(terminal, terminal.chart, limit=240))
+
+    assert result is not None
+    assert terminal.controller.requested_symbols == ["BTC/USD:USD"]
+    assert terminal.chart.symbol == "BTC/USD:USD"
+    assert terminal.symbol_picker.currentText() == "BTC/USD:USD"
+
+
 def test_request_chart_data_for_widget_marks_limited_history_after_loading():
     _app()
     frame = pd.DataFrame(
@@ -840,3 +998,39 @@ def test_request_chart_data_for_widget_marks_limited_history_after_loading():
     assert terminal.chart._chart_status_message == "Loaded 60 / 240 candles."
     assert terminal.chart._last_df is not None
     assert len(terminal.chart._last_df.index) == 60
+
+
+def test_update_symbols_retargets_coinbase_derivative_charts():
+    _app()
+    chart = ChartWidget("BTC/USD", "1h", SimpleNamespace(broker=None))
+    refreshed = []
+    symbol_picker = QComboBox()
+    symbol_picker.addItem("BTC/USD")
+    symbol_picker.setCurrentText("BTC/USD")
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            _resolve_preferred_market_symbol=lambda symbol, preference=None: "BTC/USD:USD" if str(symbol).upper() == "BTC/USD" else str(symbol).upper()
+        ),
+        symbols_table=QTableWidget(),
+        symbol_picker=symbol_picker,
+        chart=chart,
+        symbol="BTC/USD",
+        current_timeframe="1h",
+        _active_chart_widget_ref=chart,
+        _configure_market_watch_table=lambda: None,
+        _set_market_watch_row=lambda row, symbol, bid="-", ask="-", status="", usd_value="-": None,
+        _reorder_market_watch_rows=lambda: None,
+        _all_chart_widgets=lambda: [chart],
+        _schedule_chart_data_refresh=lambda chart_ref: refreshed.append(chart_ref.symbol),
+        _is_qt_object_alive=lambda obj: obj is not None,
+        _chart_tabs_ready=lambda: False,
+        _refresh_symbol_picker_favorites=lambda: None,
+        _update_favorite_action_text=lambda: None,
+    )
+    _bind(fake, "_retarget_chart_widget_symbol")
+
+    Terminal._update_symbols(fake, "coinbase", ["BTC/USD:USD"])
+
+    assert chart.symbol == "BTC/USD:USD"
+    assert symbol_picker.currentText() == "BTC/USD:USD"
+    assert refreshed == ["BTC/USD:USD"]

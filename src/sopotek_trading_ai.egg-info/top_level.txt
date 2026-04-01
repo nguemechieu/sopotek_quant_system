@@ -1,3 +1,4 @@
+agents
 assets
 backtesting
 broker
@@ -14,12 +15,16 @@ logs
 manager
 market_data
 models
-output
+paper_learning
 portfolio
 quant
+reasoning
 reports
 risk
 scripts
+security
+sopotek
+sopotek_trading_ai
 storage
 strategy
 tests

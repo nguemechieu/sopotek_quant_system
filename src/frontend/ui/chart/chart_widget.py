@@ -143,6 +143,7 @@ class ChartWidget(QWidget):
         self.panel_background = "#171d29"
         self.grid_color = str(grid_color or "#8290a0")
         self.axis_color = str(axis_color or "#9aa4b2")
+        self.coinbase_accent = "#1652f0"
         self.muted_text = "#728198"
         self._last_price_change = None
         self._news_events = []
@@ -201,24 +202,28 @@ class ChartWidget(QWidget):
 
         self.market_meta_label = QLabel()
         self.market_meta_label.setStyleSheet("color: #728198; font-size: 11px;")
+        self.market_meta_label.setWordWrap(True)
         self.market_micro_label = QLabel()
         self.market_micro_label.setStyleSheet("color: #9aa4b2; font-size: 11px;")
+        self.market_micro_label.setWordWrap(True)
         self.background_context_label = QLabel()
         self.background_context_label.setStyleSheet("color: #e7c56f; font-size: 11px; font-weight: 700;")
         self.background_context_label.setWordWrap(True)
         self.ohlcv_label = QLabel()
         self.ohlcv_label.setStyleSheet("color: #dde5ef; font-weight: 700; font-size: 11px;")
         self.ohlcv_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        for hidden_label in (
-            self.market_meta_label,
-            self.market_micro_label,
-            self.background_context_label,
-            self.ohlcv_label,
-        ):
+        header_details = QVBoxLayout()
+        header_details.setContentsMargins(0, 0, 0, 0)
+        header_details.setSpacing(2)
+        header_details.addWidget(self.market_meta_label)
+        header_details.addWidget(self.market_micro_label)
+        info_layout.addLayout(header_details, 2)
+
+        for hidden_label in (self.background_context_label, self.ohlcv_label):
             hidden_label.hide()
 
-        controls_container = QFrame()
-        controls_container.setStyleSheet(
+        self.controls_container = QFrame()
+        self.controls_container.setStyleSheet(
             """
             QFrame {
                 background-color: #0f1621;
@@ -227,13 +232,13 @@ class ChartWidget(QWidget):
             }
             """
         )
-        controls_layout = QHBoxLayout(controls_container)
+        controls_layout = QHBoxLayout(self.controls_container)
         controls_layout.setContentsMargins(8, 6, 8, 6)
         controls_layout.setSpacing(6)
 
-        timeframe_title = QLabel("Timeframe")
-        timeframe_title.setStyleSheet("color: #8fa4bf; font-size: 11px; font-weight: 700; padding-right: 4px;")
-        controls_layout.addWidget(timeframe_title)
+        self.timeframe_title = QLabel("Timeframe")
+        self.timeframe_title.setStyleSheet("color: #8fa4bf; font-size: 11px; font-weight: 700; padding-right: 4px;")
+        controls_layout.addWidget(self.timeframe_title)
 
         self.timeframe_picker = QComboBox()
         self.timeframe_picker.setMinimumWidth(88)
@@ -271,6 +276,8 @@ class ChartWidget(QWidget):
         self.overlay_toggle_button.clicked.connect(lambda checked=False: self._set_chart_overlays_visible(checked))
         controls_layout.addWidget(self.overlay_toggle_button)
 
+        self.chart_nav_buttons = []
+        self.fit_chart_button = None
         for label, callback in (
             ("<-", lambda: self._pan_chart(-0.28)),
             ("+", lambda: self._zoom_chart(0.72)),
@@ -284,8 +291,11 @@ class ChartWidget(QWidget):
             button.setStyleSheet(self._chart_nav_button_style(accent=(label == "Fit")))
             button.clicked.connect(lambda _checked=False, action=callback: action())
             controls_layout.addWidget(button)
+            self.chart_nav_buttons.append(button)
+            if label == "Fit":
+                self.fit_chart_button = button
 
-        info_layout.addWidget(controls_container, 0)
+        info_layout.addWidget(self.controls_container, 0)
 
         layout.addWidget(self.info_bar)
 
@@ -316,25 +326,31 @@ class ChartWidget(QWidget):
 
         self.candlestick_page = QWidget()
         candlestick_layout = QVBoxLayout(self.candlestick_page)
-        candlestick_layout.setContentsMargins(0, 0, 0, 0)
-        candlestick_layout.setSpacing(0)
+        candlestick_layout.setContentsMargins(12, 8, 12, 12)
+        candlestick_layout.setSpacing(8)
+
+        self.candlestick_shell = QFrame()
+        candlestick_shell_layout = QVBoxLayout(self.candlestick_shell)
+        candlestick_shell_layout.setContentsMargins(10, 10, 10, 10)
+        candlestick_shell_layout.setSpacing(0)
 
         self.splitter = QSplitter(QtCore.Qt.Orientation.Vertical)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.setHandleWidth(10)
+        self.splitter.setHandleWidth(8)
         self.splitter.setStyleSheet(
             """
             QSplitter::handle {
-                background-color: #1a2230;
-                border-top: 1px solid #2b3748;
-                border-bottom: 1px solid #2b3748;
+                background-color: #101827;
+                border-top: 1px solid #243142;
+                border-bottom: 1px solid #243142;
             }
             QSplitter::handle:hover {
-                background-color: #243042;
+                background-color: #1d2b40;
             }
             """
         )
-        candlestick_layout.addWidget(self.splitter)
+        candlestick_shell_layout.addWidget(self.splitter)
+        candlestick_layout.addWidget(self.candlestick_shell)
         self.market_tabs.addTab(self.candlestick_page, "Candlestick")
 
         date_axis_top = TradingDateAxisItem(orientation="bottom")
@@ -590,12 +606,12 @@ class ChartWidget(QWidget):
 
     def _style_plot(self, plot, left_label=None, right_label=None, bottom_label=None, show_bottom=False):
         plot.setBackground(self._normalized_color(self.chart_background, "#11161f"))
-        plot.showGrid(x=True, y=True, alpha=0.16)
+        plot.showGrid(x=True, y=True, alpha=0.11)
         plot.setMenuEnabled(False)
         plot.hideButtons()
 
         item = plot.getPlotItem()
-        item.layout.setContentsMargins(6, 6, 10, 6)
+        item.layout.setContentsMargins(4, 4, 8, 4)
 
         if left_label:
             plot.setLabel("left", left_label)
@@ -632,31 +648,130 @@ class ChartWidget(QWidget):
         color = pg.mkColor(self._normalized_color(value, fallback))
         return f"rgba({color.red()},{color.green()},{color.blue()},{max(0, min(255, int(alpha)))})"
 
+    def _update_chart_header_theme(self):
+        surface_background = self._rgba_css(self.chart_background, 246, "#11161f")
+        shell_background = self._rgba_css(self.chart_background, 252, "#11161f")
+        border = self._rgba_css(self.grid_color, 88, "#8290a0")
+        soft_border = self._rgba_css(self.grid_color, 56, "#8290a0")
+        title_color = self._normalized_color(self.axis_color, "#f6f8fb")
+        meta_color = self._rgba_css(self.axis_color, 184, "#9aa4b2")
+        micro_color = self._rgba_css(self.axis_color, 154, "#9aa4b2")
+
+        self.info_bar.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {surface_background};
+                border: 1px solid {border};
+                border-radius: 18px;
+            }}
+            """
+        )
+        self.instrument_label.setStyleSheet(
+            f"color: {title_color}; font-weight: 800; font-size: 17px; letter-spacing: 0.3px;"
+        )
+        self.market_meta_label.setStyleSheet(f"color: {meta_color}; font-size: 11px; font-weight: 600;")
+        self.market_micro_label.setStyleSheet(f"color: {micro_color}; font-size: 11px;")
+        self.controls_container.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {shell_background};
+                border: 1px solid {soft_border};
+                border-radius: 16px;
+            }}
+            """
+        )
+        self.timeframe_title.setStyleSheet(
+            f"color: {meta_color}; font-size: 11px; font-weight: 700; padding-right: 4px;"
+        )
+
+    def _timeframe_picker_style(self) -> str:
+        field_background = self._rgba_css(self.chart_background, 255, "#11161f")
+        text_color = self._normalized_color(self.axis_color, "#f6f8fb")
+        border = self._rgba_css(self.grid_color, 98, "#8290a0")
+        accent = self.coinbase_accent
+        return (
+            "QComboBox {"
+            f"background-color: {field_background}; color: {text_color}; border: 1px solid {border}; "
+            "border-radius: 14px; padding: 7px 12px; font-weight: 700; min-width: 68px;"
+            "}"
+            "QComboBox:hover {"
+            f"border-color: {accent};"
+            "}"
+            "QComboBox::drop-down {"
+            "border: 0; width: 20px;"
+            "}"
+            "QComboBox QAbstractItemView {"
+            f"background-color: {field_background}; color: {text_color}; selection-background-color: {accent};"
+            "}"
+        )
+
+    def _update_chart_controls_theme(self):
+        self.timeframe_picker.setStyleSheet(self._timeframe_picker_style())
+        self.overlay_toggle_button.setStyleSheet(self._chart_nav_button_style(accent=True))
+        for button in list(getattr(self, "chart_nav_buttons", [])):
+            button.setStyleSheet(self._chart_nav_button_style(accent=(button is self.fit_chart_button)))
+
+    def _update_chart_surface_theme(self):
+        shell_background = self._rgba_css(self.chart_background, 252, "#11161f")
+        border = self._rgba_css(self.grid_color, 74, "#8290a0")
+        handle_color = self._rgba_css(self.chart_background, 255, "#101827")
+        handle_hover = self._rgba_css(self.axis_color, 26, "#9aa4b2")
+        handle_border = self._rgba_css(self.grid_color, 72, "#8290a0")
+        self.candlestick_shell.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {shell_background};
+                border: 1px solid {border};
+                border-radius: 20px;
+            }}
+            """
+        )
+        self.splitter.setStyleSheet(
+            f"""
+            QSplitter::handle {{
+                background-color: {handle_color};
+                border-top: 1px solid {handle_border};
+                border-bottom: 1px solid {handle_border};
+            }}
+            QSplitter::handle:hover {{
+                background-color: {handle_hover};
+            }}
+            """
+        )
+
     def _update_market_tab_theme(self):
         chart_background = self._normalized_color(self.chart_background, "#11161f")
-        panel_background = self._normalized_color(self.panel_background, "#171d29")
-        tab_text = self._rgba_css(self.axis_color, 188, "#9aa4b2")
-        active_text = self._normalized_color(self.axis_color, "#f6f8fb")
-        border = self._rgba_css(self.grid_color, 120, "#8290a0")
-        selected_tab = self._rgba_css(self.axis_color, 24, "#9aa4b2")
+        panel_background = self._rgba_css(self.chart_background, 250, "#171d29")
+        tab_text = self._rgba_css(self.axis_color, 176, "#9aa4b2")
+        active_text = "#f8fbff"
+        border = self._rgba_css(self.grid_color, 86, "#8290a0")
+        hover_tab = self._rgba_css(self.axis_color, 22, "#9aa4b2")
+        selected_tab = self.coinbase_accent
         self.market_tabs.setStyleSheet(
             f"""
             QTabWidget::pane {{
                 border: 1px solid {border};
                 background-color: {chart_background};
-                border-radius: 14px;
+                border-radius: 18px;
+                top: 10px;
             }}
             QTabBar::tab {{
                 background-color: {panel_background};
                 color: {tab_text};
-                padding: 8px 16px;
-                margin-right: 4px;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
+                padding: 9px 16px;
+                margin-right: 8px;
+                border: 1px solid transparent;
+                border-radius: 16px;
+                font-weight: 700;
+            }}
+            QTabBar::tab:hover {{
+                background-color: {hover_tab};
+                color: {active_text};
             }}
             QTabBar::tab:selected {{
                 background-color: {selected_tab};
                 color: {active_text};
+                border-color: {selected_tab};
             }}
             """
         )
@@ -669,6 +784,9 @@ class ChartWidget(QWidget):
         self.h_line.setPen(guide_pen)
 
     def _apply_visual_theme(self):
+        self._update_chart_header_theme()
+        self._update_chart_controls_theme()
+        self._update_chart_surface_theme()
         self._update_market_tab_theme()
         self._style_plot(self.price_plot, right_label="Price", show_bottom=not self.show_volume_panel)
         self._style_plot(self.volume_plot, left_label="Volume", bottom_label="Date / Time (UTC)", show_bottom=self.show_volume_panel)
@@ -749,19 +867,21 @@ class ChartWidget(QWidget):
         self.splitter.setSizes(sizes[:pane_count])
 
     def _chart_nav_button_style(self, accent=False):
-        background = "#1b2738" if accent else "#141d2b"
-        hover = "#28405f" if accent else "#1d2a3d"
-        border = "#3e5b82" if accent else "#314156"
+        text_color = "#f8fbff" if accent else self._normalized_color(self.axis_color, "#f2f6fb")
+        background = self.coinbase_accent if accent else self._rgba_css(self.chart_background, 255, "#141d2b")
+        hover = "#0f52ff" if accent else self._rgba_css(self.axis_color, 22, "#1d2a3d")
+        border = self.coinbase_accent if accent else self._rgba_css(self.grid_color, 96, "#314156")
+        checked_border = "#4a86ff" if accent else self.coinbase_accent
         return (
             "QPushButton {"
-            f"background-color: {background}; color: #f2f6fb; border: 1px solid {border}; "
-            "border-radius: 11px; padding: 5px 10px; font-size: 12px; font-weight: 700; min-width: 34px;"
+            f"background-color: {background}; color: {text_color}; border: 1px solid {border}; "
+            "border-radius: 14px; padding: 6px 11px; font-size: 12px; font-weight: 700; min-width: 34px;"
             "}"
             "QPushButton:hover {"
-            f"background-color: {hover};"
+            f"background-color: {hover}; border-color: {checked_border};"
             "}"
             "QPushButton:checked {"
-            f"background-color: {hover}; border-color: #5d7fad;"
+            f"background-color: {hover}; border-color: {checked_border};"
             "}"
         )
 
@@ -885,6 +1005,27 @@ class ChartWidget(QWidget):
         if not status_detail:
             status_detail = f"No candle history was returned for {self.symbol.upper()} ({self.timeframe})."
         self._set_chart_status("error", "No data received.", status_detail)
+
+    def _clear_primary_chart_data(self):
+        self._last_candles = None
+        self._last_df = None
+        self._last_x = None
+        self._last_candle_stats = None
+        self._visible_news_events = []
+        self.candle_item.setData([])
+        self.ema_curve.setData([], [])
+        self.signal_markers.setData([], [])
+        self.news_markers.setData([], [])
+        self.trade_scatter.setData([], [])
+        self.volume_bars.setOpts(
+            x=[],
+            height=[],
+            width=max(float(getattr(self.candle_item, "body_width", 60.0) or 60.0), 1e-6),
+            brushes=[],
+        )
+        self.last_line.setVisible(False)
+        if hasattr(self, "clear_news_events"):
+            self.clear_news_events()
 
     def set_history_notice(self, received_bars: int, requested_bars: int):
         try:
@@ -1967,7 +2108,16 @@ class ChartWidget(QWidget):
                 return x
 
             dt = pd.to_datetime(ts, errors="coerce", utc=True)
-            x = (dt.astype("int64") / 1e9).to_numpy(dtype=float)
+            valid_mask = (~dt.isna()).to_numpy(dtype=bool)
+            if not valid_mask.any():
+                return np.arange(len(df), dtype=float)
+
+            # Normalize to nanosecond precision before converting to epoch seconds.
+            # Pandas may otherwise keep second-based datetime units, which would turn
+            # valid epoch timestamps such as 1700000000 into 1.7 after / 1e9.
+            x = np.full(len(df), np.nan, dtype=float)
+            valid_datetimes = dt.loc[valid_mask].astype("datetime64[ns, UTC]")
+            x[valid_mask] = valid_datetimes.astype("int64").to_numpy(dtype=float) / 1e9
             if np.isnan(x).all():
                 return np.arange(len(df), dtype=float)
             return x
@@ -2008,6 +2158,9 @@ class ChartWidget(QWidget):
         if not finite_mask.all():
             x = x[finite_mask]
         if len(x) < 2:
+            return x
+
+        if str(self.timeframe or "").strip().lower() == "tick":
             return x
 
         expected_step = self._timeframe_seconds()
@@ -3044,15 +3197,33 @@ class ChartWidget(QWidget):
         frame = df.copy()
         if "timestamp" in frame.columns:
             timestamp_series = frame["timestamp"]
-            numeric_timestamps = pd.to_numeric(timestamp_series, errors="coerce")
-            if int(numeric_timestamps.notna().sum()) >= max(1, len(frame.index) // 2):
-                normalized_seconds = numeric_timestamps.where(
-                    numeric_timestamps.abs() <= 1e11,
-                    numeric_timestamps / 1000.0,
-                )
-                frame["timestamp"] = pd.to_datetime(normalized_seconds, unit="s", errors="coerce", utc=True)
-            else:
+            timestamp_inference = ""
+            try:
+                non_null_timestamps = timestamp_series.dropna()
+                if len(non_null_timestamps) > 0:
+                    timestamp_inference = pd.api.types.infer_dtype(non_null_timestamps, skipna=True)
+            except Exception:
+                timestamp_inference = ""
+
+            if pd.api.types.is_datetime64_any_dtype(timestamp_series) or timestamp_inference in {"datetime", "datetime64", "date"}:
                 frame["timestamp"] = pd.to_datetime(timestamp_series, errors="coerce", utc=True)
+            else:
+                numeric_timestamps = pd.to_numeric(timestamp_series, errors="coerce")
+                if int(numeric_timestamps.notna().sum()) >= max(1, len(frame.index) // 2):
+                    normalized_seconds = numeric_timestamps.where(
+                        numeric_timestamps.abs() <= 1e11,
+                        numeric_timestamps / 1000.0,
+                    )
+                    frame["timestamp"] = pd.to_datetime(normalized_seconds, unit="s", errors="coerce", utc=True)
+                else:
+                    frame["timestamp"] = pd.to_datetime(timestamp_series, errors="coerce", utc=True)
+
+            min_timestamp = pd.Timestamp("1990-01-01T00:00:00+00:00")
+            max_timestamp = pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=365 * 5)
+            frame = frame[
+                frame["timestamp"].isna()
+                | ((frame["timestamp"] >= min_timestamp) & (frame["timestamp"] <= max_timestamp))
+            ]
         for column in ["open", "high", "low", "close", "volume"]:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
         frame.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -3061,6 +3232,8 @@ class ChartWidget(QWidget):
             drop_columns.append("timestamp")
         frame.dropna(subset=drop_columns, inplace=True)
         if frame.empty:
+            self._clear_primary_chart_data()
+            self.set_no_data_state("No valid candle timestamps were returned for this chart.")
             return
 
         frame = frame[(frame["open"] > 0) & (frame["high"] > 0) & (frame["low"] > 0) & (frame["close"] > 0)]

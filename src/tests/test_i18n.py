@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from frontend.ui.i18n import normalize_language_code, translate, translate_text
+from frontend.ui.i18n import normalize_language_code, translate, translate_rich_text, translate_text
 
 
 def test_normalize_language_code_falls_back_to_base_language():
@@ -35,3 +35,10 @@ def test_translate_text_handles_segmented_status_lines():
 
 def test_translate_text_handles_trailing_count_suffixes():
     assert translate_text("pt", "Notification Center (3)") == "Central de notificacoes (3)"
+
+
+def test_translate_rich_text_preserves_html_and_translates_visible_content():
+    text = "<h3>System Health</h3><p>Notification Center (3)</p>"
+    translated = translate_rich_text("fr", text)
+
+    assert translated == "<h3>Sante systeme</h3><p>Centre de notifications (3)</p>"

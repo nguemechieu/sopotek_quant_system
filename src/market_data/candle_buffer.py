@@ -44,3 +44,12 @@ class CandleBuffer:
             df["timestamp"] = pd.to_datetime(ts, errors="coerce", utc=True)
 
         return df
+
+    def latest(self, symbol):
+
+        data = self.buffers.get(symbol, [])
+
+        if not data:
+            return None
+
+        return data[-1]

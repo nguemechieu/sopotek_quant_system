@@ -337,8 +337,9 @@ TRANSLATIONS = {
         "pt": "Terminal de Trading IA Sopotek",
     },
     "terminal.menu.file": {"en": "File", "fr": "Fichier", "es": "Archivo", "pt": "Arquivo"},
-    "terminal.menu.trading": {"en": "Trade", "fr": "Ordres", "es": "Trading", "pt": "Ordens"},
-    "terminal.menu.backtesting": {"en": "Tester", "fr": "Tests", "es": "Tester", "pt": "Testes"},
+    "terminal.menu.trading": {"en": "Trading", "fr": "Trading", "es": "Trading", "pt": "Trading"},
+    "terminal.menu.strategy": {"en": "Strategy", "fr": "Strategie", "es": "Estrategia", "pt": "Estrategia"},
+    "terminal.menu.backtesting": {"en": "Backtesting", "fr": "Backtesting", "es": "Backtesting", "pt": "Backtesting"},
     "terminal.menu.charts": {"en": "Charts", "fr": "Graphiques", "es": "Graficos", "pt": "Graficos"},
     "terminal.menu.data": {"en": "Markets", "fr": "Marches", "es": "Mercados", "pt": "Mercados"},
     "terminal.menu.settings": {"en": "Preferences", "fr": "Preferences", "es": "Preferencias", "pt": "Preferencias"},
@@ -346,9 +347,9 @@ TRANSLATIONS = {
     "terminal.menu.review": {"en": "Review", "fr": "Revue", "es": "Revision", "pt": "Revisao"},
     "terminal.menu.research": {"en": "Research", "fr": "Recherche", "es": "Investigacion", "pt": "Pesquisa"},
     "terminal.menu.language": {"en": "Language", "fr": "Langue", "es": "Idioma", "pt": "Idioma"},
-    "terminal.menu.tools": {"en": "Monitor", "fr": "Suivi", "es": "Monitor", "pt": "Monitor"},
+    "terminal.menu.tools": {"en": "System", "fr": "Systeme", "es": "Sistema", "pt": "Sistema"},
     "terminal.menu.help": {"en": "Help", "fr": "Aide", "es": "Ayuda", "pt": "Ajuda"},
-    "terminal.action.generate_report": {"en": "Export Report", "fr": "Exporter Rapport", "es": "Exportar Reporte", "pt": "Exportar Relatorio"},
+    "terminal.action.generate_report": {"en": "Generate Report", "fr": "Generer Rapport", "es": "Generar Reporte", "pt": "Gerar Relatorio"},
     "terminal.action.export_trades": {"en": "Export Trades", "fr": "Exporter Trades", "es": "Exportar Trades", "pt": "Exportar Trades"},
     "terminal.action.exit": {"en": "Exit", "fr": "Quitter", "es": "Salir", "pt": "Sair"},
     "terminal.action.start_auto": {"en": "Start Auto", "fr": "Lancer Auto", "es": "Iniciar Auto", "pt": "Iniciar Auto"},
@@ -356,12 +357,12 @@ TRANSLATIONS = {
     "terminal.action.manual_trade": {"en": "Manual Order", "fr": "Ordre Manuel", "es": "Orden Manual", "pt": "Ordem Manual"},
     "terminal.action.close_all": {"en": "Close Positions", "fr": "Clore Positions", "es": "Cerrar Posiciones", "pt": "Fechar Posicoes"},
     "terminal.action.cancel_all": {"en": "Cancel Orders", "fr": "Annuler Ordres", "es": "Cancelar Ordenes", "pt": "Cancelar Ordens"},
-    "terminal.action.run_backtest": {"en": "Open Tester", "fr": "Ouvrir Testeur", "es": "Abrir Tester", "pt": "Abrir Tester"},
+    "terminal.action.run_backtest": {"en": "Run Backtest", "fr": "Lancer Backtest", "es": "Ejecutar Backtest", "pt": "Executar Backtest"},
     "terminal.action.optimize": {"en": "Optimize", "fr": "Optimiser", "es": "Optimizar", "pt": "Otimizar"},
     "terminal.action.new_chart": {"en": "Open Chart", "fr": "Ouvrir Graphique", "es": "Abrir Grafico", "pt": "Abrir Grafico"},
     "terminal.action.multi_chart": {"en": "Multi-Chart", "fr": "Multi Graphique", "es": "Multi Grafico", "pt": "Multi Grafico"},
     "terminal.action.candle_colors": {"en": "Chart Colors", "fr": "Couleurs Graphique", "es": "Colores del Grafico", "pt": "Cores do Grafico"},
-    "terminal.action.add_indicator": {"en": "Indicators", "fr": "Indicateurs", "es": "Indicadores", "pt": "Indicadores"},
+    "terminal.action.add_indicator": {"en": "Add Indicator", "fr": "Ajouter Indicateur", "es": "Agregar Indicador", "pt": "Adicionar Indicador"},
     "terminal.action.toggle_bid_ask": {"en": "Bid/Ask Lines", "fr": "Lignes Bid/Ask", "es": "Lineas Bid/Ask", "pt": "Linhas Bid/Ask"},
     "terminal.action.refresh_markets": {"en": "Reload Markets", "fr": "Recharger Marches", "es": "Recargar Mercados", "pt": "Recarregar Mercados"},
     "terminal.action.refresh_chart": {"en": "Reload Chart", "fr": "Recharger Graphique", "es": "Recargar Grafico", "pt": "Recarregar Grafico"},
@@ -371,7 +372,7 @@ TRANSLATIONS = {
     "terminal.action.risk_settings": {"en": "Risk Settings", "fr": "Reglages Risque", "es": "Ajustes de Riesgo", "pt": "Ajustes de Risco"},
     "terminal.action.portfolio": {"en": "Exposure", "fr": "Exposition", "es": "Exposicion", "pt": "Exposicao"},
     "terminal.action.ml_monitor": {"en": "Signal Monitor", "fr": "Suivi Signaux", "es": "Monitor de Senales", "pt": "Monitor de Sinais"},
-    "terminal.action.logs": {"en": "Console", "fr": "Console", "es": "Consola", "pt": "Console"},
+    "terminal.action.logs": {"en": "Logs", "fr": "Journaux", "es": "Registros", "pt": "Logs"},
     "terminal.action.performance": {"en": "Performance", "fr": "Performance", "es": "Rendimiento", "pt": "Performance"},
     "terminal.action.documentation": {"en": "User Guide", "fr": "Guide Utilisateur", "es": "Guia de Usuario", "pt": "Guia do Usuario"},
     "terminal.action.api_reference": {"en": "API Guide", "fr": "Guide API", "es": "Guia API", "pt": "Guia API"},
@@ -842,9 +843,28 @@ def translate_text(language_code, text):
     return options.get(normalized) or options.get(DEFAULT_LANGUAGE) or canonical
 
 
+def translate_rich_text(language_code, text):
+    source_text = str(text or "")
+    if not source_text:
+        return source_text
+    if "<" not in source_text or ">" not in source_text:
+        return translate_text(language_code, source_text)
+
+    translated_parts = []
+    for part in _HTML_TAG_SPLIT_PATTERN.split(source_text):
+        if not part:
+            continue
+        if _HTML_TAG_SPLIT_PATTERN.fullmatch(part):
+            translated_parts.append(part)
+            continue
+        translated_parts.append(_translate_compound_text(language_code, part))
+    return "".join(translated_parts)
+
+
 _COLON_LABEL_PATTERN = re.compile(r"^(?P<label>[^:\n]{1,80}?)(?P<sep>:\s*)(?P<rest>.+)$")
 _TRAILING_SUFFIX_PATTERN = re.compile(r"^(?P<label>.+?)(?P<suffix>\s+\([^)]*\))$")
 _SEGMENT_SPLIT_PATTERN = re.compile(r"(\s*\|\s*)")
+_HTML_TAG_SPLIT_PATTERN = re.compile(r"(<[^>]+>)")
 
 
 def _translate_exact_text(language_code, text):
@@ -928,7 +948,7 @@ def _sync_runtime_source_text(current_text, stored_source, previous_language):
     return current, source
 
 
-def _translate_runtime_attr(obj, language_code, previous_language, property_name, getter_name, setter_name):
+def _translate_runtime_attr(obj, language_code, previous_language, property_name, getter_name, setter_name, translator=None):
     getter = getattr(obj, getter_name, None)
     setter = getattr(obj, setter_name, None)
     if not callable(getter) or not callable(setter):
@@ -953,7 +973,8 @@ def _translate_runtime_attr(obj, language_code, previous_language, property_name
     if hasattr(obj, "setProperty"):
         obj.setProperty(property_name, source_text)
 
-    translated = translate_text(language_code, source_text)
+    translate_fn = translator or translate_text
+    translated = translate_fn(language_code, source_text)
     if translated != current_text:
         try:
             setter(translated)
@@ -1123,7 +1144,9 @@ def _translate_tree_headers(tree, language_code, previous_language):
             try:
                 header_item.setText(index, translated)
             except (TypeError, AttributeError, ValueError):
-               tree.setProperty("_i18n_source_tree_headers", stored_sources)
+                pass
+
+    tree.setProperty("_i18n_source_tree_headers", stored_sources)
 
 
 def _translate_tree_item(item, language_code, previous_language, item_role):
@@ -1199,6 +1222,7 @@ def apply_runtime_translations(root, language_code, previous_language=None):
             QMenu,
             QTabWidget,
             QTableWidget,
+            QTextBrowser,
             QTreeWidget,
             QWidget,
         )
@@ -1229,6 +1253,17 @@ def apply_runtime_translations(root, language_code, previous_language=None):
 
         if isinstance(obj, (QLabel, QAbstractButton, QAction)):
             _translate_runtime_attr(obj, normalized, previous, "_i18n_source_text", "text", "setText")
+
+        if isinstance(obj, QTextBrowser):
+            _translate_runtime_attr(
+                obj,
+                normalized,
+                previous,
+                "_i18n_source_html",
+                "toHtml",
+                "setHtml",
+                translator=translate_rich_text,
+            )
 
         if isinstance(obj, (QWidget, QDockWidget)):
             _translate_runtime_attr(obj, normalized, previous, "_i18n_source_window_title", "windowTitle", "setWindowTitle")

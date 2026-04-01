@@ -56,13 +56,11 @@ def _make_controller(candles):
     controller._market_data_shortfall_notices = {}
     controller._resolve_history_limit = lambda limit=None: int(limit or 200)
 
-    async def fake_fetch(symbol, timeframe="1h", limit=200):
+    async def fake_fetch(symbol, timeframe="1h", limit=200, start_time=None, end_time=None, history_scope="runtime"):
         return candles
 
     controller._safe_fetch_ohlcv = fake_fetch
     return controller, logs
-
-
 
 
 def test_bounded_window_extent_clamps_to_small_screen():
@@ -78,11 +76,13 @@ def test_bounded_window_extent_preserves_requested_size_when_it_fits():
     assert size == 1200
     assert minimum == 960
 
+
 def test_request_candle_data_warns_when_history_is_short():
+    base_timestamp_ms = 1710000000000
     candles = [
-        [1, 100.0, 101.0, 99.0, 100.5, 10.0],
-        [2, 100.5, 101.5, 100.0, 101.0, 12.0],
-        [3, 101.0, 102.0, 100.5, 101.2, 11.0],
+        [base_timestamp_ms, 100.0, 101.0, 99.0, 100.5, 10.0],
+        [base_timestamp_ms + 3600000, 100.5, 101.5, 100.0, 101.0, 12.0],
+        [base_timestamp_ms + 7200000, 101.0, 102.0, 100.5, 101.2, 11.0],
     ]
     controller, logs = _make_controller(candles)
 
@@ -122,6 +122,22 @@ def test_request_candle_data_sanitizes_malformed_ohlcv_rows_before_emitting():
     assert float(df.iloc[1]["volume"]) == 0.0
     assert any("Sanitized OHLCV data for BTC/USDT (1h) from runtime" in message for message, _level in logs)
     assert controller.candle_buffer.calls[-1][1]["close"] == 108.0
+
+
+def test_request_candle_data_rejects_epoch_placeholder_timestamps():
+    candles = [
+        [1, 100.0, 101.0, 99.0, 100.5, 10.0],
+        [2, 100.5, 101.5, 100.0, 101.0, 12.0],
+        [3, 101.0, 102.0, 100.5, 101.2, 11.0],
+    ]
+    controller, logs = _make_controller(candles)
+
+    df = asyncio.run(controller.request_candle_data("BTC/USDT", timeframe="1h", limit=6))
+
+    assert df is None
+    assert any("Sanitized OHLCV data for BTC/USDT (1h) from runtime" in message for message, _level in logs)
+    assert any("no candles were returned" in message for message, _level in logs)
+    assert controller.candle_signal.calls == []
 
 
 def test_request_candle_data_warns_when_no_history_is_available():
@@ -287,6 +303,56 @@ def test_safe_fetch_ticker_skips_unsupported_coinbase_symbol():
     ]
 
 
+def test_request_candle_data_resolves_coinbase_derivative_contract_symbol():
+    candles = [
+        [1710000000000, 100.0, 101.0, 99.0, 100.5, 10.0],
+        [1710003600000, 100.5, 101.5, 100.0, 101.0, 12.0],
+    ]
+    controller, _logs = _make_controller(candles)
+    requested_symbols = []
+
+    async def fake_fetch(symbol, timeframe="1h", limit=200, start_time=None, end_time=None, history_scope="runtime"):
+        requested_symbols.append(symbol)
+        return candles
+
+    controller._safe_fetch_ohlcv = fake_fetch
+    controller.market_trade_preference = "derivative"
+    controller.broker = SimpleNamespace(
+        exchange_name="coinbase",
+        market_preference="derivative",
+        resolved_market_preference="derivative",
+        symbols=["BTC/USD:USD"],
+        exchange=SimpleNamespace(
+            markets={
+                "BTC/USD": {
+                    "symbol": "BTC/USD",
+                    "base": "BTC",
+                    "quote": "USD",
+                    "spot": True,
+                    "active": True,
+                },
+                "BTC/USD:USD": {
+                    "symbol": "BTC/USD:USD",
+                    "base": "BTC",
+                    "quote": "USD",
+                    "settle": "USD",
+                    "contract": True,
+                    "future": True,
+                    "active": True,
+                },
+            }
+        ),
+    )
+
+    df = asyncio.run(controller.request_candle_data("BTC/USD", timeframe="1h", limit=2))
+
+    assert requested_symbols == ["BTC/USD:USD"]
+    assert df is not None
+    assert controller.candle_signal.calls[-1][0] == "BTC/USD:USD"
+    assert "BTC/USD:USD" in controller.candle_buffers
+    assert "BTC/USD" in controller.candle_buffers
+
+
 def test_extract_balance_equity_value_reads_nested_nav():
     controller = AppController.__new__(AppController)
 
@@ -342,6 +408,7 @@ def test_extract_balance_equity_ignores_single_non_cash_asset_quantity():
     )
 
     assert equity is None
+
 
 def test_performance_history_persists_timestamp_payload():
     controller = AppController.__new__(AppController)
@@ -416,10 +483,56 @@ def test_safe_fetch_ohlcv_returns_live_broker_rows_for_non_range_requests():
     assert rows[0][0].startswith("2026-03-19T10:00:00")
 
 
+def test_request_candle_data_backtest_scope_uses_extended_history_limit():
+    controller = AppController.__new__(AppController)
+    controller.limit = 50000
+    controller.MAX_HISTORY_LIMIT = 50000
+    controller.MAX_BACKTEST_HISTORY_LIMIT = 1000000
+    controller.time_frame = "1h"
+    controller.logger = logging.getLogger("test.market_data_messages.backtest_scope")
+    controller.terminal = None
+    controller._market_data_warning_timestamps = {}
+    controller._market_data_shortfall_notices = {}
+    controller.candle_buffers = {}
+    controller.candle_buffer = SimpleNamespace(update=lambda *_args, **_kwargs: None)
+    controller.candle_signal = _SignalRecorder()
+    controller._safe_fetch_ohlcv = None
+    controller._sanitize_ohlcv_rows = AppController._sanitize_ohlcv_rows.__get__(controller, AppController)
+    controller._notify_market_data_shortfall = lambda *_args, **_kwargs: None
+    observed = {}
+
+    async def fake_safe_fetch(symbol, timeframe="1h", limit=200, start_time=None, end_time=None, history_scope="runtime"):
+        observed["symbol"] = symbol
+        observed["timeframe"] = timeframe
+        observed["limit"] = limit
+        observed["history_scope"] = history_scope
+        return [
+            ["2026-03-19T10:00:00Z", 150.0, 151.0, 149.5, 150.5, 100.0],
+            ["2026-03-19T11:00:00Z", 150.5, 151.2, 150.1, 150.9, 110.0],
+        ]
+
+    controller._safe_fetch_ohlcv = fake_safe_fetch
+    controller._resolve_history_limit = AppController._resolve_history_limit.__get__(controller, AppController)
+    controller._resolve_backtest_history_limit = AppController._resolve_backtest_history_limit.__get__(controller, AppController)
+
+    df = asyncio.run(
+        controller.request_candle_data(
+            "USD/JPY",
+            timeframe="1h",
+            limit=200000,
+            history_scope="backtest",
+        )
+    )
+
+    assert len(df) == 2
+    assert observed["history_scope"] == "backtest"
+    assert observed["limit"] == 200000
+
 
 def test_request_candle_data_does_not_warn_when_only_one_bar_is_missing():
+    base_timestamp_ms = 1710000000000
     candles = [
-        [index, 100.0, 101.0, 99.0, 100.5, 10.0]
+        [base_timestamp_ms + ((index - 1) * 3600000), 100.0, 101.0, 99.0, 100.5, 10.0]
         for index in range(1, 180)
     ]
     controller, logs = _make_controller(candles)

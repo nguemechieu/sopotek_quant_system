@@ -6,9 +6,11 @@ Sopotek Trading AI is a desktop trading workstation for broker connectivity, cha
 
 - [Getting Started](../getting-started.md)
 - [Full App Guide](../FULL_APP_GUIDE.md)
+- [Release Notes](../release-notes.md)
 - [UI Workspace Guide](../ui-workspace.md)
 - [Brokers And Modes](../brokers-and-modes.md)
 - [Integrations](../integrations.md)
+- [Contributing Guide](../contributing.md)
 - [Troubleshooting](../troubleshooting.md)
 
 ## What This Documentation Covers
@@ -20,6 +22,7 @@ Sopotek Trading AI is a desktop trading workstation for broker connectivity, cha
 - how Telegram, OpenAI, speech, screenshots, and remote chart commands work
 - how journaling, trade review, checklists, and post-trade review fit into the workflow
 - how to run tests, build docs, and operate the repo locally
+- how the first publishable release is positioned and how future contributors should work safely
 
 ## Quick Facts
 
@@ -35,7 +38,7 @@ Sopotek Trading AI is a desktop trading workstation for broker connectivity, cha
 ## Recommended First Run
 
 1. Install dependencies from `requirements.txt`.
-2. Launch with `python src\main.py`.
+2. Launch with `python main.py`.
 3. Use `paper`, `practice`, or `sandbox` first.
 4. Confirm balances, candles, charts, and open orders.
 5. Test one small manual order.

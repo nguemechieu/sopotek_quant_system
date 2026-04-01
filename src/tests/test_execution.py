@@ -202,6 +202,58 @@ def test_execute_scales_buy_order_to_available_quote_balance():
     assert order["amount"] == 2.45
 
 
+def test_execute_skips_buy_order_when_safe_amount_is_below_market_minimum():
+    broker = MockBroker(
+        balance={"free": {"USDT": 5}},
+        markets={"BTC/USDT": {"active": True, "limits": {"cost": {"min": 10}}}},
+    )
+    bus = EventBus()
+    manager = ExecutionManager(broker, bus, OrderRouter(broker))
+
+    order = asyncio.run(
+        manager.execute(symbol="BTC/USDT", side="buy", amount=1, price=100)
+    )
+
+    assert order is None
+    assert broker.orders == []
+    assert "below the venue minimum" in manager.last_skip_reason("BTC/USDT")
+
+
+def test_execute_does_not_inflate_requested_order_to_exchange_minimum():
+    broker = MockBroker(
+        balance={"free": {"USDT": 100}},
+        markets={"BTC/USDT": {"active": True, "limits": {"cost": {"min": 10}}}},
+    )
+    bus = EventBus()
+    manager = ExecutionManager(broker, bus, OrderRouter(broker))
+
+    order = asyncio.run(
+        manager.execute(symbol="BTC/USDT", side="buy", amount=0.05, price=100)
+    )
+
+    assert order is None
+    assert broker.orders == []
+    assert "below the venue minimum" in manager.last_skip_reason("BTC/USDT")
+
+
+def test_execute_skips_inventory_balance_checks_for_oanda_fx_orders():
+    broker = MockBroker(
+        balance={"free": {"USD": 5000.0}, "currency": "USD"},
+        markets={"AUD/CAD": {"active": True, "otc": True}},
+    )
+    broker.exchange_name = "oanda"
+    bus = EventBus()
+    manager = ExecutionManager(broker, bus, OrderRouter(broker))
+
+    order = asyncio.run(
+        manager.execute(symbol="AUD/CAD", side="buy", amount=1000, price=0.9050, exchange="oanda")
+    )
+
+    assert order["symbol"] == "AUD/CAD"
+    assert order["amount"] == 1000
+    assert broker.orders[0]["symbol"] == "AUD/CAD"
+
+
 def test_execute_skips_inactive_market():
     broker = MockBroker(
         balance={"free": {"USDT": 1000}},

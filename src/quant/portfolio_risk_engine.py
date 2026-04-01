@@ -36,21 +36,21 @@ class PortfolioRiskEngine:
         volatility_target_pct=0.20,
         kelly_fraction_cap=0.25,
     ):
-        self.account_equity = max(1.0, safe_float(account_equity, 10000.0))
-        self.max_portfolio_risk = max(0.001, safe_float(max_portfolio_risk, 0.10))
-        self.max_risk_per_trade = max(0.001, safe_float(max_risk_per_trade, 0.02))
-        self.max_position_size_pct = max(0.001, safe_float(max_position_size_pct, 0.10))
-        self.max_gross_exposure_pct = max(0.01, safe_float(max_gross_exposure_pct, 2.0))
-        self.max_symbol_exposure_pct = max(0.01, safe_float(max_symbol_exposure_pct, 0.30))
+        self.account_equity = max(0.0, safe_float(account_equity, 10000.0))
+        self.max_portfolio_risk = max(0.0, safe_float(max_portfolio_risk, 0.10))
+        self.max_risk_per_trade = max(0.0, safe_float(max_risk_per_trade, 0.02))
+        self.max_position_size_pct = max(0.0, safe_float(max_position_size_pct, 0.10))
+        self.max_gross_exposure_pct = max(0.0, safe_float(max_gross_exposure_pct, 2.0))
+        self.max_symbol_exposure_pct = max(0.0, safe_float(max_symbol_exposure_pct, 0.30))
         self.max_correlation = max(0.10, min(0.999, safe_float(max_correlation, 0.85)))
         self.var_confidence = max(0.80, min(0.999, safe_float(var_confidence, 0.95)))
-        self.volatility_target_pct = max(0.01, safe_float(volatility_target_pct, 0.20))
-        self.kelly_fraction_cap = max(0.01, safe_float(kelly_fraction_cap, 0.25))
+        self.volatility_target_pct = max(0.0, safe_float(volatility_target_pct, 0.20))
+        self.kelly_fraction_cap = max(0.0, safe_float(kelly_fraction_cap, 0.25))
         self._latest_snapshot = self.status_snapshot()
 
     def sync_equity(self, equity):
         value = safe_float(equity, self.account_equity)
-        if value > 0:
+        if value >= 0:
             self.account_equity = value
 
     def _trade_direction(self, side):
@@ -108,12 +108,28 @@ class PortfolioRiskEngine:
         side = str(side or "buy").strip().lower()
         requested_amount = abs(safe_float(amount, 0.0))
         trade_price = safe_float(price, 0.0)
-        equity = max(1.0, safe_float(self.account_equity, 1.0))
+        equity = max(0.0, safe_float(self.account_equity, 0.0))
 
         if not symbol or requested_amount <= 0 or trade_price <= 0:
             approval = RiskApproval(False, "Invalid trade payload for portfolio risk review", 0.0, self.status_snapshot())
             self._latest_snapshot = approval.metrics
             return approval
+        if equity <= 0:
+            metrics = {
+                "version": self.VERSION,
+                "symbol": symbol,
+                "strategy_name": strategy_name,
+                "equity": equity,
+                "requested_amount": requested_amount,
+                "approved_amount": 0.0,
+                "trade_price": trade_price,
+                "trade_value": requested_amount * trade_price,
+                "adjusted_trade_value": 0.0,
+                "approved": False,
+                "reason": "Portfolio risk engine cannot size trades because account equity is zero.",
+            }
+            self._latest_snapshot = metrics
+            return RiskApproval(False, metrics["reason"], 0.0, metrics)
 
         current_positions, current_gross, current_net = self._portfolio_state(portfolio, market_prices)
         current_symbol_state = current_positions.get(symbol, {})

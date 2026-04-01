@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 # SAFE TASK CREATION
 # ==========================================================
 
-def create_task(coro: Coroutine, name: str = None):
+def create_task(coro: Coroutine, name: str ):
     """
     Create a background task with error logging
     """

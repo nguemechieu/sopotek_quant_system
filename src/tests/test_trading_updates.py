@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from PySide6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QTableWidget, QTableWidgetItem
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from frontend.ui.panels.trading_updates import (
     normalize_open_order_entry,
     normalize_position_entry,
+    populate_open_orders_table,
+    populate_positions_table,
     update_trade_log,
 )
 
@@ -148,3 +150,151 @@ def test_update_trade_log_updates_existing_row_by_order_id():
 
     assert table.rowCount() == 1
     assert table.item(0, 3).text() == "sell"
+
+
+def test_populate_positions_table_applies_query_filter_and_summary():
+    _app()
+    table = QTableWidget()
+    summary = QLabel()
+    search = QLineEdit()
+    fake = SimpleNamespace(
+        positions_table=table,
+        positions_filter_input=search,
+        positions_filter_summary=summary,
+        positions_close_all_button=SimpleNamespace(setEnabled=lambda _value: None),
+        controller=SimpleNamespace(broker=object()),
+        _normalize_position_entry=lambda payload: normalize_position_entry(
+            SimpleNamespace(_lookup_symbol_mid_price=lambda _symbol: 105.0),
+            payload,
+        ),
+        _build_position_close_button=lambda _position, compact=False: None,
+    )
+
+    rows = [
+        {"symbol": "BTC/USDT", "side": "long", "amount": 1.0, "entry_price": 100.0},
+        {"symbol": "ETH/USDT", "side": "short", "amount": 2.0, "entry_price": 200.0, "mark_price": 190.0},
+    ]
+    populate_positions_table(fake, rows)
+    search.setText("eth")
+    populate_positions_table(fake, rows)
+
+    assert table.rowCount() == 2
+    assert table.isRowHidden(0) is True
+    assert table.isRowHidden(1) is False
+    assert summary.text() == "Showing 1 of 2 positions"
+
+
+def test_populate_open_orders_table_applies_query_filter_and_summary():
+    _app()
+    table = QTableWidget()
+    summary = QLabel()
+    search = QLineEdit()
+    fake = SimpleNamespace(
+        open_orders_table=table,
+        open_orders_filter_input=search,
+        open_orders_filter_summary=summary,
+        _normalize_open_order_entry=lambda payload: normalize_open_order_entry(
+            SimpleNamespace(_lookup_symbol_mid_price=lambda _symbol: 105.0),
+            payload,
+        ),
+    )
+
+    rows = [
+        {"symbol": "BTC/USDT", "side": "buy", "type": "limit", "price": 100.0, "amount": 1.0, "filled": 0.0, "status": "open"},
+        {"symbol": "ETH/USDT", "side": "sell", "type": "market", "amount": 3.0, "filled": 1.0, "status": "pending"},
+    ]
+    populate_open_orders_table(fake, rows)
+    search.setText("pending")
+    populate_open_orders_table(fake, rows)
+
+    assert table.rowCount() == 2
+    assert table.isRowHidden(0) is True
+    assert table.isRowHidden(1) is False
+    assert summary.text() == "Showing 1 of 2 open orders"
+
+
+def test_update_trade_log_applies_query_filter_and_summary():
+    _app()
+    refreshed = []
+    table = QTableWidget()
+    table.setColumnCount(10)
+    summary = QLabel()
+    search = QLineEdit()
+
+    def find_existing_row(entry):
+        order_id = str(entry.get("order_id") or "").strip()
+        for row in range(table.rowCount()):
+            item = table.item(row, 8)
+            if item is not None and item.text().strip() == order_id:
+                return row
+        return None
+
+    fake = SimpleNamespace(
+        trade_log=table,
+        trade_log_filter_input=search,
+        trade_log_filter_summary=summary,
+        MAX_LOG_ROWS=200,
+        _normalize_trade_log_entry=lambda trade: trade,
+        _trade_log_row_for_entry=find_existing_row,
+        _format_trade_log_value=lambda value: "" if value is None else str(value),
+        _refresh_performance_views=lambda: refreshed.append(True),
+    )
+
+    update_trade_log(
+        fake,
+        {
+            "timestamp": "2026-03-15T12:00:00Z",
+            "symbol": "EUR/USD",
+            "source": "Manual",
+            "side": "buy",
+            "price": 1.12,
+            "size": 1000,
+            "order_type": "market",
+            "status": "filled",
+            "order_id": "ord-1",
+            "pnl": 12.5,
+            "reason": "Breakout",
+            "blocked_by_guard": False,
+        },
+    )
+    update_trade_log(
+        fake,
+        {
+            "timestamp": "2026-03-15T12:01:00Z",
+            "symbol": "BTC/USDT",
+            "source": "Bot",
+            "side": "sell",
+            "price": 65000,
+            "size": 0.25,
+            "order_type": "limit",
+            "status": "blocked",
+            "order_id": "ord-2",
+            "pnl": "",
+            "reason": "Stale quote",
+            "blocked_by_guard": True,
+        },
+    )
+    search.setText("stale")
+    update_trade_log(
+        fake,
+        {
+            "timestamp": "2026-03-15T12:01:00Z",
+            "symbol": "BTC/USDT",
+            "source": "Bot",
+            "side": "sell",
+            "price": 65000,
+            "size": 0.25,
+            "order_type": "limit",
+            "status": "blocked",
+            "order_id": "ord-2",
+            "pnl": "",
+            "reason": "Stale quote",
+            "blocked_by_guard": True,
+        },
+    )
+
+    assert table.rowCount() == 2
+    assert table.isRowHidden(0) is True
+    assert table.isRowHidden(1) is False
+    assert summary.text() == "Showing 1 of 2 trade log rows"
+    assert refreshed[-1] is True

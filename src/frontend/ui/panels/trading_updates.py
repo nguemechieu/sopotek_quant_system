@@ -2,6 +2,47 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QTableWidgetItem
 
 
+def _filter_query(terminal, attr_name):
+    widget = getattr(terminal, attr_name, None)
+    if widget is None:
+        return ""
+    try:
+        return str(widget.text() or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _row_matches_query(table, row, query):
+    if not query:
+        return True
+    fragments = []
+    for column in range(table.columnCount()):
+        item = table.item(row, column)
+        if item is None:
+            continue
+        text = str(item.text() or "").strip()
+        if text:
+            fragments.append(text.lower())
+        tooltip = str(item.toolTip() or "").strip()
+        if tooltip:
+            fragments.append(tooltip.lower())
+    haystack = " ".join(fragments)
+    return query in haystack
+
+
+def _set_filter_summary(terminal, attr_name, *, visible, total, empty_label, noun):
+    label = getattr(terminal, attr_name, None)
+    if label is None:
+        return
+    if total <= 0:
+        label.setText(empty_label)
+        return
+    if visible >= total:
+        label.setText(f"Showing all {noun}")
+        return
+    label.setText(f"Showing {visible} of {total} {noun}")
+
+
 def normalize_position_entry(terminal, raw):
     if raw is None:
         return None
@@ -155,6 +196,7 @@ def populate_positions_table(terminal, positions):
             table.setItem(row, col, item)
         table.setCellWidget(row, 7, terminal._build_position_close_button(pos, compact=True))
 
+    apply_positions_filter(terminal)
     table.resizeColumnsToContents()
     table.horizontalHeader().setStretchLastSection(True)
 
@@ -217,6 +259,8 @@ def populate_open_orders_table(terminal, orders):
     table = getattr(terminal, "open_orders_table", None)
     if table is None:
         return
+    if table.columnCount() < 11:
+        table.setColumnCount(11)
 
     normalized_orders = []
     for order in orders or []:
@@ -256,9 +300,10 @@ def populate_open_orders_table(terminal, orders):
                 elif status_value in {"open", "pending", "submitted", "accepted", "new"}:
                     item.setForeground(QColor("#65a3ff"))
             elif col == 9 and pnl_value is not None:
-                item.setForeground(QColor("#32d296" if float(pnl_value) >= 0 else "#ef5350"))
+                    item.setForeground(QColor("#32d296" if float(pnl_value) >= 0 else "#ef5350"))
             table.setItem(row, col, item)
 
+    apply_open_orders_filter(terminal)
     table.resizeColumnsToContents()
     table.horizontalHeader().setStretchLastSection(True)
 
@@ -332,6 +377,8 @@ def update_trade_log(terminal, trade):
     entry = terminal._normalize_trade_log_entry(trade)
     if entry is None:
         return
+    if terminal.trade_log.columnCount() < 10:
+        terminal.trade_log.setColumnCount(10)
 
     row = terminal._trade_log_row_for_entry(entry)
     if row is None:
@@ -360,23 +407,23 @@ def update_trade_log(terminal, trade):
         terminal.trade_log.setItem(row, column, QTableWidgetItem(terminal._format_trade_log_value(value)))
 
     tooltip_parts = []
-    if entry["stop_loss"] not in ("", None):
-        tooltip_parts.append(f"SL: {entry['stop_loss']}")
-    if entry["take_profit"] not in ("", None):
-        tooltip_parts.append(f"TP: {entry['take_profit']}")
-    if entry["reason"] not in ("", None):
+    if entry.get("stop_loss") not in ("", None):
+        tooltip_parts.append(f"SL: {entry.get('stop_loss')}")
+    if entry.get("take_profit") not in ("", None):
+        tooltip_parts.append(f"TP: {entry.get('take_profit')}")
+    if entry.get("reason") not in ("", None):
         prefix = "Guard" if entry.get("blocked_by_guard") else "Reason"
-        tooltip_parts.append(f"{prefix}: {entry['reason']}")
-    if entry["strategy_name"] not in ("", None):
-        tooltip_parts.append(f"Strategy: {entry['strategy_name']}")
-    if entry["confidence"] not in ("", None, 0):
-        tooltip_parts.append(f"Confidence: {entry['confidence']}")
-    if entry["spread_bps"] not in ("", None):
-        tooltip_parts.append(f"Spread: {entry['spread_bps']} bps")
-    if entry["slippage_bps"] not in ("", None):
-        tooltip_parts.append(f"Slippage: {entry['slippage_bps']} bps")
-    if entry["fee"] not in ("", None):
-        tooltip_parts.append(f"Fee: {entry['fee']}")
+        tooltip_parts.append(f"{prefix}: {entry.get('reason')}")
+    if entry.get("strategy_name") not in ("", None):
+        tooltip_parts.append(f"Strategy: {entry.get('strategy_name')}")
+    if entry.get("confidence") not in ("", None, 0):
+        tooltip_parts.append(f"Confidence: {entry.get('confidence')}")
+    if entry.get("spread_bps") not in ("", None):
+        tooltip_parts.append(f"Spread: {entry.get('spread_bps')} bps")
+    if entry.get("slippage_bps") not in ("", None):
+        tooltip_parts.append(f"Slippage: {entry.get('slippage_bps')} bps")
+    if entry.get("fee") not in ("", None):
+        tooltip_parts.append(f"Fee: {entry.get('fee')}")
     if tooltip_parts:
         tooltip = " | ".join(tooltip_parts)
         for column in range(terminal.trade_log.columnCount()):
@@ -384,5 +431,72 @@ def update_trade_log(terminal, trade):
             if item is not None:
                 item.setToolTip(tooltip)
 
+    apply_trade_log_filter(terminal)
     terminal.trade_log.horizontalHeader().setStretchLastSection(True)
     terminal._refresh_performance_views()
+
+
+def apply_positions_filter(terminal):
+    table = getattr(terminal, "positions_table", None)
+    if table is None:
+        return
+    query = _filter_query(terminal, "positions_filter_input")
+    visible_rows = 0
+    total_rows = table.rowCount()
+    for row in range(total_rows):
+        matches = _row_matches_query(table, row, query)
+        table.setRowHidden(row, not matches)
+        if matches:
+            visible_rows += 1
+    _set_filter_summary(
+        terminal,
+        "positions_filter_summary",
+        visible=visible_rows,
+        total=total_rows,
+        empty_label="Showing all positions",
+        noun="positions",
+    )
+
+
+def apply_open_orders_filter(terminal):
+    table = getattr(terminal, "open_orders_table", None)
+    if table is None:
+        return
+    query = _filter_query(terminal, "open_orders_filter_input")
+    visible_rows = 0
+    total_rows = table.rowCount()
+    for row in range(total_rows):
+        matches = _row_matches_query(table, row, query)
+        table.setRowHidden(row, not matches)
+        if matches:
+            visible_rows += 1
+    _set_filter_summary(
+        terminal,
+        "open_orders_filter_summary",
+        visible=visible_rows,
+        total=total_rows,
+        empty_label="Showing all open orders",
+        noun="open orders",
+    )
+
+
+def apply_trade_log_filter(terminal):
+    table = getattr(terminal, "trade_log", None)
+    if table is None:
+        return
+    query = _filter_query(terminal, "trade_log_filter_input")
+    visible_rows = 0
+    total_rows = table.rowCount()
+    for row in range(total_rows):
+        matches = _row_matches_query(table, row, query)
+        table.setRowHidden(row, not matches)
+        if matches:
+            visible_rows += 1
+    _set_filter_summary(
+        terminal,
+        "trade_log_filter_summary",
+        visible=visible_rows,
+        total=total_rows,
+        empty_label="Showing all trade log rows",
+        noun="trade log rows",
+    )

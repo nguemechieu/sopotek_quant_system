@@ -9,6 +9,19 @@ Telegram integration is implemented in `src/integrations/telegram_service.py` an
 - Telegram bot token
 - Telegram chat ID
 
+### How To Get A Telegram Bot Token And Chat ID
+1. Open Telegram and start a chat with `@BotFather`.
+2. Send `/newbot` and follow the prompts to name the bot.
+3. Copy the bot token that BotFather returns and keep it private.
+4. Start a chat with your new bot and send at least one message such as `/start`.
+5. Open `https://api.telegram.org/bot<token>/getUpdates` in a browser, replacing `<token>` with the real token.
+6. Find `message.chat.id` in the JSON response and paste that value into `Settings -> Integrations -> Telegram chat ID`.
+
+Notes:
+- If you use a group chat, add the bot to the group and send a message there before checking `getUpdates`.
+- Group chat IDs are often negative numbers.
+- Official Telegram bot setup reference: `https://core.telegram.org/bots#botfather`
+
 ### Automatic Notifications
 Trade activity notifications can include:
 
@@ -22,11 +35,26 @@ Trade activity notifications can include:
 - timestamp
 
 ### Telegram Keyboard And Commands
-The bot now supports a persistent keyboard and typed commands.
+The bot now supports a persistent section-based keyboard, inline menu cards, and typed commands.
 
-Core commands include:
-- `/help`
-- `/commands`
+Keyboard sections include:
+- `Overview`
+- `Portfolio`
+- `Market Intel`
+- `Performance`
+- `Workspace`
+- `Controls`
+- `Journal`
+- `Screenshot`
+- `Help`
+- `Quick Brief`
+
+Core commands remain available for compatibility:
+- `/menu`
+- `/portfolio`
+- `/markets`
+- `/workspace`
+- `/controls`
 - `/status`
 - `/balances`
 - `/positions`
@@ -40,7 +68,7 @@ Core commands include:
 - `/ask <question>`
 - `/chat <question>`
 
-The keyboard is designed to expose the common remote workflow without forcing the operator to type everything manually.
+Remote trading state changes from Telegram stay confirmation-gated through inline callbacks.
 
 ### Conversational Reply Behavior
 Telegram is no longer limited to slash-command prompts. Plain text messages can also be forwarded to the OpenAI-backed app context flow, which means the bot can answer natural questions about:
@@ -53,6 +81,14 @@ Telegram is no longer limited to slash-command prompts. Plain text messages can 
 - app status
 - market context
 
+### Runtime Translation
+Language changes now reach:
+
+- visible dashboard and terminal labels
+- translated runtime table and tree content
+- rich-text detail panes rendered in the workspace
+- dynamic Telegram summaries and remote console responses
+
 ## OpenAI
 
 OpenAI settings are stored through the desktop settings dialog.
@@ -60,6 +96,17 @@ OpenAI settings are stored through the desktop settings dialog.
 ### Settings Fields
 - OpenAI API key
 - OpenAI model
+
+### How To Get An OpenAI API Key
+1. Sign in to the OpenAI Platform at `https://platform.openai.com/`.
+2. Open the API keys page at `https://platform.openai.com/api-keys`.
+3. Create a new secret key and copy it immediately, because you may not be able to see the full key again later.
+4. Paste the key into `Settings -> Integrations -> OpenAI API key`.
+5. Choose the model you want to use and run `Test OpenAI` from the settings flow before relying on Sopotek Pilot or Telegram Q&A.
+
+Notes:
+- Treat the key like a password and do not share it in chat logs or screenshots.
+- If `Test OpenAI` fails, confirm the key was pasted fully and belongs to the project or account you intend to use.
 
 ### Current Use Cases
 - answer questions about the app runtime context

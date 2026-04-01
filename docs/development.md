@@ -46,6 +46,7 @@
 - MkDocs config: `docs/mkdocs.yml`
 - Docs site source: `docs/`
 - Docs landing page: `docs/docs/index.md`
+- Contributor guide: `docs/contributing.md`
 
 ## Current Development Guidance
 

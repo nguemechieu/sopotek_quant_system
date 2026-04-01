@@ -173,6 +173,19 @@ def test_chart_visual_theme_updates_plot_background_and_axis_colors():
     assert axis.textPen().color().name() == "#223344"
     assert axis.tickPen().color().name() == "#6b7a8f"
     assert "#f4efe5" in widget.market_tabs.styleSheet()
+    assert "#223344" in widget.instrument_label.styleSheet()
+    assert "rgba(244,239,229" in widget.controls_container.styleSheet()
+
+
+def test_chart_coinbase_style_surfaces_market_summary_and_segmented_tabs():
+    _app()
+    widget = ChartWidget("BTC/USDT", "1h", _controller())
+
+    assert widget.market_meta_label.isHidden() is False
+    assert widget.market_micro_label.isHidden() is False
+    assert "#1652f0" in widget.market_tabs.styleSheet()
+    assert "#1652f0" in widget.timeframe_picker.styleSheet()
+    assert "border-radius: 20px" in widget.candlestick_shell.styleSheet()
 
 
 def test_chart_indicators_can_be_removed_from_price_and_lower_panes():
@@ -298,6 +311,31 @@ def test_chart_update_candles_normalizes_mixed_second_and_millisecond_timestamps
     assert len(widget._last_x) == 3
     diffs = [round(float(widget._last_x[i + 1] - widget._last_x[i]), 3) for i in range(2)]
     assert diffs == [60.0, 60.0]
+    assert [round(float(value), 3) for value in widget._last_x] == [1700000000.0, 1700000060.0, 1700000120.0]
+
+    axis = widget.price_plot.getAxis("bottom")
+    assert axis.tickStrings([float(widget._last_x[-1])], 1.0, 60.0) == ["11-14 22:15"]
+
+
+def test_chart_update_candles_accepts_preparsed_datetime_timestamps():
+    _app()
+    widget = ChartWidget("BTC/USDT", "1m", _controller())
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime([1700000000, 1700000060, 1700000120], unit="s", utc=True),
+            "open": [100.0, 100.2, 100.4],
+            "high": [100.5, 100.7, 100.9],
+            "low": [99.8, 100.0, 100.2],
+            "close": [100.2, 100.4, 100.6],
+            "volume": [12.0, 15.0, 18.0],
+        }
+    )
+
+    widget.update_candles(frame)
+
+    assert widget._last_df is not None
+    assert widget._last_x is not None
+    assert [round(float(value), 3) for value in widget._last_x] == [1700000000.0, 1700000060.0, 1700000120.0]
 
 
 def test_chart_update_candles_regularizes_sparse_intraday_spacing_to_timeframe():
@@ -320,3 +358,47 @@ def test_chart_update_candles_regularizes_sparse_intraday_spacing_to_timeframe()
     assert len(widget._last_x) == 3
     diffs = [round(float(widget._last_x[i + 1] - widget._last_x[i]), 3) for i in range(2)]
     assert diffs == [60.0, 60.0]
+    assert round(float(widget._last_x[-1]), 3) == 1700007200.0
+
+
+def test_chart_update_candles_preserves_real_tick_timestamps():
+    _app()
+    widget = ChartWidget("BTC/USDT", "tick", _controller())
+    timestamps = [1700000000, 1700000060, 1700000120, 1700000180, 1700000240, 1700000270, 1700000285, 1700000292]
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [100.0, 101.0, 102.0, 103.0, 105.0, 107.0, 110.0, 113.0],
+            "high": [101.3, 102.3, 103.4, 105.5, 107.6, 110.5, 113.6, 116.4],
+            "low": [99.5, 100.4, 101.5, 102.4, 104.1, 106.3, 109.1, 112.1],
+            "close": [101.0, 102.0, 103.1, 105.0, 107.0, 110.0, 113.0, 116.0],
+            "volume": [100.0, 104.0, 109.0, 118.0, 130.0, 220.0, 270.0, 320.0],
+        }
+    )
+
+    widget.update_candles(frame)
+
+    assert widget._last_x is not None
+    assert [round(float(value), 3) for value in widget._last_x] == [float(value) for value in timestamps]
+
+
+def test_chart_update_candles_rejects_epoch_placeholder_timestamps():
+    _app()
+    widget = ChartWidget("BTC/USDT", "1h", _controller())
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1, 2, 3],
+            "open": [100.0, 100.2, 100.4],
+            "high": [100.5, 100.7, 100.9],
+            "low": [99.8, 100.0, 100.2],
+            "close": [100.2, 100.4, 100.6],
+            "volume": [12.0, 15.0, 18.0],
+        }
+    )
+
+    widget.update_candles(frame)
+
+    assert widget._last_df is None
+    assert widget._last_x is None
+    assert widget._chart_status_mode == "error"
+    assert widget._chart_status_message == "No data received."

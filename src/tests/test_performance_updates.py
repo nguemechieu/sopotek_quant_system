@@ -87,6 +87,43 @@ def test_performance_snapshot_builds_metrics_and_insights():
     assert snapshot["insights"]
 
 
+def test_performance_snapshot_prefers_current_runtime_equity_and_open_orders():
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            performance_engine=SimpleNamespace(
+                report=lambda: {
+                    "max_drawdown": 0.05,
+                    "sharpe_ratio": 1.2,
+                }
+            )
+        ),
+        _performance_series=lambda: [1000.0, 1100.0],
+        _performance_time_series=lambda: [1710000000.0, 1710003600.0],
+        _runtime_metrics_snapshot=lambda: {
+            "equity_value": 1200.0,
+            "equity_timestamp": 1710007200.0,
+            "open_order_count": 2,
+        },
+        _performance_trade_records=lambda: [
+            {"symbol": "BTC/USDT", "status": "filled", "pnl": 25.0},
+            {"symbol": "BTC/USDT", "status": "open"},
+        ],
+        _safe_float=lambda value, default=None: default if value in (None, "") else float(value),
+        _format_currency=lambda value: "-" if value is None else f"{float(value):,.2f}",
+        _format_percent_text=lambda value: "-" if value is None else f"{float(value) * 100.0:.2f}%",
+        _format_ratio_text=lambda value: "-" if value is None else f"{float(value):.2f}",
+    )
+
+    snapshot = performance_snapshot(fake)
+
+    assert snapshot["metrics"]["Equity"]["text"] == "1,200.00"
+    assert snapshot["metrics"]["Open Orders"]["text"] == "2"
+    assert snapshot["metrics"]["Pending Orders"]["text"] == "2"
+    assert snapshot["equity_series"][-1] == 1200.0
+    assert snapshot["equity_timestamps"][-1] == 1710007200.0
+    assert "2 open orders" in " ".join(snapshot["insights"])
+
+
 def test_populate_performance_view_updates_widgets():
     _app()
     summary = QLabel()

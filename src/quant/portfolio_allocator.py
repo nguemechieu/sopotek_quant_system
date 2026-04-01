@@ -25,19 +25,19 @@ class PortfolioAllocator:
         volatility_target_pct=0.20,
         min_trade_allocation_pct=0.005,
     ):
-        self.account_equity = max(1.0, safe_float(account_equity, 10000.0))
+        self.account_equity = max(0.0, safe_float(account_equity, 10000.0))
         self.strategy_weights = normalize_weights(strategy_weights or {})
         self.allocation_model = str(allocation_model or "equal_weight").strip().lower()
-        self.max_strategy_allocation_pct = max(0.05, min(1.0, safe_float(max_strategy_allocation_pct, 1.0)))
+        self.max_strategy_allocation_pct = max(0.0, min(1.0, safe_float(max_strategy_allocation_pct, 1.0)))
         self.rebalance_threshold_pct = max(0.0, safe_float(rebalance_threshold_pct, 0.05))
         self.volatility_target_pct = max(0.01, safe_float(volatility_target_pct, 0.20))
-        self.min_trade_allocation_pct = max(0.001, safe_float(min_trade_allocation_pct, 0.005))
+        self.min_trade_allocation_pct = max(0.0, safe_float(min_trade_allocation_pct, 0.005))
         self._symbol_strategy_map = {}
         self._latest_snapshot = self.status_snapshot()
 
     def sync_equity(self, equity):
         value = safe_float(equity, self.account_equity)
-        if value > 0:
+        if value >= 0:
             self.account_equity = value
 
     def configure_strategy_weights(self, strategy_weights=None, allocation_model=None):
@@ -116,12 +116,23 @@ class PortfolioAllocator:
         strategy_name = str(strategy_name or "Strategy").strip()
         trade_amount = abs(safe_float(amount, 0.0))
         trade_price = safe_float(price, 0.0)
-        equity = max(1.0, self.account_equity)
+        equity = max(0.0, safe_float(self.account_equity, 0.0))
 
         if not symbol or not strategy_name or trade_amount <= 0 or trade_price <= 0:
             decision = AllocationDecision(False, "Invalid trade payload for allocator", 0.0, self.status_snapshot())
             self._latest_snapshot = decision.metrics
             return decision
+        if equity <= 0:
+            metrics = {
+                "version": self.VERSION,
+                "approved": False,
+                "reason": "Allocator cannot size trades because account equity is zero.",
+                "strategy_name": strategy_name,
+                "symbol": symbol,
+                "equity": equity,
+            }
+            self._latest_snapshot = metrics
+            return AllocationDecision(False, metrics["reason"], 0.0, metrics)
 
         active = [str(name) for name in (active_strategies or [strategy_name]) if str(name).strip()]
         if strategy_name not in active:

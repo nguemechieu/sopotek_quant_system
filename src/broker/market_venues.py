@@ -22,6 +22,15 @@ def supported_market_venues_for_profile(broker_type=None, exchange=None):
     normalized_type = str(broker_type or "").strip().lower()
     normalized_exchange = str(exchange or "").strip().lower()
 
+    if normalized_exchange in {"schwab", "tdameritrade"}:
+        return ["auto", "option"]
+
+    if normalized_exchange in {"ib", "ibkr", "interactivebrokers", "interactive_brokers"}:
+        return ["auto", "derivative", "option"]
+
+    if normalized_exchange in {"amp", "ampfutures", "tradovate"}:
+        return ["auto", "derivative"]
+
     if normalized_exchange == "coinbase":
         return ["auto", "spot", "derivative"]
 
@@ -36,6 +45,15 @@ def supported_market_venues_for_profile(broker_type=None, exchange=None):
 
     if normalized_type == "stocks" or normalized_exchange == "alpaca":
         return ["auto", "spot"]
+
+    if normalized_type == "options":
+        return ["auto", "option"]
+
+    if normalized_type == "futures":
+        return ["auto", "derivative"]
+
+    if normalized_type == "derivatives":
+        return ["auto", "derivative", "option"]
 
     if normalized_type == "paper" or normalized_exchange == "paper":
         return ["auto", "spot", "derivative", "option", "otc"]

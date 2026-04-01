@@ -59,10 +59,29 @@ CRYPTO_EXCHANGE_MAP = {
     ],
 }
 
+DERIVATIVE_EXCHANGE_MAP = {
+    "options": ["schwab"],
+    "futures": ["ibkr", "amp", "tradovate"],
+    "derivatives": ["ibkr", "schwab", "amp", "tradovate"],
+}
+
+BROKER_TYPE_OPTIONS = [
+    "crypto",
+    "forex",
+    "stocks",
+    "options",
+    "futures",
+    "derivatives",
+    "paper",
+]
+
 EXCHANGE_MAP = {
     "crypto": [],
     "forex": ["oanda"],
     "stocks": ["alpaca"],
+    "options": DERIVATIVE_EXCHANGE_MAP["options"],
+    "futures": DERIVATIVE_EXCHANGE_MAP["futures"],
+    "derivatives": DERIVATIVE_EXCHANGE_MAP["derivatives"],
     "paper": ["paper"],
 }
 
@@ -75,7 +94,155 @@ BROKER_COPY = {
     "crypto": "Multi-venue crypto routing with stronger session clarity before execution starts.",
     "forex": "Account-aware FX setup with the fields needed for a cleaner Oanda handoff.",
     "stocks": "Equity sessions tuned for Alpaca with a simpler launch path and saved profiles.",
+    "options": "Contract-aware options sessions with a faster path into Greeks-aware execution workflows.",
+    "futures": "Futures routing built for margin-aware workflows, rollover context, and contract metadata.",
+    "derivatives": "A broader derivatives setup that keeps option and futures-capable broker paths visible in one place.",
     "paper": "A zero-risk rehearsal mode that still feels like the real desk experience.",
+}
+
+EXCHANGE_CREDENTIAL_SCHEMAS = {
+    "default": {
+        "api_label": "API Key",
+        "api_placeholder": "Public key or broker token",
+        "secret_label": "Secret",
+        "secret_placeholder": "Secret key",
+        "secret_echo": QLineEdit.Password,
+        "password_label": "Passphrase",
+        "password_placeholder": "Exchange passphrase when required",
+        "password_echo": QLineEdit.Password,
+        "account_label": "Account ID",
+        "account_placeholder": "Optional account identifier",
+        "show_password": False,
+        "show_account": False,
+        "required_fields": ("api", "secret"),
+        "field_targets": {
+            "api": "api_key",
+            "secret": "secret",
+            "password": "password",
+            "account": "account_id",
+        },
+        "field_fallbacks": {
+            "password": ("passphrase",),
+        },
+    },
+    "stellar": {
+        "api_label": "Public Key",
+        "api_placeholder": "Stellar public key",
+        "secret_label": "Private Key",
+        "secret_placeholder": "Stellar private key",
+        "required_fields": ("api",),
+    },
+    "coinbase": {
+        "api_label": "Key Name or ID",
+        "api_placeholder": "organizations/.../apiKeys/... or key id",
+        "secret_label": "Private Key",
+        "secret_placeholder": "Private key PEM or full Coinbase key JSON",
+    },
+    "oanda": {
+        "api_label": "Account ID",
+        "api_placeholder": "Oanda account ID",
+        "secret_label": "API Key",
+        "secret_placeholder": "Oanda API key",
+        "secret_echo": QLineEdit.Normal,
+        "required_fields": ("api", "secret"),
+        "field_targets": {
+            "api": "account_id",
+            "secret": "api_key",
+        },
+    },
+    "schwab": {
+        "api_label": "Client ID",
+        "api_placeholder": "Schwab client id",
+        "secret_label": "Client Secret",
+        "secret_placeholder": "Schwab client secret",
+        "password_label": "Refresh Token",
+        "password_placeholder": "Schwab refresh token",
+        "password_echo": QLineEdit.Password,
+        "account_label": "Account Hash",
+        "account_placeholder": "Optional Schwab account hash or account number",
+        "show_password": True,
+        "show_account": True,
+        "required_fields": ("api", "secret", "password"),
+        "field_targets": {
+            "api": "api_key",
+            "secret": "secret",
+            "password": "options.refresh_token",
+            "account": "options.account_hash",
+        },
+        "field_fallbacks": {
+            "password": ("password",),
+            "account": ("account_id",),
+        },
+    },
+    "amp": {
+        "api_label": "Username",
+        "api_placeholder": "AMP username",
+        "secret_label": "Password",
+        "secret_placeholder": "AMP password",
+        "password_label": "API Key",
+        "password_placeholder": "Optional AMP API key",
+        "password_echo": QLineEdit.Normal,
+        "account_label": "API Secret",
+        "account_placeholder": "Optional AMP API secret",
+        "show_password": True,
+        "show_account": True,
+        "required_fields": ("api", "secret"),
+        "field_targets": {
+            "api": "options.username",
+            "secret": "password",
+            "password": "api_key",
+            "account": "secret",
+        },
+        "field_fallbacks": {
+            "api": ("api_key",),
+            "secret": ("password", "secret"),
+            "password": ("api_key",),
+            "account": ("secret", "account_id"),
+        },
+    },
+    "tradovate": {
+        "api_label": "Username",
+        "api_placeholder": "Tradovate username",
+        "secret_label": "Password",
+        "secret_placeholder": "Tradovate password",
+        "password_label": "Company ID",
+        "password_placeholder": "Optional Tradovate company id",
+        "password_echo": QLineEdit.Normal,
+        "account_label": "Security Code",
+        "account_placeholder": "Optional Tradovate security code",
+        "show_password": True,
+        "show_account": True,
+        "required_fields": ("api", "secret"),
+        "field_targets": {
+            "api": "options.username",
+            "secret": "password",
+            "password": "api_key",
+            "account": "secret",
+        },
+        "field_fallbacks": {
+            "api": ("api_key",),
+            "secret": ("password", "secret"),
+            "password": ("api_key",),
+            "account": ("secret", "account_id"),
+        },
+    },
+    "ibkr": {
+        "api_label": "Session Token",
+        "api_placeholder": "Optional IBKR session token or client id",
+        "secret_label": "Session Secret",
+        "secret_placeholder": "Optional gateway secret",
+        "account_label": "Account ID",
+        "account_placeholder": "Optional IBKR account id override",
+        "show_password": False,
+        "show_account": True,
+        "required_fields": (),
+        "field_targets": {
+            "api": "api_key",
+            "secret": "secret",
+            "password": "password",
+            "account": "account_id",
+        },
+    },
 }
 
 """The dashboard is the launchpad for trading sessions, where customers configure broker access and review session readiness before"""
@@ -373,48 +540,141 @@ class Dashboard(QWidget):
         broker_type = self.exchange_type_box.currentText() if hasattr(self, "exchange_type_box") else ""
         exchange = self.exchange_box.currentText() if hasattr(self, "exchange_box") else ""
 
-        schema = {
-            "api_label": self._tr("dashboard.api_key"),
-            "api_placeholder": "Public key or broker token",
-            "secret_label": self._tr("dashboard.secret"),
-            "secret_placeholder": "Secret key",
-            "secret_echo": QLineEdit.Password,
-            "account_label": self._tr("dashboard.account_id"),
-            "account_placeholder": "Required for Oanda",
-        }
+        schema = dict(EXCHANGE_CREDENTIAL_SCHEMAS["default"])
+        schema.update(
+            {
+                "api_label": self._tr("dashboard.api_key"),
+                "secret_label": self._tr("dashboard.secret"),
+                "password_label": self._tr("dashboard.passphrase"),
+                "account_label": self._tr("dashboard.account_id"),
+            }
+        )
+        schema["field_targets"] = dict(schema.get("field_targets") or {})
+        schema["field_fallbacks"] = dict(schema.get("field_fallbacks") or {})
 
-        if exchange == "stellar":
+        schema_key = None
+        if exchange in EXCHANGE_CREDENTIAL_SCHEMAS:
+            schema_key = exchange
+        elif broker_type == "forex":
+            schema_key = "oanda"
+
+        if schema_key and schema_key != "default":
+            override = EXCHANGE_CREDENTIAL_SCHEMAS[schema_key]
+            merged_targets = dict(schema["field_targets"])
+            merged_targets.update(dict(override.get("field_targets") or {}))
+            merged_fallbacks = dict(schema["field_fallbacks"])
+            merged_fallbacks.update(dict(override.get("field_fallbacks") or {}))
             schema.update(
                 {
-                    "api_label": "Public Key",
-                    "api_placeholder": "Stellar public key",
-                    "secret_label": "Private Key",
-                    "secret_placeholder": "Stellar private key",
-                    "secret_echo": QLineEdit.Password,
+                    key: value
+                    for key, value in override.items()
+                    if key not in {"field_targets", "field_fallbacks"}
                 }
             )
-        elif exchange == "coinbase":
-            schema.update(
-                {
-                    "api_label": "Key Name or ID",
-                    "api_placeholder": "organizations/.../apiKeys/... or key id",
-                    "secret_label": "Private Key",
-                    "secret_placeholder": "Private key PEM or full Coinbase key JSON",
-                    "secret_echo": QLineEdit.Password,
-                }
-            )
-        elif exchange == "oanda" or broker_type == "forex":
-            schema.update(
-                {
-                    "api_label": "Account ID",
-                    "api_placeholder": "Oanda account ID",
-                    "secret_label": "API Key",
-                    "secret_placeholder": "Oanda API key",
-                    "secret_echo": QLineEdit.Normal,
-                }
-            )
+            schema["field_targets"] = merged_targets
+            schema["field_fallbacks"] = merged_fallbacks
+
+        if exchange in {"okx", "kucoin"}:
+            schema["show_password"] = True
 
         return schema
+
+    @staticmethod
+    def _schema_target_paths(target):
+        """Normalize a schema target entry into a tuple of target paths."""
+        if not target:
+            return ()
+        if isinstance(target, (tuple, list)):
+            return tuple(path for path in target if path)
+        return (target,)
+
+    @staticmethod
+    def _mapping_value(mapping, path):
+        """Read a dotted path from a nested dictionary structure."""
+        current = mapping
+        for part in str(path or "").split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+            if current is None:
+                return None
+        return current
+
+    @staticmethod
+    def _set_mapping_value(mapping, path, value):
+        """Write a dotted path into a nested dictionary structure."""
+        if value is None or value == "":
+            return
+        parts = str(path or "").split(".")
+        current = mapping
+        for part in parts[:-1]:
+            next_value = current.get(part)
+            if not isinstance(next_value, dict):
+                next_value = {}
+                current[part] = next_value
+            current = next_value
+        current[parts[-1]] = value
+
+    def _dashboard_field_values(self, schema=None):
+        """Return the current credential values keyed by raw dashboard field names."""
+        schema = schema or self._credential_field_schema()
+        is_paper = self.exchange_type_box.currentText() == "paper" or self.exchange_box.currentText() == "paper"
+        return {
+            "api": "" if is_paper else self.api_input.text().strip(),
+            "secret": "" if is_paper else self.secret_input.text().strip(),
+            "password": (
+                ""
+                if is_paper or not schema.get("show_password")
+                else self.password_input.text().strip()
+            ),
+            "account": (
+                ""
+                if is_paper or not schema.get("show_account")
+                else self.account_id_input.text().strip()
+            ),
+        }
+
+    @staticmethod
+    def _schema_label_key(field_name):
+        """Return the schema key that stores a raw field's visible label."""
+        return {
+            "api": "api_label",
+            "secret": "secret_label",
+            "password": "password_label",
+            "account": "account_label",
+        }[field_name]
+
+    def _schema_field_has_value(self, schema, resolved, field_name):
+        """Return whether a required dashboard field resolved into broker config data."""
+        for path in self._schema_target_paths((schema.get("field_targets") or {}).get(field_name)):
+            value = self._mapping_value(resolved, path)
+            if str(value or "").strip():
+                return True
+        return False
+
+    def _schema_field_value_from_broker(self, schema, broker, field_name):
+        """Read a saved broker value back into the matching dashboard field."""
+        candidate_paths = []
+        candidate_paths.extend(
+            self._schema_target_paths((schema.get("field_targets") or {}).get(field_name))
+        )
+        candidate_paths.extend(
+            self._schema_target_paths((schema.get("field_fallbacks") or {}).get(field_name))
+        )
+        for path in candidate_paths:
+            value = self._mapping_value(broker, path)
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _populate_credential_fields(self, broker, schema=None):
+        """Populate the dashboard credential inputs from a saved broker payload."""
+        schema = schema or self._credential_field_schema()
+        self.api_input.setText(self._schema_field_value_from_broker(schema, broker, "api"))
+        self.secret_input.setText(self._schema_field_value_from_broker(schema, broker, "secret"))
+        self.password_input.setText(self._schema_field_value_from_broker(schema, broker, "password"))
+        self.account_id_input.setText(self._schema_field_value_from_broker(schema, broker, "account"))
 
     def _apply_credential_field_schema(self):
         """Apply credential field schema to the current UI elements."""
@@ -431,6 +691,12 @@ class Dashboard(QWidget):
         self.secret_input.setPlaceholderText(schema["secret_placeholder"])
         self.secret_input.setEchoMode(schema["secret_echo"])
 
+        password_block = self._field_blocks.get("password")
+        if password_block is not None:
+            password_block.label_widget.setText(schema["password_label"])
+        self.password_input.setPlaceholderText(schema["password_placeholder"])
+        self.password_input.setEchoMode(schema["password_echo"])
+
         account_block = self._field_blocks.get("account_id")
         if account_block is not None:
             account_block.label_widget.setText(schema["account_label"])
@@ -438,40 +704,31 @@ class Dashboard(QWidget):
 
     def _resolved_broker_inputs(self):
         """Return normalized broker credential values from UI inputs."""
-        broker_type = self.exchange_type_box.currentText()
         exchange = self.exchange_box.currentText()
-        api_value = self.api_input.text().strip()
-        secret_value = self.secret_input.text().strip()
-        password_value = self.password_input.text().strip()
-        account_value = self.account_id_input.text().strip()
-
-        if exchange == "oanda" or broker_type == "forex":
-            return {
-                "api_key": secret_value,
-                "secret": None,
-                "password": password_value or None,
-                "account_id": api_value or None,
-            }
+        schema = self._credential_field_schema()
+        field_values = self._dashboard_field_values(schema)
 
         if exchange == "coinbase":
-            normalized_api, normalized_secret, normalized_password = normalize_coinbase_credentials(
-                api_value,
-                secret_value,
-                password_value,
+            field_values["api"], field_values["secret"], field_values["password"] = normalize_coinbase_credentials(
+                field_values["api"],
+                field_values["secret"],
+                field_values["password"],
             )
-            return {
-                "api_key": normalized_api,
-                "secret": normalized_secret,
-                "password": normalized_password,
-                "account_id": account_value or None,
-            }
 
-        return {
-            "api_key": api_value or None,
-            "secret": secret_value or None,
-            "password": password_value or None,
-            "account_id": account_value or None,
+        resolved = {
+            "api_key": None,
+            "secret": None,
+            "password": None,
+            "account_id": None,
+            "options": {},
         }
+        for field_name, value in field_values.items():
+            if not value:
+                continue
+            for path in self._schema_target_paths((schema.get("field_targets") or {}).get(field_name)):
+                self._set_mapping_value(resolved, path, value)
+
+        return resolved
 
     @staticmethod
     def _strip_wrapped_quotes(value):
@@ -706,7 +963,7 @@ class Dashboard(QWidget):
         market_row = QHBoxLayout()
         market_row.setSpacing(10)
         self.exchange_type_box = QComboBox()
-        self.exchange_type_box.addItems(["crypto", "forex", "stocks", "paper"])
+        self.exchange_type_box.addItems(BROKER_TYPE_OPTIONS)
         self.exchange_box = QComboBox()
         market_row.addWidget(self._wrap_field("Broker Type", self.exchange_type_box), 1)
         market_row.addWidget(self._wrap_field("Exchange", self.exchange_box), 1)
@@ -1122,16 +1379,9 @@ class Dashboard(QWidget):
         self.customer_region_box.setCurrentIndex(region_index if region_index >= 0 else 0)
         self._update_exchange_list(broker.get("type", "crypto"))
         self.exchange_box.setCurrentText(broker.get("exchange", ""))
+        self._update_optional_fields()
+        self._populate_credential_fields(broker)
         self._refresh_market_type_options()
-        if broker.get("exchange") == "oanda" or broker.get("type") == "forex":
-            self.api_input.setText(broker.get("account_id", ""))
-            self.secret_input.setText(broker.get("api_key", ""))
-            self.account_id_input.clear()
-        else:
-            self.api_input.setText(broker.get("api_key", ""))
-            self.secret_input.setText(broker.get("secret", ""))
-            self.account_id_input.setText(broker.get("account_id", ""))
-        self.password_input.setText(broker.get("password") or broker.get("passphrase", ""))
         self.mode_box.setCurrentText(broker.get("mode", "paper"))
         market_type_index = self.market_type_box.findData((broker.get("options", {}) or {}).get("market_type", "auto"))
         self.market_type_box.setCurrentIndex(market_type_index if market_type_index >= 0 else 0)
@@ -1239,20 +1489,15 @@ class Dashboard(QWidget):
         """Show/hide broker-specific form fields based on selected exchange type."""
         broker_type = self.exchange_type_box.currentText()
         exchange = self.exchange_box.currentText()
+        schema = self._credential_field_schema()
         is_paper = broker_type == "paper" or exchange == "paper"
-        uses_mapped_account_field = broker_type == "forex" or exchange == "oanda"
-        needs_account_id = uses_mapped_account_field
-        needs_password = exchange in {"okx", "kucoin"}
         self._refresh_market_type_options()
 
         self._field_blocks["api"].setVisible(not is_paper)
         self._field_blocks["secret"].setVisible(not is_paper)
-        self._field_blocks["account_id"].setVisible(needs_account_id and not uses_mapped_account_field)
-        self._field_blocks["password"].setVisible((not is_paper) and needs_password)
+        self._field_blocks["account_id"].setVisible((not is_paper) and bool(schema.get("show_account")))
+        self._field_blocks["password"].setVisible((not is_paper) and bool(schema.get("show_password")))
         self._field_blocks["customer_region"].setVisible(broker_type == "crypto" and not is_paper)
-
-        if uses_mapped_account_field:
-            self.account_id_input.clear()
 
         if is_paper:
             self.mode_box.blockSignals(True)
@@ -1302,6 +1547,26 @@ class Dashboard(QWidget):
             )
         elif exchange == "oanda" or broker_type == "forex":
             copy += " Enter Oanda account ID in the first field and API key in the second field."
+        elif exchange == "schwab":
+            copy += (
+                " Enter the Schwab client ID, client secret, and refresh token. "
+                "The last field can pin a specific account hash when you do not want auto-resolution."
+            )
+        elif exchange == "amp":
+            copy += (
+                " Enter the AMP username and password first. "
+                "The extra fields can carry optional AMP API credentials when your endpoint expects them."
+            )
+        elif exchange == "tradovate":
+            copy += (
+                " Enter the Tradovate username and password first. "
+                "Company ID and security code are only needed on environments that require them."
+            )
+        elif exchange == "ibkr":
+            copy += (
+                " IBKR can auto-resolve the account through Client Portal Gateway or TWS. "
+                "Use the account field only when you want to force a specific account id."
+            )
         self.broker_hint.setText(copy)
 
     def _set_check_state(self, row, text, is_ready):
@@ -1317,33 +1582,28 @@ class Dashboard(QWidget):
         exchange = self.exchange_box.currentText() or "paper"
         customer_region = self._selected_customer_region()
         mode = self.mode_box.currentText()
+        schema = self._credential_field_schema()
         market_type = str(self.market_type_box.currentData() or "auto").upper()
         strategy = "Auto per-symbol assignment"
         risk_value = self.risk_input.value()
 
         is_paper = broker_type == "paper" or exchange == "paper" or mode == "paper"
         needs_credentials = exchange != "paper" and broker_type != "paper"
-        needs_account_id = broker_type == "forex" or exchange == "oanda"
-        needs_password = exchange in {"okx", "kucoin"} and not is_paper
 
         resolved = self._resolved_broker_inputs()
-        has_api = bool(resolved.get("api_key"))
-        has_secret = bool(resolved.get("secret"))
-        has_account_id = bool(resolved.get("account_id"))
-        has_password = bool(resolved.get("password"))
-        if exchange == "oanda" or broker_type == "forex":
-            credentials_ready = has_api and has_account_id
-        elif exchange == "stellar":
-            credentials_ready = has_api
-        else:
-            credentials_ready = not needs_credentials or (has_api and has_secret and (not needs_password or has_password))
+        required_fields = tuple(schema.get("required_fields") or ())
+        credentials_ready = not needs_credentials or all(
+            self._schema_field_has_value(schema, resolved, field_name)
+            for field_name in required_fields
+        )
+        has_optional_account = bool(self._dashboard_field_values(schema).get("account"))
 
         readiness = 20
         readiness += 20 if exchange else 0
         readiness += 15 if mode else 0
         readiness += 15 if risk_value <= 3 else 8
         readiness += 20 if credentials_ready else 0
-        readiness += 10 if (not needs_account_id or has_account_id) else 0
+        readiness += 10 if (not schema.get("show_account") or has_optional_account) else 0
         readiness = max(0, min(100, readiness))
 
         session_label = "Paper" if is_paper else "Live"
@@ -1351,6 +1611,9 @@ class Dashboard(QWidget):
             "crypto": "Crypto Desk",
             "forex": "FX Desk",
             "stocks": "Equity Desk",
+            "options": "Options Desk",
+            "futures": "Futures Desk",
+            "derivatives": "Derivatives Desk",
             "paper": "Paper Desk",
         }.get(broker_type, "Multi-Asset")
 
@@ -1467,25 +1730,25 @@ class Dashboard(QWidget):
         exchange = self.exchange_box.currentText()
         broker_type = self.exchange_type_box.currentText()
         customer_region = self._selected_customer_region()
+        schema = self._credential_field_schema()
         resolved = self._resolved_broker_inputs()
         api_key = resolved.get("api_key")
         secret = resolved.get("secret")
         password = resolved.get("password")
         account_id = resolved.get("account_id")
 
-        if exchange != "paper" and broker_type != "paper" and not api_key:
-            QMessageBox.warning(self, "Missing Credentials", "API credentials are required for this broker.")
-            return
-        if exchange != "paper" and broker_type != "paper" and exchange != "oanda" and not secret:
+        missing_fields = []
+        if exchange != "paper" and broker_type != "paper":
+            for field_name in tuple(schema.get("required_fields") or ()):
+                if not self._schema_field_has_value(schema, resolved, field_name):
+                    missing_fields.append(field_name)
+        if missing_fields:
+            missing_label = schema.get(self._schema_label_key(missing_fields[0]), "Credential")
             QMessageBox.warning(
                 self,
-                "Missing Secret",
-                "A secret key is required for this broker session.",
+                "Missing Credentials",
+                f"{missing_label} is required for this broker session.",
             )
-            return
-        if broker_type == "forex" and not account_id:
-            QMessageBox.warning(self, "Missing Account ID",
-                                "Account ID is required for Oanda sessions.")
             return
         if exchange in {"binance", "binanceus"} and api_key and any(ch.isspace() for ch in api_key):
             QMessageBox.warning(
@@ -1550,6 +1813,16 @@ class Dashboard(QWidget):
                 )
                 return
 
+        broker_options = dict(resolved.get("options") or {})
+        broker_options.update(
+            {
+                "market_type": str(self.market_type_box.currentData() or "auto"),
+                "customer_region": customer_region,
+                "candle_price_component": str(
+                    getattr(self.controller, "forex_candle_price_component", "bid") or "bid"
+                ).strip().lower(),
+            }
+        )
         broker_config = BrokerConfig(
             type=broker_type,
             exchange=exchange,
@@ -1559,13 +1832,7 @@ class Dashboard(QWidget):
             secret=secret,
             password=password or None,
             account_id=account_id or None,
-            options={
-                "market_type": str(self.market_type_box.currentData() or "auto"),
-                "customer_region": customer_region,
-                "candle_price_component": str(
-                    getattr(self.controller, "forex_candle_price_component", "bid") or "bid"
-                ).strip().lower(),
-            },
+            options=broker_options,
         )
 
         config = AppConfig(
@@ -1576,7 +1843,18 @@ class Dashboard(QWidget):
         )
 
         if self.remember_checkbox.isChecked():
-            profile_name = f"{exchange}_{api_key[:6] if api_key else 'paper'}"
+            profile_seed = "paper"
+            for candidate in (
+                broker_options.get("username"),
+                api_key,
+                account_id,
+                broker_options.get("account_hash"),
+            ):
+                candidate_text = str(candidate or "").strip()
+                if candidate_text:
+                    profile_seed = candidate_text
+                    break
+            profile_name = f"{exchange}_{profile_seed[:6]}"
             payload = config.model_dump() if hasattr(config, "model_dump") else config.dict()
             CredentialManager.save_account(profile_name, payload)
             self.settings.setValue(self.LAST_PROFILE_SETTING, profile_name)

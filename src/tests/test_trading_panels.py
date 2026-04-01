@@ -28,12 +28,24 @@ class DummyTerminal(QMainWindow):
     def __init__(self):
         super().__init__()
         self.close_all_requests = 0
+        self.positions_filter_runs = 0
+        self.open_orders_filter_runs = 0
+        self.trade_log_filter_runs = 0
 
     def _action_button_style(self):
         return ""
 
     def _close_all_positions(self):
         self.close_all_requests += 1
+
+    def _apply_positions_filter(self):
+        self.positions_filter_runs += 1
+
+    def _apply_open_orders_filter(self):
+        self.open_orders_filter_runs += 1
+
+    def _apply_trade_log_filter(self):
+        self.trade_log_filter_runs += 1
 
 
 def test_create_positions_panel_builds_tabbed_tables_and_action_button():
@@ -59,6 +71,10 @@ def test_create_positions_panel_builds_tabbed_tables_and_action_button():
         for index in range(terminal.open_orders_table.columnCount())
     ] == OPEN_ORDER_HEADERS
     assert terminal.open_orders_dock is dock
+    assert terminal.positions_filter_input.placeholderText() == "Search positions by symbol, side, amount, or PnL"
+    assert terminal.positions_filter_summary.text() == "Showing all positions"
+    assert terminal.open_orders_filter_input.placeholderText() == "Search orders by symbol, type, status, or order id"
+    assert terminal.open_orders_filter_summary.text() == "Showing all open orders"
 
 
 def test_create_open_orders_panel_reuses_combined_positions_dock():
@@ -83,3 +99,5 @@ def test_create_trade_log_panel_builds_expected_columns():
         terminal.trade_log.horizontalHeaderItem(index).text()
         for index in range(terminal.trade_log.columnCount())
     ] == TRADE_LOG_HEADERS
+    assert terminal.trade_log_filter_input.placeholderText() == "Search trade history by symbol, source, side, status, or order id"
+    assert terminal.trade_log_filter_summary.text() == "Showing all trade log rows"

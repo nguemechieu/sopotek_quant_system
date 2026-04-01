@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -50,6 +51,7 @@ TOOL_WINDOWS = {
     "logs",
     "notification_center",
     "agent_timeline",
+    "symbol_universe",
 }
 WORKSPACE_PRESETS = {
     "trading": {
@@ -69,6 +71,20 @@ WORKSPACE_PRESETS = {
         "tools": ["performance_analytics", "closed_trade_journal", "notification_center"],
     },
 }
+
+PANEL_ACTION_SPECS = (
+    ("action_market_watch_panel", "Market Watch", "market_watch_dock"),
+    ("action_positions_panel", "Positions", "positions_dock"),
+    ("action_open_orders_panel", "Open Orders", "open_orders_dock"),
+    ("action_trade_log_panel", "Trade Log", "trade_log_dock"),
+    ("action_orderbook_panel", "Order Book", "orderbook_dock"),
+    ("action_ai_signal_panel", "AI Signal Monitor", "ai_signal_dock"),
+    ("action_risk_heatmap_panel", "Risk Heatmap", "risk_heatmap_dock"),
+    ("action_strategy_scorecard_panel", "Strategy Scorecard", "strategy_scorecard_dock"),
+    ("action_strategy_debug_panel", "Strategy Debug", "strategy_debug_dock"),
+    ("action_system_console_panel", "System Console", "system_console_dock"),
+    ("action_system_status_panel", "System Status", "system_status_dock"),
+)
 
 
 def install_terminal_operator_features(Terminal):
@@ -251,6 +267,183 @@ def install_terminal_operator_features(Terminal):
         window.activateWindow()
         if getattr(window, "_notification_filter", None) is not None:
             window._notification_filter.setFocus()
+        return window
+
+    def symbol_universe_snapshot(self):
+        controller = getattr(self, "controller", None)
+        snapshot = {}
+        if controller is not None and hasattr(controller, "get_symbol_universe_snapshot"):
+            try:
+                snapshot = controller.get_symbol_universe_snapshot() or {}
+            except Exception:
+                snapshot = {}
+
+        def normalize_symbol(symbol):
+            text = str(symbol or "").strip()
+            if not text:
+                return ""
+            normalizer = getattr(self, "_normalized_symbol", None)
+            if callable(normalizer):
+                try:
+                    normalized = str(normalizer(text) or "").strip()
+                    if normalized:
+                        return normalized
+                except Exception:
+                    pass
+            return text.upper().replace("-", "/").replace("_", "/")
+
+        def normalize_symbols(values):
+            normalized = []
+            seen = set()
+            for value in list(values or []):
+                symbol = normalize_symbol(value)
+                if not symbol or symbol in seen:
+                    continue
+                seen.add(symbol)
+                normalized.append(symbol)
+            return normalized
+
+        if not isinstance(snapshot, dict) or not snapshot:
+            symbols = []
+            if controller is not None:
+                try:
+                    symbols = list(getattr(controller, "symbols", []) or [])
+                except Exception:
+                    symbols = []
+            catalog = normalize_symbols(symbols)
+            active = list(catalog[: min(len(catalog), 10)])
+            snapshot = {
+                "active": active,
+                "watchlist": list(active),
+                "catalog": catalog,
+                "background_catalog": list(catalog),
+                "last_batch": list(active[: min(len(active), 8)]),
+                "rotation_cursor": 0,
+                "policy": {},
+            }
+
+        normalized_snapshot = dict(snapshot)
+        for key in ("active", "watchlist", "catalog", "background_catalog", "last_batch"):
+            normalized_snapshot[key] = normalize_symbols(normalized_snapshot.get(key, []))
+        normalized_snapshot["rotation_cursor"] = int(normalized_snapshot.get("rotation_cursor", 0) or 0)
+        policy = normalized_snapshot.get("policy", {})
+        normalized_snapshot["policy"] = dict(policy) if isinstance(policy, dict) else {}
+        return normalized_snapshot
+
+    def refresh_symbol_universe_window(self, window=None):
+        window = window or (getattr(self, "detached_tool_windows", {}) or {}).get("symbol_universe")
+        if not self._is_qt_object_alive(window):
+            return
+        tree = getattr(window, "_symbol_universe_tree", None)
+        filter_input = getattr(window, "_symbol_universe_filter", None)
+        summary = getattr(window, "_symbol_universe_summary", None)
+        if tree is None or filter_input is None or summary is None:
+            return
+
+        controller = getattr(self, "controller", None)
+        snapshot = self._symbol_universe_snapshot()
+        query = str(filter_input.text() or "").strip().lower()
+        policy = dict(snapshot.get("policy", {}) or {})
+        active = list(snapshot.get("active", []) or [])
+        watchlist = list(snapshot.get("watchlist", []) or [])
+        catalog = list(snapshot.get("catalog", []) or [])
+        background_catalog = list(snapshot.get("background_catalog", []) or [])
+        last_batch = list(snapshot.get("last_batch", []) or [])
+        display_limit = 60
+
+        tier_specs = (
+            ("Active", active, "Live symbols currently driving charts, execution, and frequent refreshes."),
+            ("Watchlist", watchlist, "Priority symbols kept near the top of discovery and operator focus."),
+            ("Discovery Batch", last_batch, "The most recent rotating discovery slice scanned in the background."),
+            ("Background Catalog", background_catalog, "The broader rotation pool used without overloading the broker."),
+            ("Catalog", catalog, "All broker-supported symbols available to search and stage into active use."),
+        )
+
+        tree.clear()
+        visible_counts = {}
+        for tier_name, symbols, description in tier_specs:
+            filtered_symbols = [symbol for symbol in symbols if (not query) or (query in symbol.lower()) or (query in tier_name.lower())]
+            visible_counts[tier_name] = len(filtered_symbols)
+            if query and not filtered_symbols and query not in description.lower():
+                continue
+            top_level = QTreeWidgetItem([f"{tier_name} ({len(symbols)})", description, ""])
+            top_level.setExpanded(tier_name in {"Active", "Watchlist", "Discovery Batch"})
+            tree.addTopLevelItem(top_level)
+            for symbol in filtered_symbols[:display_limit]:
+                top_level.addChild(QTreeWidgetItem([symbol, tier_name, ""]))
+            hidden_count = len(filtered_symbols) - min(len(filtered_symbols), display_limit)
+            if hidden_count > 0:
+                top_level.addChild(
+                    QTreeWidgetItem(
+                        [f"+ {hidden_count} more symbols", "Hidden to keep the window responsive.", "Refine the filter to narrow this tier."]
+                    )
+                )
+            if not filtered_symbols:
+                top_level.addChild(QTreeWidgetItem(["No matching symbols", tier_name, "Adjust the filter or refresh the snapshot."]))
+
+        for column in range(3):
+            tree.resizeColumnToContents(column)
+        tree.header().setStretchLastSection(True)
+        broker_name = "Broker"
+        if controller is not None:
+            exchange_getter = getattr(controller, "_active_exchange_code", None)
+            try:
+                if callable(exchange_getter):
+                    broker_name = str(exchange_getter() or broker_name)
+                else:
+                    broker_name = str(getattr(controller, "exchange_name", broker_name) or broker_name)
+            except Exception:
+                broker_name = str(getattr(controller, "exchange_name", broker_name) or broker_name)
+        batch_size = policy.get("discovery_batch_size", "-")
+        live_cap = policy.get("live_symbol_limit", "-")
+        watchlist_cap = policy.get("watchlist_limit", "-")
+        filter_suffix = f" Filter: {query}." if query else ""
+        summary.setText(
+            f"{broker_name} universe | Active {len(active)}/{live_cap} | "
+            f"Watchlist {len(watchlist)}/{watchlist_cap} | "
+            f"Catalog {len(catalog)} | Background {len(background_catalog)} | "
+            f"Current batch {len(last_batch)}/{batch_size}.{filter_suffix}"
+        )
+
+    def open_symbol_universe(self):
+        window = self._get_or_create_tool_window("symbol_universe", "Symbol Universe", width=820, height=600)
+        if getattr(window, "_symbol_universe_container", None) is None:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.setSpacing(10)
+            summary = QLabel(
+                "See how each broker is split into active, watchlist, catalog, and rotating discovery tiers."
+            )
+            summary.setWordWrap(True)
+            summary.setStyleSheet(
+                "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; border-radius: 12px; padding: 10px;"
+            )
+            layout.addWidget(summary)
+            controls = QHBoxLayout()
+            filter_input = QLineEdit()
+            filter_input.setPlaceholderText("Filter symbols or tiers")
+            filter_input.textChanged.connect(lambda *_: self._refresh_symbol_universe_window(window))
+            controls.addWidget(filter_input, 1)
+            refresh_btn = QPushButton("Refresh")
+            refresh_btn.clicked.connect(lambda: self._refresh_symbol_universe_window(window))
+            controls.addWidget(refresh_btn)
+            layout.addLayout(controls)
+            tree = QTreeWidget()
+            tree.setColumnCount(3)
+            tree.setHeaderLabels(["Tier / Symbol", "Scope", "Notes"])
+            layout.addWidget(tree, 1)
+            window.setCentralWidget(container)
+            window._symbol_universe_container = container
+            window._symbol_universe_summary = summary
+            window._symbol_universe_filter = filter_input
+            window._symbol_universe_tree = tree
+        self._refresh_symbol_universe_window(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        if getattr(window, "_symbol_universe_filter", None) is not None:
+            window._symbol_universe_filter.setFocus()
         return window
 
     def refresh_agent_timeline_window(self, window=None):
@@ -1255,6 +1448,7 @@ def install_terminal_operator_features(Terminal):
             "logs": getattr(self, "_open_logs", None),
             "notification_center": getattr(self, "_open_notification_center", None),
             "agent_timeline": getattr(self, "_open_agent_timeline", None),
+            "symbol_universe": getattr(self, "_open_symbol_universe", None),
         }
         handler = actions.get(str(key or "").strip())
         return invoke_callable(handler)
@@ -1407,6 +1601,7 @@ def install_terminal_operator_features(Terminal):
         entries = [
             {"title": "Manual Trade Ticket", "description": "Open the manual order ticket.", "keywords": "manual trade order ticket", "handler": lambda: self._open_manual_trade()},
             {"title": "Notification Center", "description": "Review fills, rejects, disconnects, and guard alerts.", "keywords": "notifications alerts fills rejects disconnect guard", "handler": self._open_notification_center},
+            {"title": "Symbol Universe", "description": "Inspect active, watchlist, catalog, and discovery-batch tiers.", "keywords": "symbol universe tiers active watchlist catalog discovery batch broker", "handler": self._open_symbol_universe},
             {"title": "Live Agent Timeline", "description": "Watch the live decision flow across symbols and agents.", "keywords": "agent timeline live runtime signal risk execution", "handler": self._open_agent_timeline},
             {"title": "Performance Analytics", "description": "Open the performance analysis workspace.", "keywords": "performance analytics ledger equity pnl", "handler": self._open_performance},
             {"title": "Portfolio Exposure", "description": "Open the portfolio exposure view.", "keywords": "portfolio exposure risk", "handler": self._show_portfolio_exposure},
@@ -1419,12 +1614,15 @@ def install_terminal_operator_features(Terminal):
             {"title": "Strategy Assigner", "description": "Open the strategy assignment workspace.", "keywords": "strategy assigner ranking", "handler": self._open_strategy_assignment_window},
             {"title": "Strategy Optimization", "description": "Open the optimization workspace.", "keywords": "strategy optimization backtest", "handler": self._optimize_strategy},
             {"title": "Backtesting Workspace", "description": "Open the strategy tester.", "keywords": "backtest tester", "handler": self._show_backtest_window},
+            {"title": "Export Diagnostics Bundle", "description": "Package logs, health checks, and runtime state for support.", "keywords": "diagnostics bundle support logs health export", "handler": self._export_diagnostics_bundle},
             {"title": "Trading Workspace", "description": "Focus the terminal on execution and monitoring.", "keywords": "workspace preset trading layout", "handler": lambda: self._apply_workspace_preset("trading")},
             {"title": "Research Workspace", "description": "Focus the terminal on analysis and strategy discovery.", "keywords": "workspace preset research layout", "handler": lambda: self._apply_workspace_preset("research")},
             {"title": "Risk Workspace", "description": "Focus the terminal on exposure and control panels.", "keywords": "workspace preset risk layout", "handler": lambda: self._apply_workspace_preset("risk")},
             {"title": "Review Workspace", "description": "Focus the terminal on journaling and performance review.", "keywords": "workspace preset review layout", "handler": lambda: self._apply_workspace_preset("review")},
             {"title": "Save Layout For Account", "description": "Save the current dock layout for this broker/account.", "keywords": "workspace layout save account", "handler": self._save_current_workspace_layout},
             {"title": "Restore Saved Layout", "description": "Restore the saved dock layout for this broker/account.", "keywords": "workspace layout restore account", "handler": self._restore_saved_workspace_layout},
+            {"title": "Reset Dock Layout", "description": "Restore the main trading panels and default dock arrangement.", "keywords": "workspace reset dock layout panels", "handler": self._apply_default_dock_layout},
+            {"title": "Show Market Watch", "description": "Bring back the Market Watch dock if it was hidden.", "keywords": "market watch watchlist symbols panel dock", "handler": lambda: self._show_workspace_dock(getattr(self, "market_watch_dock", None))},
             {"title": "Favorite Current Symbol", "description": "Pin the active symbol to the top of selectors.", "keywords": "favorite symbol watchlist", "handler": self._toggle_current_symbol_favorite},
             {"title": "Refresh Markets", "description": "Reload available symbols and market state.", "keywords": "refresh markets symbols", "handler": self._refresh_markets},
             {"title": "Refresh Chart", "description": "Reload the active chart candles.", "keywords": "refresh chart candles", "handler": self._refresh_active_chart_data},
@@ -1542,8 +1740,7 @@ def install_terminal_operator_features(Terminal):
 
     def create_menu_bar(self):
         result = orig_create_menu_bar(self)
-        if not hasattr(self, "workspace_menu"):
-            self.workspace_menu = self.menuBar().addMenu("Workspace")
+        if not bool(getattr(self, "__dict__", {}).get("_workspace_menu_actions_initialized", False)):
             self.action_workspace_trading = QAction("Trading Workspace", self)
             self.action_workspace_trading.triggered.connect(lambda: self._apply_workspace_preset("trading"))
             self.action_workspace_research = QAction("Research Workspace", self)
@@ -1556,36 +1753,63 @@ def install_terminal_operator_features(Terminal):
             self.action_save_workspace_layout.triggered.connect(self._save_current_workspace_layout)
             self.action_restore_workspace_layout = QAction("Restore Saved Layout", self)
             self.action_restore_workspace_layout.triggered.connect(self._restore_saved_workspace_layout)
-            for action in (
-                self.action_workspace_trading,
-                self.action_workspace_research,
-                self.action_workspace_risk,
-                self.action_workspace_review,
-            ):
-                self.workspace_menu.addAction(action)
-            self.workspace_menu.addSeparator()
-            self.workspace_menu.addAction(self.action_save_workspace_layout)
-            self.workspace_menu.addAction(self.action_restore_workspace_layout)
+            self.action_reset_dock_layout = QAction("Reset Dock Layout", self)
+            self.action_reset_dock_layout.triggered.connect(self._apply_default_dock_layout)
+            self.action_symbol_universe = QAction("Symbol Universe", self)
+            self.action_symbol_universe.triggered.connect(self._open_symbol_universe)
+            for action_name, label, dock_attr in PANEL_ACTION_SPECS:
+                action = QAction(label, self)
+                action.triggered.connect(
+                    lambda _checked=False, attr_name=dock_attr: self._show_workspace_dock(getattr(self, attr_name, None))
+                )
+                setattr(self, action_name, action)
             self.action_notifications = QAction("Notification Center", self)
             self.action_notifications.setShortcut("Ctrl+Shift+N")
             self.action_notifications.triggered.connect(self._open_notification_center)
-            self.review_menu.addAction(self.action_notifications)
-            self.tools_menu.addAction(self.action_notifications)
             self.action_agent_timeline = QAction("Live Agent Timeline", self)
             self.action_agent_timeline.setShortcut("Ctrl+Shift+L")
             self.action_agent_timeline.triggered.connect(self._open_agent_timeline)
-            self.review_menu.addAction(self.action_agent_timeline)
-            self.research_menu.addAction(self.action_agent_timeline)
-            self.tools_menu.addAction(self.action_agent_timeline)
             self.action_command_palette = QAction("Command Palette", self)
             self.action_command_palette.setShortcut("Ctrl+K")
             self.action_command_palette.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
             self.action_command_palette.triggered.connect(self._open_command_palette)
-            self.tools_menu.addAction(self.action_command_palette)
             self.action_favorite_symbol = QAction("Favorite Current Symbol", self)
             self.action_favorite_symbol.triggered.connect(self._toggle_current_symbol_favorite)
-            self.charts_menu.addSeparator()
-            self.charts_menu.addAction(self.action_favorite_symbol)
+            self._workspace_menu_actions_initialized = True
+
+        help_action = self.help_menu.menuAction() if getattr(self, "help_menu", None) is not None else None
+        self.workspace_menu = QMenu("Workspace", self)
+        if help_action is not None:
+            self.menuBar().insertMenu(help_action, self.workspace_menu)
+        else:
+            self.workspace_menu = self.menuBar().addMenu("Workspace")
+        self.panels_menu = QMenu("Panels", self.workspace_menu)
+        for action in (
+            self.action_workspace_trading,
+            self.action_workspace_research,
+            self.action_workspace_risk,
+            self.action_workspace_review,
+        ):
+            self.workspace_menu.addAction(action)
+        self.workspace_menu.addSeparator()
+        self.workspace_menu.addAction(self.action_symbol_universe)
+        self.workspace_menu.addAction(self.action_save_workspace_layout)
+        self.workspace_menu.addAction(self.action_restore_workspace_layout)
+        self.workspace_menu.addAction(self.action_reset_dock_layout)
+        self.workspace_menu.addSeparator()
+        self.workspace_menu.addMenu(self.panels_menu)
+        for action_name, _label, _dock_attr in PANEL_ACTION_SPECS:
+            self.panels_menu.addAction(getattr(self, action_name))
+
+        self.review_menu.addAction(self.action_notifications)
+        self.tools_menu.addAction(self.action_notifications)
+        self.review_menu.addAction(self.action_agent_timeline)
+        self.research_menu.addAction(self.action_agent_timeline)
+        self.tools_menu.addAction(self.action_agent_timeline)
+        self.tools_menu.addAction(self.action_symbol_universe)
+        self.tools_menu.addAction(self.action_command_palette)
+        self.charts_menu.addSeparator()
+        self.charts_menu.addAction(self.action_favorite_symbol)
         refresh_notification_action_text(self)
         update_favorite_action_text(self)
         return result
@@ -1594,6 +1818,10 @@ def install_terminal_operator_features(Terminal):
         result = orig_update_symbols(self, exchange, symbols)
         self._refresh_symbol_picker_favorites()
         self._update_favorite_action_text()
+        try:
+            self._refresh_symbol_universe_window()
+        except Exception:
+            pass
         return result
 
     def update_trade_log(self, trade):
@@ -1618,6 +1846,10 @@ def install_terminal_operator_features(Terminal):
         result = orig_refresh_terminal(self)
         try:
             self._refresh_runtime_notifications()
+        except Exception:
+            pass
+        try:
+            self._refresh_symbol_universe_window()
         except Exception:
             pass
         return result
@@ -1689,6 +1921,9 @@ def install_terminal_operator_features(Terminal):
     Terminal._push_notification = push_notification
     Terminal._refresh_notification_center_window = refresh_notification_center_window
     Terminal._open_notification_center = open_notification_center
+    Terminal._symbol_universe_snapshot = symbol_universe_snapshot
+    Terminal._refresh_symbol_universe_window = refresh_symbol_universe_window
+    Terminal._open_symbol_universe = open_symbol_universe
     Terminal._refresh_agent_timeline_window = refresh_agent_timeline_window
     Terminal._selected_agent_timeline_symbol = selected_agent_timeline_symbol
     Terminal._selected_agent_timeline_row = selected_agent_timeline_row

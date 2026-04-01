@@ -38,7 +38,7 @@ The terminal is the main operator workspace. Evidence in `src/frontend/ui/termin
 - trade log, open orders, positions, closed journal, and trade review
 - AI signal monitor, recommendations, strategy scorecard, and behavior guard status
 - risk heatmap, system status, system health, and performance analytics
-- Sopotek Pilot, settings, documentation, and licensing windows
+- Sopotek Pilot, separate `Settings` and `Risk` menus, documentation, and licensing windows
 
 ## Charts
 
@@ -70,6 +70,10 @@ The chart workflow now supports a more MT4-like interaction model:
 - drag chart trade levels when the trade ticket is open
 - use broker-aware formatting for amount, SL, TP, and entry values
 - receive suggested SL/TP automatically while still being able to adjust them manually
+- refresh stale quotes during live preflight when a fresh quote can be fetched before submission
+- cap requested size from available balance, free margin, or equity before a live broker sees the order
+- use account buying capacity for leveraged FX sizing instead of spot-style quote-inventory checks
+- retry one time with a smaller safe amount after an insufficient-funds or insufficient-margin rejection and report the reason back to the operator
 
 ## Indicators
 
@@ -146,6 +150,16 @@ The repo now includes several safety layers:
 - kill switch and resume flow
 - live safety interlock on launch
 - system health checks after session initialization
+- operator-facing sizing summaries when a manual order is reduced, corrected, or retried for account-safety reasons
+
+## Settings And Risk Menus
+
+The terminal now exposes:
+
+- `Settings` as its own top-level menu for general runtime, integrations, strategy, and UI preferences
+- `Risk` as a separate top-level menu for risk configuration and risk-focused workflows
+
+This separation is intended to make live supervision faster and reduce the chance of digging through general settings while trying to adjust risk controls.
 
 ## Journal, Checklist, And Review
 
@@ -198,6 +212,20 @@ Settings expose fields for:
 - voice recognition provider
 - speech output provider and voice preferences
 - news feed behavior
+
+### Credential Setup
+
+Telegram:
+1. Open Telegram and talk to `@BotFather`.
+2. Send `/newbot` and copy the returned bot token.
+3. Message your bot once, then open `https://api.telegram.org/bot<token>/getUpdates`.
+4. Copy `message.chat.id` into `Settings -> Integrations -> Telegram chat ID`.
+
+OpenAI:
+1. Sign in at `https://platform.openai.com/`.
+2. Create a key at `https://platform.openai.com/api-keys`.
+3. Paste it into `Settings -> Integrations -> OpenAI API key`.
+4. Use `Test OpenAI` before depending on Sopotek Pilot or Telegram Q&A.
 
 Telegram now supports:
 
@@ -257,8 +285,9 @@ Repo-backed persistence currently includes:
 
 1. Start on paper or practice.
 2. Validate a manual order.
-3. Validate a rejected order path.
-4. Validate chart refresh, open orders, positions, journal, and checklist flow.
-5. Validate Telegram or OpenAI features only after the base session is healthy.
-6. Validate Sopotek Pilot, screenshots, and remote commands next.
-7. Only then test AI trading or live execution.
+3. Validate that preflight sizing reduces an intentionally oversized order instead of sending the full amount.
+4. Validate a rejected order path and confirm the app surfaces the broker reason and any smaller retry.
+5. Validate chart refresh, open orders, positions, journal, and checklist flow.
+6. Validate Telegram or OpenAI features only after the base session is healthy.
+7. Validate Sopotek Pilot, screenshots, and remote commands next.
+8. Only then test AI trading or live execution.

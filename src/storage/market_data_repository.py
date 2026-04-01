@@ -24,6 +24,7 @@ class Candle(storage_db.Base):
 
 class MarketDataRepository:
     def _normalize_timestamp(self, value):
+        """Normalize a timestamp value to a naive UTC datetime and millisecond epoch."""
         if value is None:
             return None, None
 
@@ -61,6 +62,11 @@ class MarketDataRepository:
         return timestamp.replace(tzinfo=None), int(timestamp.timestamp() * 1000)
 
     def _normalize_candle(self, symbol, timeframe, candle, exchange=None):
+        """Normalize a raw OHLCV candle into a storage-ready dictionary.
+
+        Accepts either a dict with named fields or a sequence of values. Returns
+        None for malformed candles, invalid timestamps, or non-finite prices.
+        """
         if isinstance(candle, dict):
             timestamp_value = candle.get("timestamp")
             open_value = candle.get("open")
@@ -68,8 +74,15 @@ class MarketDataRepository:
             low_value = candle.get("low")
             close_value = candle.get("close")
             volume_value = candle.get("volume", 0.0)
-        elif isinstance(candle, (list, tuple)) and len(candle) >= 6:
-            timestamp_value, open_value, high_value, low_value, close_value, volume_value = candle[:6]
+        elif isinstance(candle, (list, tuple)):
+            candle_values = list(candle)
+            if len(candle_values) == 5:
+                # Some providers return [timestamp, open, high, low, close].
+                candle_values.append(0.0)
+            if len(candle_values) >= 6:
+                timestamp_value, open_value, high_value, low_value, close_value, volume_value = candle_values[:6]
+            else:
+                return None
         else:
             return None
 

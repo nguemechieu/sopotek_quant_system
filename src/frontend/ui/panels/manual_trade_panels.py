@@ -20,7 +20,10 @@ def ensure_manual_trade_ticket_window(terminal, window):
     layout.setContentsMargins(14, 14, 14, 14)
     layout.setSpacing(10)
 
-    hint = QLabel("Set symbol, side, size, entry, stop loss, and take profit before sending the order.")
+    hint = QLabel(
+        "Set symbol, side, and size. Limit and stop-limit orders need prices. "
+        "Stop loss and take profit are optional."
+    )
     hint.setWordWrap(True)
     hint.setStyleSheet(
         "color: #d9e6f7; background-color: #101a2d; border: 1px solid #20324d; "
