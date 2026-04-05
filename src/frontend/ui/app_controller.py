@@ -64,7 +64,7 @@ from storage.trade_audit_repository import TradeAuditRepository
 from storage.trade_repository import TradeRepository, derive_trade_outcome
 from strategy.strategy import Strategy
 from frontend.ui.services.trade_safety import age_seconds, format_age_label, timeframe_seconds
-from sessions import SessionManager
+from sessions.session_manager import SessionManager
 
 from frontend.ui.i18n import (
     DEFAULT_LANGUAGE,
