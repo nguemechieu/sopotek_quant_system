@@ -688,6 +688,54 @@ def test_sopotek_trading_start_tolerates_invalid_initial_capital_text(monkeypatc
     assert abs(float(trading.risk_engine.account_equity) - 15000.0) < 1e-9
 
 
+def test_sopotek_trading_run_processes_all_active_autotrade_symbols(monkeypatch):
+    active_symbols = [f"SYM{i}/USD" for i in range(105)]
+    controller = SimpleNamespace(
+        broker=DummyBroker(),
+        symbols=["BTC/USDT"],
+        time_frame="1h",
+        limit=200,
+        strategy_name="Trend Following",
+        strategy_params={},
+        max_portfolio_risk=0.10,
+        max_risk_per_trade=0.02,
+        max_position_size_pct=0.10,
+        max_gross_exposure_pct=2.0,
+        balances={"total": {"USDT": 10000}},
+        initial_capital=10000,
+        market_data_repository=None,
+        trade_repository=None,
+        handle_trade_execution=lambda trade: None,
+        get_active_autotrade_symbols=lambda: list(active_symbols),
+    )
+    trading = SopotekTrading(controller=controller)
+    processed = []
+
+    async def fake_process_symbol(symbol, timeframe=None, limit=None, publish_debug=True):
+        processed.append(
+            {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "limit": limit,
+                "publish_debug": publish_debug,
+            }
+        )
+
+    async def fast_sleep(_seconds):
+        trading.running = False
+        return None
+
+    monkeypatch.setattr(sopotek_trading_module.asyncio, "sleep", fast_sleep)
+    trading.process_symbol = fake_process_symbol
+    trading.running = True
+
+    asyncio.run(trading.run())
+
+    assert [item["symbol"] for item in processed] == active_symbols
+    assert all(item["limit"] == 200 for item in processed)
+    assert all(item["publish_debug"] is True for item in processed)
+
+
 def test_sopotek_trading_process_symbol_caps_runtime_history_limit_for_live_pipeline():
     controller = SimpleNamespace(
         broker=DummyBroker(),

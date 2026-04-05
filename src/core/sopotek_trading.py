@@ -1569,14 +1569,14 @@ class SopotekTrading:
         while self.running:
 
             try:
-                active_symbols = self.symbols[:100]
+                active_symbols = list(self.symbols)
                 if self.controller and hasattr(self.controller, "get_active_autotrade_symbols"):
                     try:
                         resolved = self.controller.get_active_autotrade_symbols()
                     except Exception:
                         resolved = []
                     if resolved:
-                        active_symbols = resolved[:100]
+                        active_symbols = list(resolved)
 
                 for symbol in active_symbols:
                     await self.process_symbol(

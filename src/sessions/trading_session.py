@@ -920,12 +920,6 @@ class TradingSession:
                 )
             )
         self.symbol_catalog = list(normalized)
-        limiter = getattr(self.parent_controller, "_limit_runtime_symbols", None)
-        if callable(limiter):
-            try:
-                return list(limiter(normalized, self.broker_type, self.exchange) or normalized)
-            except Exception:
-                return normalized
         return normalized
 
     async def _fetch_positions_safe(self) -> list[dict[str, Any]]:
@@ -934,7 +928,7 @@ class TradingSession:
         try:
             positions = await self.broker.fetch_positions()
         except TypeError:
-            positions = await self.broker.fetch_positions(symbols=self.symbols[:10])
+            positions = await self.broker.fetch_positions(symbols=list(self.symbols or []))
         except Exception as exc:
             self.logger.debug("Position refresh failed for session %s: %s", self.session_id, exc)
             return list(self.positions)

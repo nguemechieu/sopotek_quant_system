@@ -2457,20 +2457,20 @@ class AppController(QMainWindow):
         exchange_code = self._active_exchange_code(exchange=exchange)
         normalized_symbols = self._normalize_symbol_sequence(symbols)
         if exchange_code == "stellar":
-            return normalized_symbols[:12]
+            return normalized_symbols
         if broker_type != "crypto":
-            return normalized_symbols[:50]
+            return normalized_symbols
         if exchange_code == "coinbase":
             candidate_symbols = self._filter_symbols_for_trading(normalized_symbols, broker_type, exchange_code)
             prioritized = self._prioritize_symbols_for_trading(
                 candidate_symbols,
-                top_n=self.COINBASE_SYMBOL_LIMIT,
+                top_n=len(candidate_symbols),
                 quote_priority=self.COINBASE_QUOTE_PRIORITY,
                 account_assets=self._positive_balance_asset_codes(getattr(self, "balances", None)),
             )
-            return prioritized if prioritized else candidate_symbols[: self.COINBASE_SYMBOL_LIMIT]
-        prioritized = self._prioritize_symbols_for_trading(normalized_symbols, top_n=30)
-        return prioritized if prioritized else normalized_symbols[:30]
+            return prioritized if prioritized else candidate_symbols
+        prioritized = self._prioritize_symbols_for_trading(normalized_symbols, top_n=len(normalized_symbols))
+        return prioritized if prioritized else normalized_symbols
 
     def _refresh_symbol_universe_tiers(self, catalog_symbols=None, broker_type=None, exchange=None):
         exchange_code = self._active_exchange_code(exchange=exchange)
@@ -2913,7 +2913,7 @@ class AppController(QMainWindow):
                 if updated_symbols:
                     exchange_name = getattr(broker, "exchange_name", getattr(broker_cfg, "exchange", "broker")) or "broker"
                     broker_type = getattr(broker_cfg, "type", None)
-                    self.symbols = self._limit_runtime_symbols(updated_symbols, broker_type, exchange_name)
+                    self.symbols = self._normalize_symbol_sequence(updated_symbols)
                     self._refresh_symbol_universe_tiers(
                         catalog_symbols=updated_symbols,
                         broker_type=broker_type,

@@ -182,7 +182,7 @@ def test_assign_strategy_to_symbol_marks_manual_lock_and_source():
     assert controller.symbol_strategy_assignment_locked("BTC/USDT") is True
 
 
-def test_select_trade_symbols_limits_coinbase_and_prioritizes_held_assets():
+def test_select_trade_symbols_keeps_full_coinbase_runtime_list_and_prioritizes_held_assets():
     controller = _make_controller()
     controller.balances = {"total": {"USD": 500.0, "AAVE": 2.0}}
     controller.broker = SimpleNamespace(exchange_name="coinbase")
@@ -205,8 +205,9 @@ def test_select_trade_symbols_limits_coinbase_and_prioritizes_held_assets():
     ]
 
     selected = asyncio.run(controller._select_trade_symbols(symbols, "crypto", "coinbase"))
+    filtered = controller._filter_symbols_for_trading(symbols, "crypto", "coinbase")
 
-    assert len(selected) == controller.COINBASE_SYMBOL_LIMIT
+    assert len(selected) == len(filtered)
     assert selected[0] == "AAVE/USD"
 
 
@@ -563,7 +564,7 @@ def test_coinbase_market_preference_change_keeps_live_symbol_cap():
 
     controller.set_market_trade_preference("spot")
 
-    assert len(controller.symbols) == controller.COINBASE_SYMBOL_LIMIT
+    assert len(controller.symbols) == 11
     assert emitted[-1][0] == "coinbase"
     assert emitted[-1][1] == controller.symbols
     assert len(controller.get_symbol_universe_snapshot()["catalog"]) == 11
