@@ -24,6 +24,7 @@ CORE_STRATEGY_NAMES = (
     "RSI Failure Swing",
     "Volume Spike Reversal",
     "ML Model",
+    "Adaptive Momentum Pullback",
 )
 
 VARIANT_STYLE_PROFILES = (
@@ -342,6 +343,18 @@ class Strategy:
                 return self._signal("buy", 0.61, "Healthy pullback into uptrend support near fast EMA", price=close_price, row=row)
             if trend_down and pullback_gap <= 0.4 and 38 <= rsi <= 55 and close_price <= float(row["ema_fast"]):
                 return self._signal("sell", 0.61, "Bearish pullback failed near fast EMA resistance", price=close_price, row=row)
+
+        elif selected_name == "Adaptive Momentum Pullback":
+            momentum = float(row.get("momentum", 0.0) or 0.0)
+            volume_ratio = float(row.get("volume_ratio", 1.0) or 1.0)
+            pullback_gap = abs(float(row.get("pullback_gap", 0.0) or 0.0))
+            min_momentum = 0.003
+            min_volume = 0.9
+            max_pullback = 0.6
+            if trend_up and momentum > min_momentum and volume_ratio >= min_volume and pullback_gap <= max_pullback and rsi < 70:
+                return self._signal("buy", 0.65, "Adaptive momentum pullback in uptrend", price=close_price, row=row)
+            if trend_down and momentum < -min_momentum and volume_ratio >= min_volume and pullback_gap <= max_pullback and rsi > 30:
+                return self._signal("sell", 0.65, "Adaptive momentum pullback in downtrend", price=close_price, row=row)
 
         elif selected_name == "Volatility Breakout":
             breakout_high = row.get("breakout_high")

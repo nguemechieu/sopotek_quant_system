@@ -50,3 +50,13 @@ The current runtime branch also adds a new adaptive AI supervision layer on top 
 - normalized email and push alert delivery plus a file-backed mobile dashboard export
 - `TradeJournalAIEngine` for automated post-trade analysis explaining why a trade lost, what worked, and what to improve next
 - a file-backed feature store and SQL-backed quant persistence layer for research, retraining, and auditability
+
+## Reliability Update On April 15, 2026
+
+This update tightened a few operator-facing runtime paths that were producing noisy logs or environment-specific failures:
+
+- `SignalAgent` now treats selector results of `None` as `HOLD` / no-entry outcomes instead of invalid signal payloads
+- the `Adaptive Momentum Pullback` selector now evaluates only after feature rows and trend flags are initialized, avoiding `trend_down` local-variable crashes
+- Coinbase JWT auth now loads `PyJWT` lazily and reports a clearer dependency error when the active environment is missing JWT support
+- the Docker image and Compose profiles were aligned with the current script layout so `app`, `app-headless`, and `app-http` can build and start from the repo more consistently
+- documentation and repo metadata were cleaned up so README, MkDocs, and troubleshooting guidance all point at the current `nguemechieu/sopotek_quant_system` repository

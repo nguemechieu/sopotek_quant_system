@@ -5,9 +5,9 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-import jwt
 from cryptography.hazmat.primitives import serialization
 
+from ..coinbase_jwt_auth import require_coinbase_jwt
 from .models import CoinbaseConfig
 
 
@@ -59,7 +59,8 @@ class CoinbaseJWTAuth:
             "kid": self.subject,
             "nonce": secrets.token_hex(16),
         }
-        token = jwt.encode(
+        jwt_module = require_coinbase_jwt()
+        token = jwt_module.encode(
             claims,
             self._load_private_key(),
             algorithm="ES256",
@@ -72,7 +73,8 @@ class CoinbaseJWTAuth:
             "kid": self.subject,
             "nonce": secrets.token_hex(16),
         }
-        token = jwt.encode(
+        jwt_module = require_coinbase_jwt()
+        token = jwt_module.encode(
             self._build_claims(ttl_seconds=ttl_seconds),
             self._load_private_key(),
             algorithm="ES256",

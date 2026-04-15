@@ -1,18 +1,18 @@
 # Documentation Home
 
-Sopotek Trading AI is a desktop trading workstation for broker connectivity, charting, manual and AI-assisted execution, analytics, journaling, and operational control.
+Sopotek Quant System is a desktop trading workstation for broker connectivity, charting, manual and AI-assisted execution, analytics, journaling, and operational control.
 
 ## Start Here
 
-- [Getting Started](../getting-started.md)
-- [Full App Guide](../FULL_APP_GUIDE.md)
-- [Release Notes](../release-notes.md)
-- [Adaptive Runtime Guide](../adaptive-runtime.md)
-- [UI Workspace Guide](../ui-workspace.md)
-- [Brokers And Modes](../brokers-and-modes.md)
-- [Integrations](../integrations.md)
-- [Contributing Guide](../contributing.md)
-- [Troubleshooting](../troubleshooting.md)
+- [Getting Started](getting-started.md)
+- [Full App Guide](FULL_APP_GUIDE.md)
+- [Release Notes](release-notes.md)
+- [Adaptive Runtime Guide](adaptive-runtime.md)
+- [UI Workspace Guide](ui-workspace.md)
+- [Brokers And Modes](brokers-and-modes.md)
+- [Integrations](integrations.md)
+- [Contributing Guide](contributing.md)
+- [Troubleshooting](troubleshooting.md)
 
 ## What This Documentation Covers
 
@@ -24,7 +24,7 @@ Sopotek Trading AI is a desktop trading workstation for broker connectivity, cha
 - how Telegram, OpenAI, speech, screenshots, and remote chart commands work
 - how journaling, trade review, checklists, and post-trade review fit into the workflow
 - how to run tests, build docs, and operate the repo locally
-- how the first publishable release is positioned and how future contributors should work safely
+- how the current reliability updates affect signal handling, Coinbase auth, and Docker startup
 
 ## Quick Facts
 

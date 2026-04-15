@@ -1,8 +1,8 @@
-site_name: Sopotek Trading AI
+site_name: Sopotek Quant System
 site_description: Desktop trading workstation by Sopotek Corporation
 site_author: Sopotek Corporation
-repo_url: https://github.com/nguemechieu/sopotek-trading-ai
-repo_name: nguem/sopotek-trading-ai
+repo_url: https://github.com/nguemechieu/sopotek_quant_system
+repo_name: nguemechieu/sopotek_quant_system
 
 docs_dir: .
 site_dir: ../output/docs-site
@@ -22,7 +22,7 @@ theme:
     - content.code.copy
 
 nav:
-  - Home: docs/index.md
+  - Home: index.md
   - Getting Started: getting-started.md
   - Full App Guide: FULL_APP_GUIDE.md
   - Release Notes: release-notes.md

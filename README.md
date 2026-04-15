@@ -1,31 +1,32 @@
-# Sopotek Trading AI
+# Sopotek Quant System
 
 <p align="center">
-  <img alt="Sopotek Trading AI logo" src="src/assets/logo.png" width="170" height="170">
+  <img alt="Sopotek Quant System logo" src="src/assets/logo.png" width="170" height="170">
 </p>
 
 <p align="center">
-  <a href="https://github.com/nguemechieu/sopotek-trading-ai/actions/workflows/python-package-conda.yml">
-    <img alt="CI" src="https://github.com/nguemechieu/sopotek-trading-ai/actions/workflows/python-package-conda.yml/badge.svg?branch=master">
+  <a href="https://github.com/nguemechieu/sopotek_quant_system/actions/workflows/python-package-conda.yml">
+
+[//]: # (    <img alt="CI" src="https://github.com/nguemechieu/sopotek_quant_system/actions/workflows/python-package-conda.yml/badge.svg?branch=master">)
   </a>
-  <a href="https://github.com/nguemechieu/sopotek-trading-ai/actions/workflows/ci.yml">
-    <img alt="Code Quality" src="https://github.com/nguemechieu/sopotek-trading-ai/actions/workflows/ci.yml/badge.svg?branch=master">
+  <a href="https://github.com/nguemechieu/sopotek_quant_system/actions/workflows/ci.yml">
+    <img alt="Code Quality" src="https://github.com/nguemechieu/sopotek_quant_system/actions/workflows/ci.yml/badge.svg?branch=master">
   </a>
-  <a href="https://pypi.org/project/sopotek-trading-ai/">
-    <img alt="Python versions" src="https://img.shields.io/pypi/pyversions/sopotek-trading-ai">
+  <a href="https://pypi.org/project/sopotek-quant-system/">
+    <img alt="Python versions" src="https://img.shields.io/pypi/pyversions/sopotek-quant-system">
   </a>
-  <a href="https://pypi.org/project/sopotek-trading-ai/">
-    <img alt="PyPI version" src="https://img.shields.io/pypi/v/sopotek-trading-ai">
+  <a href="https://pypi.org/project/sopotek_quant_system/">
+    <img alt="PyPI version" src="https://img.shields.io/pypi/v/sopotek-quant-system">
   </a>
-  <a href="https://pypi.org/project/sopotek-trading-ai/">
-    <img alt="PyPI format" src="https://img.shields.io/pypi/format/sopotek-trading-ai">
+  <a href="https://pypi.org/project/sopotek-quant-system/">
+    <img alt="PyPI format" src="https://img.shields.io/pypi/format/sopotek-quant-system">
   </a>
-  <a href="https://github.com/nguemechieu/sopotek-trading-ai/issues">
+  <a href="https://github.com/nguemechieu/sopotek_quant_system/issues">
     <img alt="Support" src="https://img.shields.io/badge/support-GitHub%20Issues-1f6feb">
   </a>
 </p>
 
-Sopotek Trading AI is a next-generation trading workstation engineered by Sopotek Corporation to bridge the gap between retail platforms and institutional trading systems.
+Sopotek Quant System is a next-generation trading workstation engineered by Sopotek Corporation to bridge the gap between retail platforms and institutional trading systems.
 
 The platform combines real-time market connectivity, AI-driven decision support, execution infrastructure, and risk-aware automation into a single desktop environment.
 
@@ -33,8 +34,8 @@ With integrated backtesting, multi-asset support, broker-aware order routing, an
 
 | Branch | Version | Status |
 | --- | --- | --- |
-| `master` | `1.0.0` | [CI](https://github.com/nguemechieu/sopotek-trading-ai/actions/workflows/python-package-conda.yml) |
-| `dev` | rolling | [Code Quality](https://github.com/nguemechieu/sopotek-trading-ai/actions/workflows/ci.yml) |
+| `master` | `1.0.0` | [CI](https://github.com/nguemechieu/sopotek_quant_system/actions/workflows/python-package-conda.yml) |
+| `dev` | rolling | [Code Quality](https://github.com/nguemechieu/sopotek_quant_system/actions/workflows/ci.yml) |
 
 | Platform | Python | Delivery |
 | --- | --- | --- |
@@ -42,9 +43,9 @@ With integrated backtesting, multi-asset support, broker-aware order routing, an
 | Linux (x86_64) | `3.10+` | Docker, browser, and headless runtime profiles |
 | macOS | `3.10+` | Source-based install and development workflow |
 
-Docs: [Project documentation](docs/)  
-Website: [GitHub repository](https://github.com/nguemechieu/sopotek-trading-ai)  
-Support: [GitHub issues](https://github.com/nguemechieu/sopotek-trading-ai/issues)
+Docs: [Project documentation](docs/index.md)
+Website: [GitHub repository](https://github.com/nguemechieu/sopotek_quant_system)
+Support: [GitHub issues](https://github.com/nguemechieu/sopotek_quant_system/issues)
 
 ## Version And Status
 
@@ -53,6 +54,11 @@ Support: [GitHub issues](https://github.com/nguemechieu/sopotek-trading-ai/issue
 - Product state: first publishable desktop release with a menu-driven Telegram remote console
 - Safety posture: live-capable, but still best validated through `paper`, `practice`, or `sandbox` sessions before any meaningful live capital use
 
+
+## Preview
+
+![image](Sopotek_Screenshot_20260414_163616.png)
+![image](Sopotek_Screenshot_20260414_164810.png)
 ## What The App Includes
 
 - Dashboard for broker selection, mode, credentials, strategy choice, licensing, and launch control
@@ -173,9 +179,11 @@ flowchart LR
 ## Recent Reliability Updates
 
 - Broker-backed balances, equity, and positions are favored over local fallbacks when the connected adapter can provide them directly.
+- Strategy selectors that return `None` are now treated as `HOLD` / no-entry outcomes instead of invalid signal payloads, so `SignalAgent` can keep the pipeline healthy when a scan produces no trade.
 - Coinbase runtime now treats venue selection more explicitly, keeping `spot` and `derivative` paths distinct while leaving stocks and options disabled there until a dedicated adapter path is added.
 - Coinbase futures products are now reclassified from the raw Advanced Trade product payload so derivative mode exposes native contract symbols such as `SLP-20DEC30-CDE` and `BTC-USD-20241227` instead of silently falling back to spot-only markets.
 - Coinbase derivative mode now defaults to the futures contract path and can pull CFM futures balances plus open positions directly when the pinned CCXT build does not expose those endpoints natively.
+- Coinbase JWT signing now loads `PyJWT` lazily and reports a targeted dependency error if the active environment is missing JWT support, instead of crashing at import time.
 - Coinbase history loading now backfills candle requests in chunks, skips unsupported stale symbols safely, and avoids fabricating duplicate synthetic candles when real history is missing.
 - Oanda history loading now retries empty latest-candle responses with an explicit recent time window and can fall back to midpoint candles when bid or ask candles come back empty.
 - Charts now show a visible loading state, a `No data received.` background message for empty responses, and shorter-history notices when the broker returns fewer candles than requested.
@@ -193,6 +201,8 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
+
+If you plan to use Coinbase Advanced Trade or Coinbase futures from a local source environment, keep `PyJWT` installed in that environment. It is already included by `requirements.txt`, `pyproject.toml`, and the Docker image build.
 
 ### 2. Launch The Desktop App
 ```powershell

@@ -11,6 +11,7 @@
 - Coinbase futures are reached through this crypto adapter path by selecting `Exchange = coinbase` and `Venue = derivative`
 - Coinbase derivative mode now defaults to the futures contract path and reads CFM futures balances and positions directly when the bundled CCXT version lacks native futures account coverage
 - Native Coinbase futures contract IDs such as `SLP-20DEC30-CDE` and `BTC-USD-20241227` are preserved through symbol lists, chart loading, and order submission in derivative mode
+- Coinbase private REST and futures signing use JWT-based auth, so `PyJWT` must be available in the active runtime environment even if you only installed a subset of optional packages
 - unsupported or stale symbols are skipped more defensively so background ticker, order book, and recent-trades tasks fail closed instead of flooding the UI with `BadSymbol` errors
 - larger OHLCV requests can be backfilled in chunks on exchanges that return too little history for a single request
 

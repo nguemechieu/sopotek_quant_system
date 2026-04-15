@@ -16,6 +16,8 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+For Coinbase Advanced Trade or Coinbase futures sessions, keep `PyJWT` installed in the same environment. The repo dependency sets already include it, but stripped local environments can still miss it if dependencies were installed selectively.
+
 Optional docs tooling:
 
 ```powershell
@@ -30,6 +32,32 @@ python main.py
 
 This starts the PySide6 desktop application from the repository root bootstrap and builds the Qt event loop through `qasync`.
 The wrapper then hands off to the real desktop entry point at `src/main.py`.
+
+## Docker Quick Start
+
+Build the local app image:
+
+```powershell
+docker compose build app
+```
+
+Validate the compose stack:
+
+```powershell
+docker compose config
+```
+
+Start the browser profile:
+
+```powershell
+docker compose --profile browser up -d app-http
+```
+
+Start the headless profile:
+
+```powershell
+docker compose --profile headless up -d postgres app-headless
+```
 
 ## First Session Checklist
 

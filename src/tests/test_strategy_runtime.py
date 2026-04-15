@@ -197,6 +197,58 @@ def test_bollinger_squeeze_strategy_generates_buy_signal_after_compression_break
     assert "Bollinger squeeze expansion resolved upward" in signal["reason"]
 
 
+def test_adaptive_momentum_pullback_generates_buy_signal_after_row_initialization():
+    strategy = Strategy(strategy_name="Adaptive Momentum Pullback")
+    feature_frame = pd.DataFrame(
+        [
+            {
+                "close": 100.0,
+                "rsi": 48.0,
+                "ema_fast": 99.8,
+                "ema_slow": 100.0,
+                "upper_band": 101.0,
+                "lower_band": 99.0,
+                "breakout_high": 100.8,
+                "breakout_low": 99.1,
+                "volume_ratio": 0.96,
+                "momentum": 0.001,
+                "pullback_gap": 0.1,
+                "atr_pct": 0.011,
+                "trend_strength": 0.003,
+                "band_position": 0.54,
+                "macd_line": 0.01,
+                "macd_signal": 0.0,
+                "regime": "range",
+            },
+            {
+                "close": 102.1,
+                "rsi": 59.0,
+                "ema_fast": 101.6,
+                "ema_slow": 100.8,
+                "upper_band": 103.0,
+                "lower_band": 99.7,
+                "breakout_high": 101.0,
+                "breakout_low": 99.0,
+                "volume_ratio": 1.18,
+                "momentum": 0.012,
+                "pullback_gap": 0.24,
+                "atr_pct": 0.016,
+                "trend_strength": 0.009,
+                "band_position": 0.84,
+                "macd_line": 0.22,
+                "macd_signal": 0.12,
+                "regime": "trending_up",
+            },
+        ]
+    )
+
+    signal = strategy.generate_signal_from_features(feature_frame)
+
+    assert signal is not None
+    assert signal["side"] == "buy"
+    assert "Adaptive momentum pullback in uptrend" in signal["reason"]
+
+
 def test_atr_compression_breakout_generates_sell_signal_on_volatility_release():
     strategy = Strategy(strategy_name="ATR Compression Breakout")
     feature_frame = pd.DataFrame(

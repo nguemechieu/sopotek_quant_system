@@ -3,9 +3,17 @@ import time
 from typing import Optional
 from urllib.parse import urlparse
 
-import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
+from broker.broker_errors import BrokerOperationError
+
+try:
+    import jwt as _JWT_MODULE
+except ImportError as exc:  # pragma: no cover - depends on local environment
+    _JWT_MODULE = None
+    _JWT_IMPORT_ERROR = exc
+else:
+    _JWT_IMPORT_ERROR = None
 
 
 # =========================
@@ -28,6 +36,17 @@ def uses_coinbase_jwt_auth(api_key: str, api_secret: str) -> bool:
 def resolve_coinbase_rest_host(rest_url: str) -> str:
     parsed = urlparse(str(rest_url or "").strip())
     return parsed.netloc or "api.coinbase.com"
+
+
+def require_coinbase_jwt():
+    if _JWT_MODULE is not None:
+        return _JWT_MODULE
+    raise BrokerOperationError(
+        "Coinbase JWT signing requires PyJWT. Install project dependencies or run `pip install PyJWT` in the active environment.",
+        category="authentication_error",
+        rejection=True,
+        raw_message=str(_JWT_IMPORT_ERROR or "PyJWT is not installed"),
+    )
 
 
 # =========================
@@ -96,7 +115,8 @@ def build_coinbase_rest_jwt(
         "nonce": secrets.token_hex(),
     }
 
-    token = jwt.encode(
+    jwt_module = require_coinbase_jwt()
+    token = jwt_module.encode(
         payload,
         private_key,
         algorithm="ES256",

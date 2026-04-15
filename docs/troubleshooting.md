@@ -59,6 +59,17 @@ Check these items:
 - derivative mode should now show native contract IDs like `SLP-20DEC30-CDE` instead of spot-style aliases such as `BTC/USD:USD`
 - if you still only see spot symbols, verify the connected Coinbase account actually has futures permissions on the account you are using
 
+## Coinbase Says `jwt` Or `PyJWT` Is Missing
+
+Check these items:
+- confirm you installed the repo dependencies from `requirements.txt` in the environment that is actually launching the app
+- if you installed selectively, run `python -m pip install PyJWT`
+- restart the app after dependency changes so the Coinbase auth modules reload cleanly
+
+Current behavior:
+- Coinbase JWT auth is loaded lazily
+- if `PyJWT` is missing, the broker should raise a targeted authentication-style error instead of crashing during import
+
 ## Depth Chart Or Market Info Looks Blank
 
 Check these items:
@@ -74,6 +85,20 @@ Check these items:
 - confirm the strategy has enough candle history to compute features
 - check AI Signal Monitor, Recommendations, and logs for `HOLD` or filtered signals
 - verify the behavior guard did not block trading
+
+If the logs show `Raw signal: None`, that should now be interpreted as a no-entry scan result, not as a broken selector payload. In practice that means the strategy returned no trade and the app should hold rather than crashing the signal pipeline.
+
+## SignalAgent Reports `Raw signal: None`
+
+Check:
+- whether the selected strategy actually found an entry condition on the latest candle set
+- whether the symbol has enough valid history after feature sanitizing and duplicate-row cleanup
+- whether the strategy was filtered to a no-entry state by venue, timeframe, or market regime
+
+Current behavior:
+- `None` from a selector is treated as `HOLD` / no entry
+- the app should not treat that outcome as an invalid signal structure anymore
+- only an actual selector exception should stop the signal path
 
 ## Manual Trade Ticket Values Look Wrong
 

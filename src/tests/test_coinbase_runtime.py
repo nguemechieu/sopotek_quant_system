@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import ccxt.async_support as ccxt
 import jwt
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -1467,6 +1468,30 @@ def test_coinbase_ccxt_broker_signs_private_requests_with_bearer_jwt():
     assert payload["sub"] == "organizations/test/apiKeys/key-1"
     assert payload["iss"] == "cdp"
     assert payload["uri"] == "GET api.coinbase.com/api/v3/brokerage/accounts"
+
+
+def test_coinbase_jwt_builder_reports_missing_pyjwt(monkeypatch):
+    import broker.coinbase_jwt_auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "_JWT_MODULE", None)
+    monkeypatch.setattr(auth_mod, "_JWT_IMPORT_ERROR", ModuleNotFoundError("No module named 'jwt'"))
+
+    with pytest.raises(BrokerOperationError) as exc:
+        auth_mod.build_coinbase_rest_jwt(
+            request_method="GET",
+            request_host="api.coinbase.com",
+            request_path="/api/v3/brokerage/accounts",
+            api_key="organizations/test/apiKeys/key-1",
+            api_secret=(
+                "-----BEGIN EC PRIVATE KEY-----\n"
+                "MHcCAQEEIAqSV4qAfY1Nm0xd6k95EZ39suUWAuze5Vuhn671kB9OoAoGCCqGSM49\n"
+                "AwEHoUQDQgAEcgYO1ly0wyz23wipRFpoM6Oyvh6WB1wy9EB8PHhrNw5VSJsAqsb7\n"
+                "gc1E+mZ1HVX3H8eKNlw8GrQCQJsZ5ExllA==\n"
+                "-----END EC PRIVATE KEY-----\n"
+            ),
+        )
+
+    assert "PyJWT" in str(exc.value)
 
 
 def test_coinbase_ccxt_broker_backfills_requested_ohlcv_limit(monkeypatch):
