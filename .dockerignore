@@ -1,3 +1,39 @@
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Git
+.git
+.gitignore
+
+# Docker
+docker-compose.yml
+server_app
+# Logs / data
+data/
+logs/
+output/
+
+# Env
+.env
+credentials.json
+oauth_tokens.json
+platform_sync.json
+license.json
+license_server/
+
+# Pytest / temp
+.pytest*
+.pytest_tmp_terminal
+
+# OS
+*.log
+*.tmp
+*.swp
+Thumbs.db
 .git
 .github
 .idea

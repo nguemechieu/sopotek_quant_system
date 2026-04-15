@@ -2,8 +2,8 @@ from agents.base_agent import BaseAgent
 from agents.decision_engine import DecisionEngine, DecisionOutcome
 from agents.event_driven_runtime import EventDrivenAgentRuntime
 from agents.execution_agent import ExecutionAgent
-from agents.memory import AgentMemory
-from agents.orchestrator import AgentOrchestrator
+from agents.agent_memory import AgentMemory
+from agents.agent_orchestrator import AgentOrchestrator
 from agents.portfolio_agent import PortfolioAgent
 from agents.regime_agent import RegimeAgent
 from agents.risk_agent import RiskAgent

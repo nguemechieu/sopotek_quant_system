@@ -301,7 +301,7 @@ python -m mkdocs serve -f docs\mkdocs.yml
 Build the container image:
 
 ```powershell
-docker build -t sopotek-trading-ai .
+docker compose build app
 ```
 
 Validate the compose stack:

@@ -68,6 +68,14 @@ class RegimeAgent(BaseAgent):
             enriched["regime_snapshot"] = dict(snapshot)
             working["signal"] = enriched
             signal = enriched
+            # 🚨 NEW: Regime-based trade filter
+            regime = (snapshot or {}).get("regime")
+
+            if regime in ["SIDEWAYS", "LOW_VOLATILITY"]:
+             working["trade_allowed"] = False
+             working["block_reason"] = f"Bad regime: {regime}"
+            else:
+              working["trade_allowed"] = True
 
         # Publish a regime classification event for external listeners.
         if self.event_bus is not None:

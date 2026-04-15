@@ -1,11 +1,3 @@
-"""In-memory event memory for agent execution and decision tracking.
-
-This module provides a lightweight event store for agents, with optional
-sink callbacks that are notified whenever a new event is recorded. The memory
-supports per-agent lookup and snapshot export for debugging, telemetry, and
-replay workflows.
-"""
-
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
@@ -14,31 +6,28 @@ class AgentMemory:
     """Async-compatible in-memory event store for agent activity."""
 
     def __init__(self, max_events=2000, sinks=None):
-        """Initialize memory with a bounded event history and optional sinks.
-
-        Parameters:
-            max_events: Maximum number of total events to retain.
-            sinks: Optional iterable of callable sinks to receive event copies.
-        """
         self.max_events = max(10, int(max_events or 2000))
         self._events = deque(maxlen=self.max_events)
         self._by_agent = defaultdict(lambda: deque(maxlen=self.max_events))
         self._sinks = []
+
+        # 🔥 NEW: performance tracking
+        self._trade_history = []
+        self._performance = {
+            "wins": 0,
+            "losses": 0,
+            "pnl": 0.0,
+        }
+
         for sink in list(sinks or []):
             self.add_sink(sink)
 
     def add_sink(self, sink):
-        """Register a new sink callback that receives copies of stored events."""
         if callable(sink) and sink not in self._sinks:
             self._sinks.append(sink)
         return sink
 
     def store(self, agent, stage, payload=None, symbol=None, decision_id=None):
-        """Store a new agent event and notify any registered sinks.
-
-        The event is normalized before storage so callers can rely on consistent
-        fields and value types.
-        """
         event = {
             "agent": str(agent or "unknown").strip() or "unknown",
             "stage": str(stage or "unknown").strip() or "unknown",
@@ -47,8 +36,23 @@ class AgentMemory:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "payload": dict(payload or {}),
         }
+
         self._events.append(event)
         self._by_agent[event["agent"]].append(event)
+
+        # 🔥 NEW: track trade outcomes
+        if event["stage"] == "executed":
+            trade = event["payload"]
+
+            pnl = float(trade.get("pnl", 0.0) or 0.0)
+
+            self._trade_history.append(trade)
+            self._performance["pnl"] += pnl
+
+            if pnl > 0:
+                self._performance["wins"] += 1
+            else:
+                self._performance["losses"] += 1
 
         for sink in list(self._sinks):
             try:
@@ -59,18 +63,46 @@ class AgentMemory:
         return dict(event)
 
     def latest(self, agent=None):
-        """Return the latest event globally or for a specific agent."""
         if agent:
             events = self._by_agent.get(str(agent), ())
             return dict(events[-1]) if events else None
         return dict(self._events[-1]) if self._events else None
 
     def snapshot(self, limit=None, agent=None):
-        """Return a copy of recent events, optionally limited or agent-scoped."""
         if agent:
             events = list(self._by_agent.get(str(agent), ()))
         else:
             events = list(self._events)
+
         if limit is not None:
             events = events[-max(0, int(limit)):]
+
         return [dict(event) for event in events]
+
+    # 🚀 NEW METHODS
+
+    def performance(self):
+        """Return trading performance summary."""
+        total = self._performance["wins"] + self._performance["losses"]
+        win_rate = (self._performance["wins"] / total) if total else 0.0
+
+        return {
+            "wins": self._performance["wins"],
+            "losses": self._performance["losses"],
+            "pnl": self._performance["pnl"],
+            "win_rate": round(win_rate, 3),
+        }
+
+    def recent_trades(self, limit=10):
+        """Return recent trades."""
+        return self._trade_history[-limit:]
+
+    def should_reduce_risk(self):
+        """Simple adaptive risk logic."""
+        perf = self.performance()
+
+        # 🔥 If losing streak → reduce risk
+        if perf["losses"] > perf["wins"]:
+            return True
+
+        return False

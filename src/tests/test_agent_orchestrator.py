@@ -765,6 +765,27 @@ def test_signal_agent_process_supports_async_selectors():
     assert result["assigned_strategies"] == [{"strategy_name": "Trend Following", "timeframe": "1h"}]
 
 
+def test_signal_agent_process_treats_missing_signal_as_hold():
+    async def selector(symbol, candles, dataset):
+        await asyncio.sleep(0)
+        return (
+            None,
+            [{"strategy_name": "Trend Following", "timeframe": "1h"}],
+        )
+
+    agent = SignalAgent(selector=selector)
+
+    async def scenario():
+        return await agent.process({"symbol": "AUD/HKD", "candles": [], "dataset": None, "decision_id": "d-2"})
+
+    result = asyncio.run(scenario())
+
+    assert result["signal"] is None
+    assert result["signal_hold_reason"] == "No entry signal on the latest scan."
+    assert result["assigned_strategies"] == [{"strategy_name": "Trend Following", "timeframe": "1h"}]
+    assert result.get("halt_pipeline") is None
+
+
 def test_sopotek_trading_stop_can_wait_for_signal_executor_shutdown():
     trading = SopotekTrading(controller=_controller())
     waits = []

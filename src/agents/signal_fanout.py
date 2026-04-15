@@ -1,6 +1,24 @@
 import asyncio
 
+def _normalize_candidate(candidate):
+    signal = dict((candidate or {}).get("signal") or {})
 
+    side = str(signal.get("side") or "").lower()
+    confidence = float(signal.get("confidence", 0.0) or 0.0)
+
+    if side not in ("buy", "sell"):
+        return None
+
+    signal["confidence"] = max(0.0, min(confidence, 1.0))
+
+    # 🔥 NEW: quality score
+    signal["quality"] = (
+            signal["confidence"]
+            * float(signal.get("strategy_assignment_weight", 1.0))
+    )
+
+    candidate["signal"] = signal
+    return candidate
 def _merge_assignment_rows(existing_rows, new_rows):
     merged_rows = [dict(row) for row in list(existing_rows or []) if isinstance(row, dict)]
     fingerprints = {
@@ -57,7 +75,10 @@ def merge_signal_agent_results(context, results):
     for candidate in list(working.get("signal_candidates") or []):
         if not isinstance(candidate, dict):
             continue
-        candidate_copy = dict(candidate)
+
+        candidate_copy = _normalize_candidate(dict(candidate))
+        if candidate_copy is None:
+         continue
         fingerprint = _candidate_fingerprint(candidate_copy)
         existing_index = seen_candidates.get(fingerprint)
         if existing_index is None:
@@ -105,6 +126,24 @@ def merge_signal_agent_results(context, results):
     else:
         working.pop("blocked_by_news_bias", None)
         working.pop("news_bias_reason", None)
+    # 🔥 FINAL SORT (VERY IMPORTANT)
+    merged_candidates = sorted(
+    merged_candidates,
+    key=_candidate_rank,
+    reverse=True
+)
+
+# 🔥 FILTER WEAK SIGNALS
+    merged_candidates = [
+    c for c in merged_candidates
+    if float(c["signal"].get("confidence", 0)) >= 0.3
+]
+
+    print(f"\n🧠 MERGED SIGNALS ({working.get('symbol')}):")
+
+    for c in merged_candidates:
+     s = c["signal"]
+     print(f"👉 {s.get('strategy_name')} | {s.get('side')} | conf={s.get('confidence')}")
     return working
 
 

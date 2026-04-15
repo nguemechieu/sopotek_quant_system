@@ -5,7 +5,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app/src
-
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -56,16 +55,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
-COPY main.py ./main.py
-COPY scripts ./scripts
-COPY src ./src
-
+COPY ./src ./src
 RUN python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install ".[ui,brokers,ml]" "psycopg[binary]>=3.2"
+    && python -m pip install ".[ui,brokers,ml]" "psycopg[binary]>=3.2" PyJWT keyring
 
-RUN sed -i 's/\r$//' /app/scripts/docker/start_http_ui.sh \
-    && chmod +x /app/scripts/docker/start_http_ui.sh
+
+RUN sed -i 's/\r$//' /app/src/scripts/start_http_ui.sh \
+    && chmod +x /app/src/scripts/start_http_ui.sh
 
 RUN mkdir -p /app/data /app/logs /app/output
 
-CMD ["python", "-m", "sopotek_trading"]
+CMD ["python",  "src/main.py"]

@@ -1,7 +1,30 @@
+x-app-env: &app-env
+  PYTHONPATH: /app/src
+  SOPOTEK_DATABASE_MODE: remote
+  SOPOTEK_DATABASE_URL: ${SOPOTEK_DATABASE_URL:-postgresql+psycopg://sopotek:sopotek_local@postgres:5432/sopotek_trading}
+
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: bigbossmanager/sopotek_quant_system:latest
+  working_dir: /app
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment:
+    <<: *app-env
+  volumes:
+    - ./credentials.json:/app/credentials.json
+    - ./data:/app/data
+    - ./logs:/app/logs
+    - ./output:/app/output
+    - ./.env:/app/.env:ro
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: sopotek_trading_postgres
+    container_name: sopotek_quant_postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sopotek_trading}
@@ -19,70 +42,30 @@ services:
       start_period: 20s
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: bigbossmanager/sopotek-trading-ai:latest
-    container_name: sopotek_trading_app
-    working_dir: /app
-    depends_on:
-      postgres:
-        condition: service_healthy
+    <<: *app-common
+    container_name: sopotek_quant_app
     environment:
-      PYTHONPATH: /app/src
-      SOPOTEK_DATABASE_MODE: remote
-      SOPOTEK_DATABASE_URL: ${SOPOTEK_DATABASE_URL:-postgresql+psycopg://sopotek:sopotek_local@postgres:5432/sopotek_trading}
+      <<: *app-env
       QT_X11_NO_MITSHM: "1"
       DISPLAY: ${DISPLAY:-}
-    volumes:
-      - ./credentials.json:/app/credentials.json
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./output:/app/output
-      - ./.env:/app/.env:ro
     stdin_open: true
     tty: true
-    command: python -m sopotek_trading
+    command: python  src/main.py   # ✅ FIXED
 
   app-headless:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sopotek-trading-ai:latest
-    container_name: sopotek_trading_app_headless
-    working_dir: /app
-    depends_on:
-      postgres:
-        condition: service_healthy
+    <<: *app-common
+    container_name: sopotek_quant_headless
     environment:
-      PYTHONPATH: /app/src
-      SOPOTEK_DATABASE_MODE: remote
-      SOPOTEK_DATABASE_URL: ${SOPOTEK_DATABASE_URL:-postgresql+psycopg://sopotek:sopotek_local@postgres:5432/sopotek_trading}
+      <<: *app-env
       QT_QPA_PLATFORM: offscreen
-    volumes:
-      - ./credentials.json:/app/credentials.json
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./output:/app/output
-      - ./.env:/app/.env:ro
-    profiles:
-      - headless
-    command: python -m sopotek_trading
+    profiles: ["headless"]
+    command: python   src/main.py  # ✅ FIXED
 
   app-http:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sopotek-trading-ai:latest
-    container_name: sopotek_trading_app_http
-    working_dir: /app
-    depends_on:
-      postgres:
-        condition: service_healthy
+    <<: *app-common
+    container_name: sopotek_quant_http
     environment:
-      PYTHONPATH: /app/src
-      SOPOTEK_DATABASE_MODE: remote
-      SOPOTEK_DATABASE_URL: ${SOPOTEK_DATABASE_URL:-postgresql+psycopg://sopotek:sopotek_local@postgres:5432/sopotek_trading}
+      <<: *app-env
       SOPOTEK_HTTP_UI: "1"
       SOPOTEK_DISABLE_WEBENGINE: "1"
       DISPLAY: :99
@@ -104,17 +87,10 @@ services:
       NOVNC_TLS_ENABLED: ${NOVNC_TLS_ENABLED:-0}
       NOVNC_TLS_HOSTNAME: ${NOVNC_TLS_HOSTNAME:-localhost}
       VNC_PORT: 5900
-    volumes:
-      - ./credentials.json:/app/credentials.json
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./output:/app/output
-      - ./.env:/app/.env:ro
     ports:
       - "127.0.0.1:${APP_HTTP_PORT:-6080}:6080"
-    profiles:
-      - browser
-    command: /app/scripts/docker/start_http_ui.sh
+    profiles: ["browser"]
+    command: /app/src/scripts/start_http_ui.sh   # ✅ FIXED PATH
 
 volumes:
   postgres_data:

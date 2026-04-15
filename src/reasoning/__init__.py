@@ -1,8 +1,13 @@
-from reasoning.context_builder import ReasoningContextBuilder
-from reasoning.engine import ReasoningEngine
-from reasoning.prompt_engine import PromptEngine
-from reasoning.providers import HeuristicReasoningProvider, OpenAIReasoningProvider
-from reasoning.schema import ReasoningResult
+"""Backward-compatible reasoning package exports."""
+
+from core.ai.reasoning import (
+    HeuristicReasoningProvider,
+    OpenAIReasoningProvider,
+    PromptEngine,
+    ReasoningContextBuilder,
+    ReasoningEngine,
+    ReasoningResult,
+)
 
 __all__ = [
     "HeuristicReasoningProvider",
